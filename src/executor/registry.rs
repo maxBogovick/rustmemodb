@@ -1,0 +1,73 @@
+use crate::parser::ast::Statement;
+use crate::result::QueryResult;
+use crate::core::Result;
+use super::ExecutionContext;
+
+/// Executor trait остается тем же
+pub trait Executor: Send + Sync {
+    /// Имя executor'а для отладки
+    fn name(&self) -> &'static str;
+
+    fn can_handle(&self, stmt: &Statement) -> bool;
+    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult>;
+}
+
+/// Registry для автоматической регистрации executors
+pub struct ExecutorRegistry {
+    executors: Vec<Box<dyn Executor>>,
+}
+
+impl ExecutorRegistry {
+    pub fn new() -> Self {
+        Self {
+            executors: Vec::new(),
+        }
+    }
+
+    /// Зарегистрировать executor
+    pub fn register(&mut self, executor: Box<dyn Executor>) {
+        println!("⚙️  Registered executor: {}", executor.name());
+        self.executors.push(executor);
+    }
+
+    /// Автоматическая регистрация всех встроенных executors
+    pub fn with_default_executors(catalog: crate::storage::Catalog) -> Self {
+        use crate::executor::ddl::CreateTableExecutor;
+        use crate::executor::dml::InsertExecutor;
+        use crate::executor::query::QueryExecutor;
+
+        let mut registry = Self::new();
+
+        // Автоматически регистрируем все executors
+       /* registry.register(Box::new(CreateTableExecutor));
+        registry.register(Box::new(InsertExecutor));
+        registry.register(Box::new(QueryExecutor::new(catalog)));*/
+
+        registry
+    }
+
+    /// Выполнить statement через подходящий executor
+    pub fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+        for executor in &self.executors {
+            if executor.can_handle(stmt) {
+                println!("🚀 Executing with: {}", executor.name());
+                return executor.execute(stmt, ctx);
+            }
+        }
+
+        Err(crate::core::DbError::UnsupportedOperation(
+            "No executor found for statement".into()
+        ))
+    }
+
+    /// Получить список зарегистрированных executors
+    pub fn list_executors(&self) -> Vec<&str> {
+        self.executors.iter().map(|e| e.name()).collect()
+    }
+}
+
+impl Default for ExecutorRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
