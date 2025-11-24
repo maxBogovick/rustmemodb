@@ -5,6 +5,9 @@ use crate::core::Result;
 use super::ExecutionContext;
 
 pub trait Executor: Send + Sync {
+    /// Имя executor'а для отладки
+    fn name(&self) -> &'static str;
+
     fn can_handle(&self, stmt: &Statement) -> bool;
     fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult>;
 }

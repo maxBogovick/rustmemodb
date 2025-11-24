@@ -1,77 +1,143 @@
-use super::{ExecutionContext, Executor};
-use crate::core::{DbError, Result, Row, Value};
-use crate::parser::ast::{Expr, Statement};
+// ============================================================================
+// src/executor/query.rs - Полная рефакторированная версия с plugin system
+// ============================================================================
+
+use crate::parser::ast::{Statement, Expr};
 use crate::planner::{LogicalPlan, QueryPlanner};
-use crate::result::QueryResult;
 use crate::storage::Catalog;
-use std::sync::{Arc, RwLock};
+use crate::core::{Result, DbError, Row, Value};
+use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
+use crate::result::QueryResult;
+use super::{Executor, ExecutionContext};
+
+// ============================================================================
+// QUERY EXECUTOR - С evaluator registry
+// ============================================================================
 
 pub struct QueryExecutor {
     planner: QueryPlanner,
     catalog: Catalog,
+    evaluator_registry: EvaluatorRegistry,
 }
 
 impl QueryExecutor {
+    /// Создать executor с дефолтными evaluators
     pub fn new(catalog: Catalog) -> Self {
         Self {
             planner: QueryPlanner::new(),
             catalog,
+            evaluator_registry: EvaluatorRegistry::with_default_evaluators(),
         }
     }
 
-    /// Обновить catalog - заменяем на новую версию
+    /// Создать executor с кастомными evaluators
+    pub fn with_evaluators(catalog: Catalog, evaluator_registry: EvaluatorRegistry) -> Self {
+        Self {
+            planner: QueryPlanner::new(),
+            catalog,
+            evaluator_registry,
+        }
+    }
+
+    /// Обновить catalog (вызывается при DDL операциях)
     pub fn update_catalog(&mut self, new_catalog: Catalog) {
         self.catalog = new_catalog;
     }
 
-    /// Выполнить план - каждая таблица блокируется независимо
+    /// Выполнить логический план
     fn execute_plan(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<Row>> {
         match plan {
-            LogicalPlan::TableScan(scan) => {
-                // Read lock только на одну таблицу
-                ctx.storage.scan_table(&scan.table_name)
-            }
-
-            LogicalPlan::Filter(filter) => {
-                let input_rows = self.execute_plan(&filter.input, ctx)?;
-                let table_name = self.get_table_name(plan)?;
-                let schema = ctx.storage.get_schema(table_name.as_str())?;
-
-                Ok(input_rows
-                    .into_iter()
-                    .filter(|row| {
-                        self.evaluate_filter(&filter.predicate, row, schema.schema())
-                            .unwrap_or(false)
-                    })
-                    .collect())
-            }
-
-            LogicalPlan::Projection(proj) => {
-                let input_rows = self.execute_plan(&proj.input, ctx)?;
-                let table_name = self.get_table_name(plan)?;
-                let schema = ctx.storage.get_schema(table_name.as_str())?;
-
-                Ok(input_rows
-                    .into_iter()
-                    .map(|row| {
-                        self.project_row(&proj.expressions, &row, schema.schema())
-                            .unwrap_or_default()
-                    })
-                    .collect())
-            }
-
-            LogicalPlan::Sort(_) => Err(DbError::UnsupportedOperation(
-                "Sort not yet implemented".into(),
-            )),
-
-            LogicalPlan::Limit(limit) => {
-                let mut input_rows = self.execute_plan(&limit.input, ctx)?;
-                input_rows.truncate(limit.limit);
-                Ok(input_rows)
-            }
+            LogicalPlan::TableScan(scan) => self.execute_scan(scan, ctx),
+            LogicalPlan::Filter(filter) => self.execute_filter(filter, ctx),
+            LogicalPlan::Projection(proj) => self.execute_projection(proj, ctx),
+            LogicalPlan::Sort(sort) => self.execute_sort(sort, ctx),
+            LogicalPlan::Limit(limit) => self.execute_limit(limit, ctx),
         }
     }
 
+    /// Выполнить table scan
+    fn execute_scan(
+        &self,
+        scan: &crate::planner::logical_plan::TableScanNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        // Read lock только на одну таблицу
+        ctx.storage.scan_table(&scan.table_name)
+    }
+
+    /// Выполнить filter
+    fn execute_filter(
+        &self,
+        filter: &crate::planner::logical_plan::FilterNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        // Получаем строки из input плана
+        let input_rows = self.execute_plan(&filter.input, ctx)?;
+
+        // Получаем имя таблицы для схемы
+        let table_name = self.get_table_name(&filter.input)?;
+        let schema = ctx.storage.get_schema(table_name.as_str())?;
+
+        // Создаем evaluation context
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+
+        // Фильтруем строки
+        Ok(input_rows
+            .into_iter()
+            .filter(|row| {
+                eval_ctx
+                    .evaluate(&filter.predicate, row, schema.schema())
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .collect())
+    }
+
+    /// Выполнить projection
+    fn execute_projection(
+        &self,
+        proj: &crate::planner::logical_plan::ProjectionNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        // Получаем строки из input плана
+        let input_rows = self.execute_plan(&proj.input, ctx)?;
+
+        // Получаем схему
+        let table_name = self.get_table_name(&proj.input)?;
+        let schema = ctx.storage.get_schema(table_name.as_str())?;
+
+        // Создаем evaluation context
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+
+        // Проецируем каждую строку
+        input_rows
+            .into_iter()
+            .map(|row| self.project_row(&proj.expressions, &row, schema.schema(), &eval_ctx))
+            .collect()
+    }
+
+    /// Выполнить sort
+    fn execute_sort(
+        &self,
+        _sort: &crate::planner::logical_plan::SortNode,
+        _ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        // TODO: Implement ORDER BY
+        Err(DbError::UnsupportedOperation("ORDER BY not yet implemented".into()))
+    }
+
+    /// Выполнить limit
+    fn execute_limit(
+        &self,
+        limit: &crate::planner::logical_plan::LimitNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        let mut input_rows = self.execute_plan(&limit.input, ctx)?;
+        input_rows.truncate(limit.limit);
+        Ok(input_rows)
+    }
+
+    /// Получить имя таблицы из плана (рекурсивно)
     fn get_table_name(&self, plan: &LogicalPlan) -> Result<String> {
         match plan {
             LogicalPlan::TableScan(scan) => Ok(scan.table_name.clone()),
@@ -82,288 +148,461 @@ impl QueryExecutor {
         }
     }
 
-    fn evaluate_filter(
-        &self,
-        expr: &Expr,
-        row: &Row,
-        schema: &crate::core::Schema,
-    ) -> Result<bool> {
-        let value = self.evaluate_expr(expr, row, schema)?;
-        Ok(value.as_bool())
-    }
-
+    /// Проецировать строку согласно expressions
     fn project_row(
         &self,
         expressions: &[Expr],
         row: &Row,
         schema: &crate::core::Schema,
+        eval_ctx: &EvaluationContext,
     ) -> Result<Row> {
         expressions
             .iter()
-            .map(|expr| self.evaluate_expr(expr, row, schema))
+            .map(|expr| eval_ctx.evaluate(expr, row, schema))
             .collect()
     }
 
-    fn evaluate_expr(&self, expr: &Expr, row: &Row, schema: &crate::core::Schema) -> Result<Value> {
-        match expr {
-            Expr::Column(name) => {
-                let idx = schema
-                    .find_column_index(name)
-                    .ok_or_else(|| DbError::ColumnNotFound(name.clone(), "table".into()))?;
-                Ok(row[idx].clone())
-            }
-
-            Expr::Literal(val) => Ok(val.clone()),
-
-            Expr::BinaryOp { left, op, right } => {
-                let left_val = self.evaluate_expr(left, row, schema)?;
-                let right_val = self.evaluate_expr(right, row, schema)?;
-                self.evaluate_binary_op(&left_val, op, &right_val)
-            }
-
-            Expr::Like {
-                expr,
-                pattern,
-                negated,
-                ..
-            } => {
-                let text_val = self.evaluate_expr(expr, row, schema)?;
-                let pattern_val = self.evaluate_expr(pattern, row, schema)?;
-
-                let result = match (&text_val, &pattern_val) {
-                    (Value::Text(text), Value::Text(pat)) => {
-                        crate::expression::pattern::eval_like(text, pat, true)?
-                    }
-                    _ => false,
-                };
-
-                Ok(Value::Boolean(if *negated { !result } else { result }))
-            }
-
-            Expr::Between {
-                expr,
-                low,
-                high,
-                negated,
-            } => {
-                let val = self.evaluate_expr(expr, row, schema)?;
-                let low_val = self.evaluate_expr(low, row, schema)?;
-                let high_val = self.evaluate_expr(high, row, schema)?;
-
-                let ge_low = self.compare(&val, &low_val, &crate::parser::ast::BinaryOp::GtEq)?;
-                let le_high = self.compare(&val, &high_val, &crate::parser::ast::BinaryOp::LtEq)?;
-                let result = ge_low && le_high;
-
-                Ok(Value::Boolean(if *negated { !result } else { result }))
-            }
-
-            Expr::IsNull { expr, negated } => {
-                let val = self.evaluate_expr(expr, row, schema)?;
-                let is_null = matches!(val, Value::Null);
-                Ok(Value::Boolean(if *negated { !is_null } else { is_null }))
-            }
-
-            _ => Err(DbError::UnsupportedOperation(format!(
-                "Expression not yet implemented: {:?}",
-                expr
-            ))),
-        }
-    }
-
-    fn evaluate_binary_op(
-        &self,
-        left: &Value,
-        op: &crate::parser::ast::BinaryOp,
-        right: &Value,
-    ) -> Result<Value> {
-        use crate::parser::ast::BinaryOp::*;
-
-        match op {
-            And => {
-                if !left.as_bool() {
-                    return Ok(Value::Boolean(false));
-                }
-                Ok(Value::Boolean(right.as_bool()))
-            }
-
-            Or => {
-                if left.as_bool() {
-                    return Ok(Value::Boolean(true));
-                }
-                Ok(Value::Boolean(right.as_bool()))
-            }
-
-            Eq | NotEq | Lt | LtEq | Gt | GtEq => {
-                let result = self.compare(left, right, op)?;
-                Ok(Value::Boolean(result))
-            }
-
-            Add | Subtract | Multiply | Divide | Modulo => {
-                self.evaluate_arithmetic(left, op, right)
-            }
-        }
-    }
-
-    fn compare(
-        &self,
-        left: &Value,
-        right: &Value,
-        op: &crate::parser::ast::BinaryOp,
-    ) -> Result<bool> {
-        use crate::parser::ast::BinaryOp::*;
-
-        match (left, right) {
-            (Value::Null, _) | (_, Value::Null) => Ok(false),
-
-            (Value::Integer(a), Value::Integer(b)) => Ok(match op {
-                Eq => a == b,
-                NotEq => a != b,
-                Lt => a < b,
-                LtEq => a <= b,
-                Gt => a > b,
-                GtEq => a >= b,
-                _ => unreachable!(),
-            }),
-
-            (Value::Float(a), Value::Float(b)) => Ok(match op {
-                Eq => (a - b).abs() < f64::EPSILON,
-                NotEq => (a - b).abs() >= f64::EPSILON,
-                Lt => a < b,
-                LtEq => a <= b,
-                Gt => a > b,
-                GtEq => a >= b,
-                _ => unreachable!(),
-            }),
-
-            (Value::Text(a), Value::Text(b)) => Ok(match op {
-                Eq => a == b,
-                NotEq => a != b,
-                Lt => a < b,
-                LtEq => a <= b,
-                Gt => a > b,
-                GtEq => a >= b,
-                _ => unreachable!(),
-            }),
-
-            (Value::Boolean(a), Value::Boolean(b)) => Ok(match op {
-                Eq => a == b,
-                NotEq => a != b,
-                _ => {
-                    return Err(DbError::TypeMismatch(
-                        "Booleans only support equality".into(),
-                    ));
-                }
-            }),
-
-            _ => Err(DbError::TypeMismatch(format!(
-                "Cannot compare {} with {}",
-                left.type_name(),
-                right.type_name()
-            ))),
-        }
-    }
-
-    fn evaluate_arithmetic(
-        &self,
-        left: &Value,
-        op: &crate::parser::ast::BinaryOp,
-        right: &Value,
-    ) -> Result<Value> {
-        use crate::parser::ast::BinaryOp::*;
-
-        match (left, right) {
-            (Value::Integer(a), Value::Integer(b)) => {
-                let result = match op {
-                    Add => a + b,
-                    Subtract => a - b,
-                    Multiply => a * b,
-                    Divide => {
-                        if *b == 0 {
-                            return Err(DbError::ExecutionError("Division by zero".into()));
-                        }
-                        a / b
-                    }
-                    Modulo => {
-                        if *b == 0 {
-                            return Err(DbError::ExecutionError("Modulo by zero".into()));
-                        }
-                        a % b
-                    }
-                    _ => unreachable!(),
-                };
-                Ok(Value::Integer(result))
-            }
-
-            (Value::Float(a), Value::Float(b)) => {
-                let result = match op {
-                    Add => a + b,
-                    Subtract => a - b,
-                    Multiply => a * b,
-                    Divide => a / b,
-                    Modulo => a % b,
-                    _ => unreachable!(),
-                };
-                Ok(Value::Float(result))
-            }
-
-            _ => Err(DbError::TypeMismatch(
-                "Arithmetic requires numeric types".into(),
-            )),
-        }
-    }
-}
-
-impl Executor for QueryExecutor {
-    fn can_handle(&self, stmt: &Statement) -> bool {
-        matches!(stmt, Statement::Query(_))
-    }
-
-    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
-        let Statement::Query(query) = stmt else {
-            unreachable!();
-        };
-
-        let plan = self
-            .planner
-            .plan(&Statement::Query(query.clone()), &self.catalog)?;
-
-        let rows = self.execute_plan(&plan, ctx)?;
-        let columns = self.get_output_columns(&plan, ctx)?;
-
-        Ok(QueryResult::new(columns, rows))
-    }
-}
-
-impl QueryExecutor {
-    fn get_output_columns(
-        &self,
-        plan: &LogicalPlan,
-        ctx: &ExecutionContext,
-    ) -> Result<Vec<String>> {
+    /// Получить имена выходных колонок из плана
+    fn get_output_columns(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<String>> {
         match plan {
             LogicalPlan::TableScan(scan) => {
                 let schema = ctx.storage.get_schema(&scan.table_name)?;
-                Ok(schema
-                    .schema()
-                    .columns()
+
+                // Если указаны конкретные колонки, используем их
+                if let Some(ref cols) = scan.projected_columns {
+                    Ok(cols.clone())
+                } else {
+                    // Иначе все колонки
+                    Ok(schema
+                        .schema()
+                        .columns()
+                        .iter()
+                        .map(|col| col.name.clone())
+                        .collect())
+                }
+            }
+
+            LogicalPlan::Projection(proj) => {
+                // Для projection используем имена из expressions
+                Ok(proj
+                    .expressions
                     .iter()
-                    .map(|col| col.name.clone())
+                    .enumerate()
+                    .map(|(i, expr)| match expr {
+                        Expr::Column(name) => name.clone(),
+                        _ => format!("col_{}", i),
+                    })
                     .collect())
             }
 
-            LogicalPlan::Projection(proj) => Ok(proj
-                .expressions
-                .iter()
-                .enumerate()
-                .map(|(i, expr)| match expr {
-                    Expr::Column(name) => name.clone(),
-                    _ => format!("col_{}", i),
-                })
-                .collect()),
-
+            // Для других узлов - рекурсивно получаем из input
             LogicalPlan::Filter(filter) => self.get_output_columns(&filter.input, ctx),
             LogicalPlan::Sort(sort) => self.get_output_columns(&sort.input, ctx),
             LogicalPlan::Limit(limit) => self.get_output_columns(&limit.input, ctx),
         }
     }
 }
+
+// ============================================================================
+// EXECUTOR TRAIT IMPLEMENTATION
+// ============================================================================
+
+impl Executor for QueryExecutor {
+    fn name(&self) -> &'static str {
+        "SELECT"
+    }
+
+    fn can_handle(&self, stmt: &Statement) -> bool {
+        matches!(stmt, Statement::Query(_))
+    }
+
+    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+        let Statement::Query(query) = stmt else {
+            return Err(DbError::ExecutionError(
+                "QueryExecutor called with non-query statement".into()
+            ));
+        };
+
+        // 1. Планирование (БЕЗ блокировок - catalog immutable!)
+        let plan = self.planner.plan(&Statement::Query(query.clone()), &self.catalog)?;
+
+        // 2. Выполнение плана
+        let rows = self.execute_plan(&plan, ctx)?;
+
+        // 3. Получение имен колонок
+        let columns = self.get_output_columns(&plan, ctx)?;
+
+        // 4. Возврат результата
+        Ok(QueryResult::new(columns, rows))
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{InMemoryStorage, Catalog, TableSchema};
+    use crate::core::{Column, DataType, Value};
+
+    fn setup_test_storage() -> (InMemoryStorage, Catalog) {
+        let mut storage = InMemoryStorage::new();
+        let mut catalog = Catalog::new();
+
+        // Create users table
+        let columns = vec![
+            Column::new("id", DataType::Integer).not_null(),
+            Column::new("name", DataType::Text),
+            Column::new("age", DataType::Integer),
+        ];
+        let schema = TableSchema::new("users", columns);
+
+        storage.create_table(schema.clone()).unwrap();
+        catalog = catalog.with_table(schema).unwrap();
+
+        // Insert test data
+        storage.insert_row("users", vec![
+            Value::Integer(1),
+            Value::Text("Alice".into()),
+            Value::Integer(30),
+        ]).unwrap();
+
+        storage.insert_row("users", vec![
+            Value::Integer(2),
+            Value::Text("Bob".into()),
+            Value::Integer(25),
+        ]).unwrap();
+
+        storage.insert_row("users", vec![
+            Value::Integer(3),
+            Value::Text("Charlie".into()),
+            Value::Integer(35),
+        ]).unwrap();
+
+        (storage, catalog)
+    }
+
+    #[test]
+    fn test_simple_scan() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode};
+        let plan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let rows = executor.execute_plan(&plan, &ctx).unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn test_filter_execution() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
+        use crate::parser::ast::{Expr, BinaryOp};
+
+        // SELECT * FROM users WHERE age > 26
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(scan),
+            predicate: Expr::BinaryOp {
+                left: Box::new(Expr::Column("age".to_string())),
+                op: BinaryOp::Gt,
+                right: Box::new(Expr::Literal(Value::Integer(26))),
+            },
+        });
+
+        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        assert_eq!(rows.len(), 2); // Alice (30) and Charlie (35)
+    }
+
+    #[test]
+    fn test_projection_execution() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, ProjectionNode};
+        use crate::parser::ast::Expr;
+
+        // SELECT name FROM users
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let projection = LogicalPlan::Projection(ProjectionNode {
+            input: Box::new(scan),
+            expressions: vec![Expr::Column("name".to_string())],
+        });
+
+        let rows = executor.execute_plan(&projection, &ctx).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].len(), 1); // Only one column
+    }
+
+    #[test]
+    fn test_limit_execution() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, LimitNode};
+
+        // SELECT * FROM users LIMIT 2
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let limit = LogicalPlan::Limit(LimitNode {
+            input: Box::new(scan),
+            limit: 2,
+        });
+
+        let rows = executor.execute_plan(&limit, &ctx).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn test_complex_query() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, ProjectionNode, LimitNode};
+        use crate::parser::ast::{Expr, BinaryOp};
+
+        // SELECT name FROM users WHERE age > 26 LIMIT 1
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(scan),
+            predicate: Expr::BinaryOp {
+                left: Box::new(Expr::Column("age".to_string())),
+                op: BinaryOp::Gt,
+                right: Box::new(Expr::Literal(Value::Integer(26))),
+            },
+        });
+
+        let projection = LogicalPlan::Projection(ProjectionNode {
+            input: Box::new(filter),
+            expressions: vec![Expr::Column("name".to_string())],
+        });
+
+        let limit = LogicalPlan::Limit(LimitNode {
+            input: Box::new(projection),
+            limit: 1,
+        });
+
+        let rows = executor.execute_plan(&limit, &ctx).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 1);
+    }
+
+    #[test]
+    fn test_like_evaluation() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
+        use crate::parser::ast::Expr;
+
+        // SELECT * FROM users WHERE name LIKE 'A%'
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(scan),
+            predicate: Expr::Like {
+                expr: Box::new(Expr::Column("name".to_string())),
+                pattern: Box::new(Expr::Literal(Value::Text("A%".to_string()))),
+                negated: false,
+                case_insensitive: false,
+            },
+        });
+
+        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        assert_eq!(rows.len(), 1); // Only Alice
+    }
+
+    #[test]
+    fn test_between_evaluation() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
+        use crate::parser::ast::Expr;
+
+        // SELECT * FROM users WHERE age BETWEEN 25 AND 30
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(scan),
+            predicate: Expr::Between {
+                expr: Box::new(Expr::Column("age".to_string())),
+                low: Box::new(Expr::Literal(Value::Integer(25))),
+                high: Box::new(Expr::Literal(Value::Integer(30))),
+                negated: false,
+            },
+        });
+
+        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        assert_eq!(rows.len(), 2); // Alice (30) and Bob (25)
+    }
+
+    #[test]
+    fn test_is_null_evaluation() {
+        let mut storage = InMemoryStorage::new();
+        let mut catalog = Catalog::new();
+
+        // Create table with nullable column
+        let columns = vec![
+            Column::new("id", DataType::Integer).not_null(),
+            Column::new("name", DataType::Text), // nullable
+        ];
+        let schema = TableSchema::new("test", columns);
+
+        storage.create_table(schema.clone()).unwrap();
+        catalog = catalog.with_table(schema).unwrap();
+
+        // Insert data with NULL
+        storage.insert_row("test", vec![
+            Value::Integer(1),
+            Value::Text("Alice".into()),
+        ]).unwrap();
+
+        storage.insert_row("test", vec![
+            Value::Integer(2),
+            Value::Null,
+        ]).unwrap();
+
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
+        use crate::parser::ast::Expr;
+
+        // SELECT * FROM test WHERE name IS NULL
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "test".to_string(),
+            projected_columns: None,
+        });
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(scan),
+            predicate: Expr::IsNull {
+                expr: Box::new(Expr::Column("name".to_string())),
+                negated: false,
+            },
+        });
+
+        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        assert_eq!(rows.len(), 1); // Only row with NULL
+    }
+
+    #[test]
+    fn test_logical_and() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
+        use crate::parser::ast::{Expr, BinaryOp};
+
+        // SELECT * FROM users WHERE age > 26 AND age < 32
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(scan),
+            predicate: Expr::BinaryOp {
+                left: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("age".to_string())),
+                    op: BinaryOp::Gt,
+                    right: Box::new(Expr::Literal(Value::Integer(26))),
+                }),
+                op: BinaryOp::And,
+                right: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("age".to_string())),
+                    op: BinaryOp::Lt,
+                    right: Box::new(Expr::Literal(Value::Integer(32))),
+                }),
+            },
+        });
+
+        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        assert_eq!(rows.len(), 1); // Only Alice (30)
+    }
+
+    #[test]
+    fn test_get_output_columns() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode};
+
+        // Test wildcard
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let columns = executor.get_output_columns(&scan, &ctx).unwrap();
+        assert_eq!(columns, vec!["id", "name", "age"]);
+    }
+}
+
+// ============================================================================
+// USAGE EXAMPLE
+// ============================================================================
+
+/*
+use crate::executor::query::QueryExecutor;
+use crate::storage::Catalog;
+
+// Создание executor'а
+let catalog = Catalog::new();
+let executor = QueryExecutor::new(catalog);
+
+// Executor автоматически использует все зарегистрированные evaluators:
+// - ComparisonEvaluator (=, !=, <, <=, >, >=)
+// - ArithmeticEvaluator (+, -, *, /, %)
+// - LogicalEvaluator (AND, OR)
+// - LikeEvaluator (LIKE, NOT LIKE)
+// - BetweenEvaluator (BETWEEN, NOT BETWEEN)
+// - IsNullEvaluator (IS NULL, IS NOT NULL)
+
+// Выполнение запроса
+let result = executor.execute(&query_stmt, &ctx)?;
+
+// Добавление кастомного evaluator'а
+let mut registry = EvaluatorRegistry::new();
+registry.register(Box::new(MyCustomEvaluator));
+let executor = QueryExecutor::with_evaluators(catalog, registry);
+*/

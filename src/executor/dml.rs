@@ -6,6 +6,9 @@ use crate::result::QueryResult;
 pub struct InsertExecutor;
 
 impl Executor for InsertExecutor {
+    fn name(&self) -> &'static str {
+        "INSERT"
+    }
     fn can_handle(&self, stmt: &Statement) -> bool {
         matches!(stmt, Statement::Insert(_))
     }

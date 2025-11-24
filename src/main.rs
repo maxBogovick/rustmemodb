@@ -10,6 +10,7 @@ mod planner;
 mod executor;
 mod expression;
 mod plugins;
+mod evaluator;
 
 fn main() -> Result<()> {
     println!("🚀 RustMemDB - Phase 2 Complete!");
@@ -129,8 +130,8 @@ mod benchmarks {
             handles.push(thread::spawn(move || {
                 let mut db = db_clone.write().unwrap();
                 for _ in 0..100 {
-                    let res = db.execute("SELECT * FROM products WHERE id < 500");
-                    //println!("{:?}", res.unwrap().row_count());
+                    let res = db.execute("SELECT * FROM products WHERE id < 500 and name like 'prod_%' and id between 10 and 100");
+                    println!("{:?}", res.unwrap().row_count());
                 }
             }));
         }

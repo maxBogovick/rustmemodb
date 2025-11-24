@@ -1,16 +1,7 @@
 use crate::parser::ast::Statement;
 use crate::result::QueryResult;
 use crate::core::Result;
-use super::ExecutionContext;
-
-/// Executor trait остается тем же
-pub trait Executor: Send + Sync {
-    /// Имя executor'а для отладки
-    fn name(&self) -> &'static str;
-
-    fn can_handle(&self, stmt: &Statement) -> bool;
-    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult>;
-}
+use super::{ExecutionContext, Executor};
 
 /// Registry для автоматической регистрации executors
 pub struct ExecutorRegistry {
@@ -39,9 +30,9 @@ impl ExecutorRegistry {
         let mut registry = Self::new();
 
         // Автоматически регистрируем все executors
-       /* registry.register(Box::new(CreateTableExecutor));
+        registry.register(Box::new(CreateTableExecutor));
         registry.register(Box::new(InsertExecutor));
-        registry.register(Box::new(QueryExecutor::new(catalog)));*/
+        registry.register(Box::new(QueryExecutor::new(catalog)));
 
         registry
     }

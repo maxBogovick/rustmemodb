@@ -1,5 +1,6 @@
 pub mod context;
 pub mod executor;
+pub mod delete;
 pub mod ddl;
 pub mod dml;
 pub mod query;

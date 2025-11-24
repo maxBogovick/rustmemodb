@@ -6,6 +6,9 @@ use crate::result::QueryResult;
 pub struct CreateTableExecutor;
 
 impl Executor for CreateTableExecutor {
+    fn name(&self) -> &'static str {
+        "CREATE_TABLE"
+    }
     fn can_handle(&self, stmt: &Statement) -> bool {
         matches!(stmt, Statement::CreateTable(_))
     }
