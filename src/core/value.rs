@@ -11,6 +11,32 @@ pub enum Value {
     Boolean(bool),
 }
 
+use std::str::FromStr;
+use crate::core::{DbError, Result};
+
+impl Value {
+
+    /// Парсинг числа БЕЗ аллокаций
+    #[inline]
+    pub fn parse_number(s: &str) -> Result<Self> {
+        // Быстрая проверка на integer (без точки и экспоненты)
+        let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
+
+        if !has_dot_or_exp {
+            if let Ok(i) = s.parse::<i64>() {
+                return Ok(Value::Integer(i));
+            }
+        }
+
+        // Float
+        if let Ok(f) = s.parse::<f64>() {
+            Ok(Value::Float(f))
+        } else {
+            Err(DbError::TypeMismatch(format!("Invalid number: {}", s)))
+        }
+    }
+}
+
 impl Value {
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -76,11 +102,16 @@ impl PartialEq for Value {
             (Self::Null, Self::Null) => true,
             (Self::Integer(a), Self::Integer(b)) => a == b,
             (Self::Float(a), Self::Float(b)) => {
-                // Специальная обработка NaN и бесконечностей
-                if a.is_nan() && b.is_nan() {
-                    return true;
+                match (a.is_nan(), b.is_nan()) {
+                    (true, true) => false,  // NaN != NaN по стандарту
+                    (true, false) | (false, true) => false,
+                    _ => {
+                        // Относительное сравнение для больших чисел
+                        let diff = (a - b).abs();
+                        let largest = a.abs().max(b.abs());
+                        diff <= largest * f64::EPSILON * 8.0
+                    }
                 }
-                (a - b).abs() < f64::EPSILON
             }
             (Self::Text(a), Self::Text(b)) => a == b,
             (Self::Boolean(a), Self::Boolean(b)) => a == b,
