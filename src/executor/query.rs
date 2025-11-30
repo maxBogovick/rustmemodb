@@ -1,17 +1,19 @@
 // ============================================================================
-// src/executor/query.rs - Полная рефакторированная версия с plugin system
+// src/executor/query.rs - Полная версия с ORDER BY поддержкой
 // ============================================================================
 
-use crate::parser::ast::{Statement, Expr};
+use crate::parser::ast::{Statement, Expr, OrderByExpr};
 use crate::planner::{LogicalPlan, QueryPlanner};
+use crate::planner::logical_plan::SortNode;
 use crate::storage::Catalog;
-use crate::core::{Result, DbError, Row, Value};
+use crate::core::{Result, DbError, Row, Value, Schema};
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
 use crate::result::QueryResult;
 use super::{Executor, ExecutionContext};
+use std::cmp::Ordering;
 
 // ============================================================================
-// QUERY EXECUTOR - С evaluator registry
+// QUERY EXECUTOR - С evaluator registry и ORDER BY
 // ============================================================================
 
 pub struct QueryExecutor {
@@ -45,7 +47,7 @@ impl QueryExecutor {
     }
 
     /// Выполнить логический план
-    fn execute_plan(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<Row>> {
+    pub fn execute_plan(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<Row>> {
         match plan {
             LogicalPlan::TableScan(scan) => self.execute_scan(scan, ctx),
             LogicalPlan::Filter(filter) => self.execute_filter(filter, ctx),
@@ -116,14 +118,124 @@ impl QueryExecutor {
             .collect()
     }
 
-    /// Выполнить sort
+    // ========================================================================
+    // ✅ РЕАЛИЗАЦИЯ ORDER BY
+    // ========================================================================
     fn execute_sort(
         &self,
-        _sort: &crate::planner::logical_plan::SortNode,
-        _ctx: &ExecutionContext,
+        sort: &SortNode,
+        ctx: &ExecutionContext,
     ) -> Result<Vec<Row>> {
-        // TODO: Implement ORDER BY
-        Err(DbError::UnsupportedOperation("ORDER BY not yet implemented".into()))
+        // 1. Получаем строки из input плана
+        let mut input_rows = self.execute_plan(&sort.input, ctx)?;
+
+        // 2. Если нет ORDER BY expressions - возвращаем как есть
+        if sort.order_by.is_empty() {
+            return Ok(input_rows);
+        }
+
+        // 3. Получаем схему таблицы для вычисления выражений
+        let table_name = self.get_table_name(&sort.input)?;
+        let table_schema = ctx.storage.get_schema(&table_name)?;
+        let schema = table_schema.schema();
+
+        // 4. Создаём evaluation context
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+
+        // 5. Собираем ошибки во время сортировки
+        let mut sort_error: Option<DbError> = None;
+
+        // 6. Сортируем строки
+        input_rows.sort_by(|row_a, row_b| {
+            // Если уже была ошибка - не продолжаем вычисления
+            if sort_error.is_some() {
+                return Ordering::Equal;
+            }
+
+            // Сравниваем по каждому ORDER BY выражению
+            for order_expr in &sort.order_by {
+                // Вычисляем выражения для обеих строк
+                let val_a = match eval_ctx.evaluate(&order_expr.expr, row_a, schema) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return Ordering::Equal;
+                    }
+                };
+                let val_b = match eval_ctx.evaluate(&order_expr.expr, row_b, schema) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return Ordering::Equal;
+                    }
+                };
+
+                // ✅ Use Value::compare instead of self.compare_values
+                let mut cmp = match val_a.compare(&val_b) {
+                    Ok(ordering) => ordering,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return Ordering::Equal;
+                    }
+                };
+
+                // DESC - инвертируем порядок
+                if order_expr.descending {
+                    cmp = cmp.reverse();
+                }
+
+                // Если не равны - возвращаем результат
+                if cmp != Ordering::Equal {
+                    return cmp;
+                }
+                // Иначе переходим к следующему ORDER BY выражению
+            }
+
+            // Все выражения равны
+            Ordering::Equal
+        });
+
+        // 7. Если была ошибка во время сортировки - возвращаем её
+        if let Some(err) = sort_error {
+            return Err(err);
+        }
+
+        Ok(input_rows)
+    }
+
+    /// Сравнение значений с поддержкой NULL (NULL LAST по умолчанию)
+    fn compare_values(&self, a: &Value, b: &Value) -> Ordering {
+        match (a, b) {
+            // NULL handling: NULL считается "больше" всех значений (NULL LAST)
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => Ordering::Greater,
+            (_, Value::Null) => Ordering::Less,
+
+            // Integer comparison
+            (Value::Integer(a), Value::Integer(b)) => a.cmp(b),
+
+            // Float comparison
+            (Value::Float(a), Value::Float(b)) => {
+                a.partial_cmp(b).unwrap_or(Ordering::Equal)
+            }
+
+            // Text comparison
+            (Value::Text(a), Value::Text(b)) => a.cmp(b),
+
+            // Boolean comparison (false < true)
+            (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
+
+            // Mixed numeric types
+            (Value::Integer(a), Value::Float(b)) => {
+                (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal)
+            }
+            (Value::Float(a), Value::Integer(b)) => {
+                a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
+            }
+
+            // Type mismatch - compare as strings (fallback)
+            _ => format!("{:?}", a).cmp(&format!("{:?}", b)),
+        }
     }
 
     /// Выполнить limit
@@ -153,7 +265,7 @@ impl QueryExecutor {
         &self,
         expressions: &[Expr],
         row: &Row,
-        schema: &crate::core::Schema,
+        schema: &Schema,
         eval_ctx: &EvaluationContext,
     ) -> Result<Row> {
         expressions
@@ -246,6 +358,7 @@ mod tests {
     use super::*;
     use crate::storage::{InMemoryStorage, Catalog, TableSchema};
     use crate::core::{Column, DataType, Value};
+    use crate::planner::TableScanNode;
 
     fn setup_test_storage() -> (InMemoryStorage, Catalog) {
         let mut storage = InMemoryStorage::new();
@@ -281,6 +394,12 @@ mod tests {
             Value::Integer(35),
         ]).unwrap();
 
+        storage.insert_row("users", vec![
+            Value::Integer(4),
+            Value::Text("Diana".into()),
+            Value::Integer(25),
+        ]).unwrap();
+
         (storage, catalog)
     }
 
@@ -297,7 +416,7 @@ mod tests {
         });
 
         let rows = executor.execute_plan(&plan, &ctx).unwrap();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
     }
 
     #[test]
@@ -349,7 +468,7 @@ mod tests {
         });
 
         let rows = executor.execute_plan(&projection, &ctx).unwrap();
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].len(), 1); // Only one column
     }
 
@@ -376,6 +495,271 @@ mod tests {
         assert_eq!(rows.len(), 2);
     }
 
+    // ========================================================================
+    // ✅ ORDER BY TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_order_by_asc() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
+
+        // SELECT * FROM users ORDER BY age ASC
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(scan),
+            order_by: vec![OrderByExpr {
+                expr: Expr::Column("age".to_string()),
+                descending: false,
+            }],
+        });
+
+        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+
+        // Expected order by age ASC: 25, 25, 30, 35
+        assert_eq!(rows[0][2], Value::Integer(25));
+        assert_eq!(rows[1][2], Value::Integer(25));
+        assert_eq!(rows[2][2], Value::Integer(30));
+        assert_eq!(rows[3][2], Value::Integer(35));
+    }
+
+    #[test]
+    fn test_order_by_desc() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
+
+        // SELECT * FROM users ORDER BY age DESC
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(scan),
+            order_by: vec![OrderByExpr {
+                expr: Expr::Column("age".to_string()),
+                descending: true,
+            }],
+        });
+
+        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+
+        // Expected order by age DESC: 35, 30, 25, 25
+        assert_eq!(rows[0][2], Value::Integer(35));
+        assert_eq!(rows[1][2], Value::Integer(30));
+        assert_eq!(rows[2][2], Value::Integer(25));
+        assert_eq!(rows[3][2], Value::Integer(25));
+    }
+
+    #[test]
+    fn test_order_by_multiple_columns() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
+
+        // SELECT * FROM users ORDER BY age ASC, name ASC
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(scan),
+            order_by: vec![
+                OrderByExpr {
+                    expr: Expr::Column("age".to_string()),
+                    descending: false,
+                },
+                OrderByExpr {
+                    expr: Expr::Column("name".to_string()),
+                    descending: false,
+                },
+            ],
+        });
+
+        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+
+        // Expected: age 25 (Bob, Diana alphabetically), age 30 (Alice), age 35 (Charlie)
+        assert_eq!(rows[0][1], Value::Text("Bob".into()));    // age 25, name Bob
+        assert_eq!(rows[1][1], Value::Text("Diana".into()));  // age 25, name Diana
+        assert_eq!(rows[2][1], Value::Text("Alice".into()));  // age 30
+        assert_eq!(rows[3][1], Value::Text("Charlie".into())); // age 35
+    }
+
+    #[test]
+    fn test_order_by_with_filter() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, SortNode};
+        use crate::parser::ast::BinaryOp;
+
+        // SELECT * FROM users WHERE age > 24 ORDER BY name DESC
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let filter = LogicalPlan::Filter(FilterNode {
+            input: Box::new(scan),
+            predicate: Expr::BinaryOp {
+                left: Box::new(Expr::Column("age".to_string())),
+                op: BinaryOp::Gt,
+                right: Box::new(Expr::Literal(Value::Integer(24))),
+            },
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(filter),
+            order_by: vec![OrderByExpr {
+                expr: Expr::Column("name".to_string()),
+                descending: true,
+            }],
+        });
+
+        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+
+        // All 4 users have age > 24, sorted by name DESC: Diana, Charlie, Bob, Alice
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0][1], Value::Text("Diana".into()));
+        assert_eq!(rows[1][1], Value::Text("Charlie".into()));
+        assert_eq!(rows[2][1], Value::Text("Bob".into()));
+        assert_eq!(rows[3][1], Value::Text("Alice".into()));
+    }
+
+    #[test]
+    fn test_order_by_with_limit() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode, LimitNode};
+
+        // SELECT * FROM users ORDER BY age DESC LIMIT 2
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(scan),
+            order_by: vec![OrderByExpr {
+                expr: Expr::Column("age".to_string()),
+                descending: true,
+            }],
+        });
+
+        let limit = LogicalPlan::Limit(LimitNode {
+            input: Box::new(sort),
+            limit: 2,
+        });
+
+        let rows = executor.execute_plan(&limit, &ctx).unwrap();
+
+        // Top 2 oldest: Charlie (35), Alice (30)
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][2], Value::Integer(35)); // Charlie
+        assert_eq!(rows[1][2], Value::Integer(30)); // Alice
+    }
+
+    #[test]
+    fn test_order_by_with_nulls() {
+        let mut storage = InMemoryStorage::new();
+        let mut catalog = Catalog::new();
+
+        // Create table with nullable column
+        let columns = vec![
+            Column::new("id", DataType::Integer).not_null(),
+            Column::new("value", DataType::Integer), // nullable
+        ];
+        let schema = TableSchema::new("test", columns);
+
+        storage.create_table(schema.clone()).unwrap();
+        catalog = catalog.with_table(schema).unwrap();
+
+        // Insert data with NULLs
+        storage.insert_row("test", vec![Value::Integer(1), Value::Integer(10)]).unwrap();
+        storage.insert_row("test", vec![Value::Integer(2), Value::Null]).unwrap();
+        storage.insert_row("test", vec![Value::Integer(3), Value::Integer(5)]).unwrap();
+        storage.insert_row("test", vec![Value::Integer(4), Value::Null]).unwrap();
+
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
+
+        // SELECT * FROM test ORDER BY value ASC
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "test".to_string(),
+            projected_columns: None,
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(scan),
+            order_by: vec![OrderByExpr {
+                expr: Expr::Column("value".to_string()),
+                descending: false,
+            }],
+        });
+
+        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+
+        // NULL LAST by default: 5, 10, NULL, NULL
+        assert_eq!(rows[0][1], Value::Integer(5));
+        assert_eq!(rows[1][1], Value::Integer(10));
+        assert_eq!(rows[2][1], Value::Null);
+        assert_eq!(rows[3][1], Value::Null);
+    }
+
+    #[test]
+    fn test_order_by_expression() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
+        use crate::parser::ast::BinaryOp;
+
+        // SELECT * FROM users ORDER BY age * -1 ASC (equivalent to ORDER BY age DESC)
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(scan),
+            order_by: vec![OrderByExpr {
+                expr: Expr::BinaryOp {
+                    left: Box::new(Expr::Column("age".to_string())),
+                    op: BinaryOp::Multiply,
+                    right: Box::new(Expr::Literal(Value::Integer(-1))),
+                },
+                descending: false,
+            }],
+        });
+
+        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+
+        // ORDER BY age * -1 ASC = ORDER BY age DESC
+        // -35 < -30 < -25 < -25
+        assert_eq!(rows[0][2], Value::Integer(35));
+        assert_eq!(rows[1][2], Value::Integer(30));
+        // age 25 rows at the end
+    }
+
     #[test]
     fn test_complex_query() {
         let (storage, catalog) = setup_test_storage();
@@ -383,7 +767,7 @@ mod tests {
         let ctx = ExecutionContext::new(&storage);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, ProjectionNode, LimitNode};
-        use crate::parser::ast::{Expr, BinaryOp};
+        use crate::parser::ast::BinaryOp;
 
         // SELECT name FROM users WHERE age > 26 LIMIT 1
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -422,7 +806,6 @@ mod tests {
         let ctx = ExecutionContext::new(&storage);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-        use crate::parser::ast::Expr;
 
         // SELECT * FROM users WHERE name LIKE 'A%'
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -451,7 +834,6 @@ mod tests {
         let ctx = ExecutionContext::new(&storage);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-        use crate::parser::ast::Expr;
 
         // SELECT * FROM users WHERE age BETWEEN 25 AND 30
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -470,7 +852,7 @@ mod tests {
         });
 
         let rows = executor.execute_plan(&filter, &ctx).unwrap();
-        assert_eq!(rows.len(), 2); // Alice (30) and Bob (25)
+        assert_eq!(rows.len(), 3); // Alice (30), Bob (25), Diana (25)
     }
 
     #[test]
@@ -503,7 +885,6 @@ mod tests {
         let ctx = ExecutionContext::new(&storage);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-        use crate::parser::ast::Expr;
 
         // SELECT * FROM test WHERE name IS NULL
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -530,7 +911,7 @@ mod tests {
         let ctx = ExecutionContext::new(&storage);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-        use crate::parser::ast::{Expr, BinaryOp};
+        use crate::parser::ast::BinaryOp;
 
         // SELECT * FROM users WHERE age > 26 AND age < 32
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -576,6 +957,31 @@ mod tests {
         let columns = executor.get_output_columns(&scan, &ctx).unwrap();
         assert_eq!(columns, vec!["id", "name", "age"]);
     }
+    #[test]
+    fn test_order_by_with_value_compare() {
+        let (storage, catalog) = setup_test_storage();
+        let executor = QueryExecutor::new(catalog);
+        let ctx = ExecutionContext::new(&storage);
+
+        let scan = LogicalPlan::TableScan(TableScanNode {
+            table_name: "users".to_string(),
+            projected_columns: None,
+        });
+
+        let sort = LogicalPlan::Sort(SortNode {
+            input: Box::new(scan),
+            order_by: vec![OrderByExpr {
+                expr: Expr::Column("age".to_string()),
+                descending: false,
+            }],
+        });
+
+        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+
+        // Should be sorted by age ASC
+        assert_eq!(rows[0][2], Value::Integer(25)); // Bob
+        assert_eq!(rows[2][2], Value::Integer(30)); // Alice
+    }
 }
 
 // ============================================================================
@@ -598,7 +1004,7 @@ let executor = QueryExecutor::new(catalog);
 // - BetweenEvaluator (BETWEEN, NOT BETWEEN)
 // - IsNullEvaluator (IS NULL, IS NOT NULL)
 
-// Выполнение запроса
+// Выполнение запроса с ORDER BY
 let result = executor.execute(&query_stmt, &ctx)?;
 
 // Добавление кастомного evaluator'а

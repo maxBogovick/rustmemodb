@@ -1,4 +1,4 @@
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, OrderByExpr};
 use crate::core::Schema;
 
 /// Logical plan nodes - high-level operations
@@ -41,7 +41,29 @@ pub struct ProjectionNode {
 #[derive(Debug, Clone)]
 pub struct SortNode {
     pub input: Box<LogicalPlan>,
-    pub sort_keys: Vec<(Expr, bool)>, // (expr, descending)
+    /// ORDER BY expressions - использует OrderByExpr из AST для консистентности
+    pub order_by: Vec<OrderByExpr>,
+}
+
+impl SortNode {
+    /// Создать из tuple формата (для обратной совместимости)
+    pub fn from_tuples(input: Box<LogicalPlan>, sort_keys: Vec<(Expr, bool)>) -> Self {
+        Self {
+            input,
+            order_by: sort_keys
+                .into_iter()
+                .map(|(expr, descending)| OrderByExpr { expr, descending })
+                .collect(),
+        }
+    }
+
+    /// Получить как tuples (для обратной совместимости)
+    pub fn as_tuples(&self) -> Vec<(&Expr, bool)> {
+        self.order_by
+            .iter()
+            .map(|o| (&o.expr, o.descending))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -1,3 +1,7 @@
+// ============================================================================
+// src/parser/adapter.rs - ИСПРАВЛЕННЫЙ для актуальной версии sqlparser
+// ============================================================================
+
 use sqlparser::ast as sql_ast;
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
@@ -144,6 +148,9 @@ impl SqlParserAdapter {
         })
     }
 
+    // ========================================================================
+    // ИСПРАВЛЕННЫЙ convert_query с актуальным API sqlparser
+    // ========================================================================
     fn convert_query(&self, query: sql_ast::Query) -> Result<QueryStmt> {
         let sql_ast::SetExpr::Select(select) = *query.body else {
             return Err(DbError::UnsupportedOperation(
@@ -168,13 +175,115 @@ impl SqlParserAdapter {
             .map(|expr| self.expr_converter.convert(expr))
             .transpose()?;
 
+        // ✅ Парсинг ORDER BY через OrderBy struct
+        let order_by = self.convert_order_by(query.order_by)?;
+
+        // ✅ Парсинг LIMIT через limit_clause
+        let limit = self.convert_limit_clause(&query.limit_clause)?;
+
         Ok(QueryStmt {
             projection,
             from,
             selection,
-            order_by: Vec::new(),
-            limit: None,
+            order_by,
+            limit,
         })
+    }
+
+    // ========================================================================
+    // Конвертация ORDER BY из нового формата
+    // ========================================================================
+    fn convert_order_by(&self, order_by: Option<sql_ast::OrderBy>) -> Result<Vec<OrderByExpr>> {
+        let Some(order_by) = order_by else {
+            return Ok(Vec::new());
+        };
+
+        // OrderBy.kind содержит сами выражения
+        match order_by.kind {
+            sql_ast::OrderByKind::Expressions(exprs) => {
+                exprs
+                    .into_iter()
+                    .map(|expr| self.convert_order_by_expr(expr))
+                    .collect()
+            }
+            sql_ast::OrderByKind::All(all) => {
+                // ORDER BY ALL - сортировка по всем колонкам
+                Err(DbError::UnsupportedOperation(
+                    format!("ORDER BY ALL not supported: {:?}", all)
+                ))
+            }
+        }
+    }
+
+    // ========================================================================
+    // Конвертация одного ORDER BY выражения
+    // ========================================================================
+    fn convert_order_by_expr(&self, order: sql_ast::OrderByExpr) -> Result<OrderByExpr> {
+        let expr = self.expr_converter.convert(order.expr)?;
+
+        // ASC по умолчанию, DESC если явно указано
+        // order.asc: Option<bool> - Some(true) = ASC, Some(false) = DESC, None = default (ASC)
+        let descending = order.options.asc.map(|asc| !asc).unwrap_or(false);
+
+        Ok(OrderByExpr {
+            expr,
+            descending,
+        })
+    }
+
+    // ========================================================================
+    // ИСПРАВЛЕННЫЙ: Конвертация LIMIT через LimitClause с ValueWithSpan
+    // ========================================================================
+    fn convert_limit_clause(&self, limit_clause: &Option<sql_ast::LimitClause>) -> Result<Option<usize>> {
+        let Some(clause) = limit_clause else {
+            return Ok(None);
+        };
+
+        match clause {
+            sql_ast::LimitClause::LimitOffset { limit, .. } => {
+                // LIMIT expr [OFFSET expr]
+                match limit {
+                    Some(sql_ast::Expr::Value(value_with_span)) => {
+                        // ✅ ИСПРАВЛЕНО: ValueWithSpan содержит value поле
+                        self.extract_limit_number(&value_with_span.value)
+                    }
+                    Some(_) => Err(DbError::UnsupportedOperation(
+                        "Only numeric LIMIT supported".into()
+                    )),
+                    None => Ok(None),
+                }
+            }
+            sql_ast::LimitClause::OffsetCommaLimit { limit, .. } => {
+                // MySQL style: LIMIT offset, limit
+                match limit {
+                    sql_ast::Expr::Value(value_with_span) => {
+                        // ✅ ИСПРАВЛЕНО: ValueWithSpan содержит value поле
+                        self.extract_limit_number(&value_with_span.value)
+                    }
+                    _ => Err(DbError::UnsupportedOperation(
+                        "Only numeric LIMIT supported".into()
+                    )),
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // Вспомогательный метод для извлечения числа из Value
+    // ========================================================================
+    fn extract_limit_number(&self, value: &sql_ast::Value) -> Result<Option<usize>> {
+        match value {
+            sql_ast::Value::Number(n, _) => {
+                n.parse::<usize>()
+                    .map(Some)
+                    .map_err(|_| DbError::ParseError(
+                        format!("Invalid LIMIT value: {}", n)
+                    ))
+            }
+            _ => Err(DbError::UnsupportedOperation(
+                format!("Only numeric LIMIT supported, got: {:?}", value)
+            )),
+        }
     }
 
     fn convert_select_item(&self, item: sql_ast::SelectItem) -> Result<SelectItem> {
@@ -226,4 +335,107 @@ fn extract_table_name(name: &sql_ast::ObjectName) -> Result<String> {
         .last()
         .map(|ident| ident.to_string())
         .ok_or_else(|| DbError::ParseError("Invalid table name".into()))
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_order_by_asc() {
+        let adapter = SqlParserAdapter::new();
+        let stmts = adapter.parse("SELECT * FROM users ORDER BY age").unwrap();
+
+        let Statement::Query(query) = &stmts[0] else {
+            panic!("Expected Query");
+        };
+
+        assert_eq!(query.order_by.len(), 1);
+        assert!(!query.order_by[0].descending);
+
+        if let Expr::Column(name) = &query.order_by[0].expr {
+            assert_eq!(name, "age");
+        } else {
+            panic!("Expected Column expression");
+        }
+    }
+
+    #[test]
+    fn test_parse_order_by_desc() {
+        let adapter = SqlParserAdapter::new();
+        let stmts = adapter.parse("SELECT * FROM users ORDER BY age DESC").unwrap();
+
+        let Statement::Query(query) = &stmts[0] else {
+            panic!("Expected Query");
+        };
+
+        assert_eq!(query.order_by.len(), 1);
+        assert!(query.order_by[0].descending);
+    }
+
+    #[test]
+    fn test_parse_multiple_order_by() {
+        let adapter = SqlParserAdapter::new();
+        let stmts = adapter.parse(
+            "SELECT * FROM users ORDER BY age DESC, name ASC"
+        ).unwrap();
+
+        let Statement::Query(query) = &stmts[0] else {
+            panic!("Expected Query");
+        };
+
+        assert_eq!(query.order_by.len(), 2);
+        assert!(query.order_by[0].descending);  // age DESC
+        assert!(!query.order_by[1].descending); // name ASC
+    }
+
+    #[test]
+    fn test_parse_order_by_with_limit() {
+        let adapter = SqlParserAdapter::new();
+        let stmts = adapter.parse(
+            "SELECT * FROM users ORDER BY age LIMIT 10"
+        ).unwrap();
+
+        let Statement::Query(query) = &stmts[0] else {
+            panic!("Expected Query");
+        };
+
+        assert_eq!(query.order_by.len(), 1);
+        assert_eq!(query.limit, Some(10));
+    }
+
+    #[test]
+    fn test_parse_order_by_expression() {
+        let adapter = SqlParserAdapter::new();
+        let stmts = adapter.parse(
+            "SELECT * FROM users ORDER BY age + 1 DESC"
+        ).unwrap();
+
+        let Statement::Query(query) = &stmts[0] else {
+            panic!("Expected Query");
+        };
+
+        assert_eq!(query.order_by.len(), 1);
+        assert!(query.order_by[0].descending);
+
+        // Проверяем что это BinaryOp выражение
+        assert!(matches!(query.order_by[0].expr, Expr::BinaryOp { .. }));
+    }
+
+    #[test]
+    fn test_parse_no_order_by() {
+        let adapter = SqlParserAdapter::new();
+        let stmts = adapter.parse("SELECT * FROM users").unwrap();
+
+        let Statement::Query(query) = &stmts[0] else {
+            panic!("Expected Query");
+        };
+
+        assert!(query.order_by.is_empty());
+        assert!(query.limit.is_none());
+    }
 }

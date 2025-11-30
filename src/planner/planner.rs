@@ -1,4 +1,4 @@
-use crate::parser::ast::{Statement, QueryStmt, SelectItem};
+use crate::parser::ast::{Statement, QueryStmt, SelectItem, OrderByExpr};
 use crate::storage::Catalog;
 use crate::core::{DbError, Result};
 use super::logical_plan::*;
@@ -32,22 +32,17 @@ impl QueryPlanner {
             });
         }
 
-        // Apply projection
-        plan = self.plan_projection(plan, &query.projection)?;
-
-        // Apply ORDER BY
+        // Apply ORDER BY (BEFORE projection!)
+        // ORDER BY needs access to all columns, not just projected ones
         if !query.order_by.is_empty() {
-            let sort_keys = query
-                .order_by
-                .iter()
-                .map(|order| (order.expr.clone(), order.descending))
-                .collect();
-
             plan = LogicalPlan::Sort(SortNode {
                 input: Box::new(plan),
-                sort_keys,
+                order_by: query.order_by.clone(),
             });
         }
+
+        // Apply projection (AFTER ORDER BY)
+        plan = self.plan_projection(plan, &query.projection)?;
 
         // Apply LIMIT
         if let Some(limit) = query.limit {

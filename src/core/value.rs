@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use crate::core::{DbError, Result};
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -12,6 +13,67 @@ pub enum Value {
 }
 
 impl Value {
+    pub fn compare(&self, other: &Value) -> Result<Ordering> {
+        match (self, other) {
+            // ========================================
+            // NULL handling: NULL is "greater" than all values (NULL LAST)
+            // ========================================
+            (Value::Null, Value::Null) => Ok(Ordering::Equal),
+            (Value::Null, _) => Ok(Ordering::Greater),
+            (_, Value::Null) => Ok(Ordering::Less),
+
+            // ========================================
+            // Same type comparisons
+            // ========================================
+            (Value::Integer(a), Value::Integer(b)) => Ok(a.cmp(b)),
+
+            (Value::Float(a), Value::Float(b)) => {
+                // Handle NaN: NaN is considered equal to NaN, greater than all other values
+                match (a.is_nan(), b.is_nan()) {
+                    (true, true) => Ok(Ordering::Equal),
+                    (true, false) => Ok(Ordering::Greater),
+                    (false, true) => Ok(Ordering::Less),
+                    (false, false) => Ok(a.partial_cmp(b).unwrap_or(Ordering::Equal)),
+                }
+            },
+
+            (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b)),
+
+            (Value::Boolean(a), Value::Boolean(b)) => Ok(a.cmp(b)),
+
+            // ========================================
+            // Mixed numeric types (implicit coercion)
+            // ========================================
+            (Value::Integer(a), Value::Float(b)) => {
+                let a_float = *a as f64;
+                match (a_float.is_nan(), b.is_nan()) {
+                    (true, true) => Ok(Ordering::Equal),
+                    (true, false) => Ok(Ordering::Greater),
+                    (false, true) => Ok(Ordering::Less),
+                    (false, false) => Ok(a_float.partial_cmp(b).unwrap_or(Ordering::Equal)),
+                }
+            }
+
+            (Value::Float(a), Value::Integer(b)) => {
+                let b_float = *b as f64;
+                match (a.is_nan(), b_float.is_nan()) {
+                    (true, true) => Ok(Ordering::Equal),
+                    (true, false) => Ok(Ordering::Greater),
+                    (false, true) => Ok(Ordering::Less),
+                    (false, false) => Ok(a.partial_cmp(&b_float).unwrap_or(Ordering::Equal)),
+                }
+            }
+
+            // ========================================
+            // Type mismatches - ERROR
+            // ========================================
+            _ => Err(DbError::TypeMismatch(format!(
+                "Cannot compare incompatible types: {} and {}",
+                self.type_name(),
+                other.type_name()
+            ))),
+        }
+    }
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Null => "NULL",
