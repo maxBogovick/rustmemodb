@@ -4,6 +4,7 @@ pub mod comparison;
 pub mod in_list;
 pub mod is_null;
 pub mod like;
+mod boolean;
 
 use crate::core::Result;
 use crate::parser::ast::Expr;
@@ -50,6 +51,7 @@ impl ExpressionPluginRegistry {
         registry.register(Box::new(arithmetic::ArithmeticPlugin));
         registry.register(Box::new(comparison::ComparisonPlugin));
         registry.register(Box::new(in_list::InListPlugin));
+        registry.register(Box::new(boolean::BooleanPlugin));
 
         registry
     }

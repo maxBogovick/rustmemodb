@@ -19,8 +19,10 @@ impl ExpressionEvaluator for IsNullEvaluator {
         };
 
         let val = context.evaluate(expr, row, schema)?;
-        let is_null = matches!(val, Value::Null);
 
-        Ok(Value::Boolean(if *negated { !is_null } else { is_null }))
+        let is_null = matches!(val, Value::Null);
+        let result = if *negated { !is_null } else { is_null };
+
+        Ok(Value::Boolean(result))
     }
 }

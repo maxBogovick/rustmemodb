@@ -64,6 +64,33 @@ impl ExpressionEvaluator for ArithmeticEvaluator {
                 Ok(Value::Float(result))
             }
 
+            // Mixed Integer/Float arithmetic - always returns Float
+            (Value::Integer(a), Value::Float(b)) => {
+                let a_float = a as f64;
+                let result = match op {
+                    BinaryOp::Add => a_float + b,
+                    BinaryOp::Subtract => a_float - b,
+                    BinaryOp::Multiply => a_float * b,
+                    BinaryOp::Divide => a_float / b,
+                    BinaryOp::Modulo => a_float % b,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Float(result))
+            }
+
+            (Value::Float(a), Value::Integer(b)) => {
+                let b_float = b as f64;
+                let result = match op {
+                    BinaryOp::Add => a + b_float,
+                    BinaryOp::Subtract => a - b_float,
+                    BinaryOp::Multiply => a * b_float,
+                    BinaryOp::Divide => a / b_float,
+                    BinaryOp::Modulo => a % b_float,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Float(result))
+            }
+
             (a, b) => Err(DbError::TypeMismatch(format!(
                 "Arithmetic requires numeric types, got {} and {}",
                 a.type_name(), b.type_name()

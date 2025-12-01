@@ -113,7 +113,7 @@ fn test_order_by_integer_ascending() {
 
     let result = db.execute("SELECT name, price FROM products ORDER BY price ASC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Should be sorted by price: Mouse(25), Chair(150), Desk(300), Monitor(400), Laptop(1200)
@@ -130,7 +130,7 @@ fn test_order_by_integer_descending() {
 
     let result = db.execute("SELECT name, price FROM products ORDER BY price DESC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Should be sorted by price DESC: Laptop(1200), Monitor(400), Desk(300), Chair(150), Mouse(25)
@@ -147,7 +147,7 @@ fn test_order_by_text_ascending() {
 
     let result = db.execute("SELECT name FROM products ORDER BY name ASC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Should be sorted alphabetically
@@ -164,7 +164,7 @@ fn test_order_by_text_descending() {
 
     let result = db.execute("SELECT name FROM products ORDER BY name DESC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Should be sorted reverse alphabetically
@@ -188,7 +188,7 @@ fn test_order_by_multiple_columns() {
         "SELECT category, name, price FROM products ORDER BY category ASC, price DESC"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Expected order:
@@ -219,7 +219,7 @@ fn test_order_by_three_columns() {
         "SELECT rating, category, name, price FROM products ORDER BY rating DESC, category ASC, price ASC"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Expected order:
@@ -252,7 +252,7 @@ fn test_order_by_with_nulls_ascending() {
     // ORDER BY salary ASC → NULLS LAST
     let result = db.execute("SELECT name, salary FROM employees ORDER BY salary ASC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Expected order: Bob(65000), Alice(75000), David(80000), Charlie(NULL), Eve(NULL)
@@ -277,7 +277,7 @@ fn test_order_by_with_nulls_descending() {
     // ORDER BY salary DESC → NULLS FIRST
     let result = db.execute("SELECT name, salary FROM employees ORDER BY salary DESC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 5);
 
     // Expected order: Charlie(NULL), Eve(NULL), David(80000), Alice(75000), Bob(65000)
@@ -308,7 +308,7 @@ fn test_order_by_with_where() {
         "SELECT name, price FROM products WHERE category = 'Electronics' ORDER BY price ASC"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 3);
 
     // Should be sorted by price: Mouse(25), Monitor(400), Laptop(1200)
@@ -326,7 +326,7 @@ fn test_order_by_with_limit() {
         "SELECT name, price FROM products ORDER BY price DESC LIMIT 3"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 3);
 
     // Should be: Laptop(1200), Monitor(400), Desk(300)
@@ -347,7 +347,7 @@ fn test_order_by_with_where_and_limit() {
          LIMIT 2"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 2);
 
     // Should be: Laptop(rating 5, price 1200), Monitor(rating 5, price 400)
@@ -367,7 +367,7 @@ fn test_order_by_empty_result() {
         "SELECT name FROM products WHERE price > 10000 ORDER BY price ASC"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 0);
 }
 
@@ -380,7 +380,7 @@ fn test_order_by_single_row() {
 
     let result = db.execute("SELECT name FROM test ORDER BY id DESC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0][0], Value::Text("Only".into()));
 }
@@ -396,7 +396,7 @@ fn test_order_by_all_same_values() {
 
     let result = db.execute("SELECT id FROM test ORDER BY value ASC").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 3);
     // Order should be stable (maintain insertion order for equal values)
 }
@@ -418,7 +418,7 @@ fn test_complex_query_with_everything() {
          LIMIT 4"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 4);
 
     // Expected:
@@ -441,7 +441,7 @@ fn test_order_by_with_like_and_between() {
          ORDER BY price DESC"
     ).unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 2);
 
     // Should be: Monitor(400), Mouse(25)
@@ -459,7 +459,7 @@ fn test_select_star_with_order_by() {
 
     let result = db.execute("SELECT * FROM products ORDER BY price ASC LIMIT 2").unwrap();
 
-    let rows = &result.rows;
+    let rows = &result.rows();
     assert_eq!(rows.len(), 2);
 
     // Should get Mouse and Chair (cheapest two)
@@ -479,12 +479,12 @@ fn test_performance_sort_1000_rows() {
     let result = db.execute("SELECT * FROM large_table ORDER BY value ASC").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 1000);
+    assert_eq!(result.rows().len(), 1000);
 
     // Verify sorted
-    for i in 1..result.rows.len() {
-        let prev = &result.rows[i - 1][1];
-        let curr = &result.rows[i][1];
+    for i in 1..result.rows().len() {
+        let prev = &result.rows()[i - 1][1];
+        let curr = &result.rows()[i][1];
         if let (Value::Integer(a), Value::Integer(b)) = (prev, curr) {
             assert!(a <= b, "Rows not sorted: {} > {}", a, b);
         }
@@ -502,12 +502,12 @@ fn test_performance_sort_10000_rows() {
     let result = db.execute("SELECT * FROM large_table ORDER BY value DESC").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 10_000);
+    assert_eq!(result.rows().len(), 10_000);
 
     // Verify sorted descending
-    for i in 1..result.rows.len() {
-        let prev = &result.rows[i - 1][1];
-        let curr = &result.rows[i][1];
+    for i in 1..result.rows().len() {
+        let prev = &result.rows()[i - 1][1];
+        let curr = &result.rows()[i][1];
         if let (Value::Integer(a), Value::Integer(b)) = (prev, curr) {
             assert!(a >= b, "Rows not sorted DESC: {} < {}", a, b);
         }
@@ -526,7 +526,7 @@ fn test_performance_sort_with_limit() {
     let result = db.execute("SELECT * FROM large_table ORDER BY value ASC LIMIT 10").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 10);
+    assert_eq!(result.rows().len(), 10);
 
     println!("✅ Sort 10,000 rows with LIMIT 10: {:?}", duration);
     assert!(duration.as_millis() < 5000, "Sort took too long: {:?}", duration);
@@ -542,14 +542,14 @@ fn test_performance_multi_column_sort() {
     ).unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 5000);
+    assert_eq!(result.rows().len(), 5000);
 
     // Verify multi-column sort
-    for i in 1..result.rows.len() {
-        let prev_cat = &result.rows[i - 1][3];
-        let curr_cat = &result.rows[i][3];
-        let prev_val = &result.rows[i - 1][1];
-        let curr_val = &result.rows[i][1];
+    for i in 1..result.rows().len() {
+        let prev_cat = &result.rows()[i - 1][3];
+        let curr_cat = &result.rows()[i][3];
+        let prev_val = &result.rows()[i - 1][1];
+        let curr_val = &result.rows()[i][1];
 
         if let (Value::Integer(pc), Value::Integer(cc)) = (prev_cat, curr_cat) {
             if pc == cc {
@@ -579,10 +579,10 @@ fn test_performance_sort_with_filter() {
     let duration = start.elapsed();
 
     // Should be ~1000 rows (10% of data where category < 10)
-    assert!(result.rows.len() > 0);
-    assert!(result.rows.len() <= 1000);
+    assert!(result.rows().len() > 0);
+    assert!(result.rows().len() <= 1000);
 
-    println!("✅ Filter + Sort ({} rows): {:?}", result.rows.len(), duration);
+    println!("✅ Filter + Sort ({} rows): {:?}", result.rows().len(), duration);
     assert!(duration.as_millis() < 3000, "Query took too long: {:?}", duration);
 }
 
@@ -594,12 +594,12 @@ fn test_performance_sort_text_column() {
     let result = db.execute("SELECT * FROM large_table ORDER BY name ASC").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 5000);
+    assert_eq!(result.rows().len(), 5000);
 
     // Verify text sorting
-    for i in 1..result.rows.len() {
-        let prev = &result.rows[i - 1][2];
-        let curr = &result.rows[i][2];
+    for i in 1..result.rows().len() {
+        let prev = &result.rows()[i - 1][2];
+        let curr = &result.rows()[i][2];
         if let (Value::Text(a), Value::Text(b)) = (prev, curr) {
             assert!(a <= b, "Text not sorted: {} > {}", a, b);
         }
@@ -626,7 +626,7 @@ fn test_performance_already_sorted_data() {
     let result = db.execute("SELECT * FROM sorted_table ORDER BY value ASC").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 5000);
+    assert_eq!(result.rows().len(), 5000);
 
     println!("✅ Sort already sorted 5,000 rows: {:?}", duration);
     assert!(duration.as_millis() < 2000, "Sort took too long: {:?}", duration);
@@ -649,12 +649,12 @@ fn test_performance_reverse_sorted_data() {
     let result = db.execute("SELECT * FROM reverse_table ORDER BY value ASC").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 5000);
+    assert_eq!(result.rows().len(), 5000);
 
     // Verify it's now sorted ascending
-    for i in 1..result.rows.len() {
-        let prev = &result.rows[i - 1][1];
-        let curr = &result.rows[i][1];
+    for i in 1..result.rows().len() {
+        let prev = &result.rows()[i - 1][1];
+        let curr = &result.rows()[i][1];
         if let (Value::Integer(a), Value::Integer(b)) = (prev, curr) {
             assert!(a <= b, "Rows not sorted");
         }
@@ -678,7 +678,7 @@ fn test_performance_comparison_with_without_order_by() {
     let result_sort = db.execute("SELECT * FROM large_table ORDER BY value ASC").unwrap();
     let duration_sort = start_sort.elapsed();
 
-    assert_eq!(result_no_sort.rows.len(), result_sort.rows.len());
+    assert_eq!(result_no_sort.rows().len(), result_sort.rows().len());
 
     println!("📊 Performance comparison (5,000 rows):");
     println!("   Without ORDER BY: {:?}", duration_no_sort);
@@ -699,7 +699,7 @@ fn test_stress_sort_50000_rows() {
     let result = db.execute("SELECT * FROM large_table ORDER BY value ASC").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 50_000);
+    assert_eq!(result.rows().len(), 50_000);
 
     println!("🔥 Stress test - Sort 50,000 rows: {:?}", duration);
 }
@@ -713,7 +713,7 @@ fn test_stress_sort_100000_rows() {
     let result = db.execute("SELECT * FROM large_table ORDER BY value DESC").unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 100_000);
+    assert_eq!(result.rows().len(), 100_000);
 
     println!("🔥 Stress test - Sort 100,000 rows: {:?}", duration);
 }
@@ -732,7 +732,7 @@ fn test_stress_complex_query_large_dataset() {
     ).unwrap();
     let duration = start.elapsed();
 
-    assert_eq!(result.rows.len(), 1000);
+    assert_eq!(result.rows().len(), 1000);
 
     println!("🔥 Stress test - Complex query on 50,000 rows: {:?}", duration);
 }

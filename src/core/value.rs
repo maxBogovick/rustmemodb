@@ -1,7 +1,7 @@
+use crate::core::{DbError, Result};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use crate::core::{DbError, Result};
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -13,10 +13,8 @@ pub enum Value {
 }
 
 use std::str::FromStr;
-use crate::core::{DbError, Result};
 
 impl Value {
-
     /// Парсинг числа БЕЗ аллокаций
     #[inline]
     pub fn parse_number(s: &str) -> Result<Self> {
@@ -61,7 +59,7 @@ impl Value {
                     (false, true) => Ok(Ordering::Less),
                     (false, false) => Ok(a.partial_cmp(b).unwrap_or(Ordering::Equal)),
                 }
-            },
+            }
 
             (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b)),
 
@@ -165,7 +163,7 @@ impl PartialEq for Value {
             (Self::Integer(a), Self::Integer(b)) => a == b,
             (Self::Float(a), Self::Float(b)) => {
                 match (a.is_nan(), b.is_nan()) {
-                    (true, true) => false,  // NaN != NaN по стандарту
+                    (true, true) => false, // NaN != NaN по стандарту
                     (true, false) | (false, true) => false,
                     _ => {
                         // Относительное сравнение для больших чисел

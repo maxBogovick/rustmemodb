@@ -69,12 +69,51 @@ impl ComparisonEvaluator {
                 _ => unreachable!(),
             }),
 
+            // Mixed Integer/Float comparisons
+            (Value::Integer(a), Value::Float(b)) => {
+                let a_float = *a as f64;
+                Ok(match op {
+                    BinaryOp::Eq => (a_float - b).abs() < f64::EPSILON,
+                    BinaryOp::NotEq => (a_float - b).abs() >= f64::EPSILON,
+                    BinaryOp::Lt => a_float < *b,
+                    BinaryOp::LtEq => a_float <= *b,
+                    BinaryOp::Gt => a_float > *b,
+                    BinaryOp::GtEq => a_float >= *b,
+                    _ => unreachable!(),
+                })
+            }
+
+            (Value::Float(a), Value::Integer(b)) => {
+                let b_float = *b as f64;
+                Ok(match op {
+                    BinaryOp::Eq => (a - b_float).abs() < f64::EPSILON,
+                    BinaryOp::NotEq => (a - b_float).abs() >= f64::EPSILON,
+                    BinaryOp::Lt => *a < b_float,
+                    BinaryOp::LtEq => *a <= b_float,
+                    BinaryOp::Gt => *a > b_float,
+                    BinaryOp::GtEq => *a >= b_float,
+                    _ => unreachable!(),
+                })
+            }
+
             (Value::Text(a), Value::Text(b)) => Ok(match op {
                 BinaryOp::Eq => a == b,
                 BinaryOp::NotEq => a != b,
                 BinaryOp::Lt => a < b,
                 BinaryOp::LtEq => a <= b,
                 BinaryOp::Gt => a > b,
+                BinaryOp::GtEq => a >= b,
+                _ => unreachable!(),
+            }),
+
+            // ДОБАВЛЕНО: Поддержка сравнения Boolean значений
+            (Value::Boolean(a), Value::Boolean(b)) => Ok(match op {
+                BinaryOp::Eq => a == b,
+                BinaryOp::NotEq => a != b,
+                // Для булевых значений: false < true
+                BinaryOp::Lt => !a && *b,      // false < true
+                BinaryOp::LtEq => a <= b,
+                BinaryOp::Gt => *a && !b,      // true > false
                 BinaryOp::GtEq => a >= b,
                 _ => unreachable!(),
             }),

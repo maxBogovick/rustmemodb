@@ -133,6 +133,10 @@ pub enum Expr {
         expr: Box<Expr>,
         negated: bool,
     },
+    
+    Not {
+        expr: Box<Expr>,
+    },
 
     /// Function call (future: COUNT, SUM, etc.)
     Function {

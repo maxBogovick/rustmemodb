@@ -81,6 +81,7 @@ impl EvaluatorRegistry {
         let mut registry = Self::new();
 
         // Автоматически регистрируем все evaluators
+        registry.register(Box::new(boolean::BooleanEvaluator));
         registry.register(Box::new(comparison::ComparisonEvaluator));
         registry.register(Box::new(arithmetic::ArithmeticEvaluator));
         registry.register(Box::new(logical::LogicalEvaluator));
