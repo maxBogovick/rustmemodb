@@ -45,11 +45,27 @@ impl SqlParserAdapter {
             sql_ast::Statement::CreateTable(create) => {
                 Ok(Statement::CreateTable(self.convert_create_table(create)?))
             }
+            sql_ast::Statement::Drop { object_type, names, if_exists, .. } => {
+                if let sql_ast::ObjectType::Table = object_type {
+                    Ok(Statement::DropTable(self.convert_drop_table(names, if_exists)?))
+                } else {
+                    Err(DbError::UnsupportedOperation(format!(
+                        "Only DROP TABLE supported, got: {:?}",
+                        object_type
+                    )))
+                }
+            }
             sql_ast::Statement::Insert(insert) => {
                 Ok(Statement::Insert(self.convert_insert(insert)?))
             }
             sql_ast::Statement::Query(query) => {
                 Ok(Statement::Query(self.convert_query(*query)?))
+            }
+            sql_ast::Statement::Delete(delete) => {
+                Ok(Statement::Delete(self.convert_delete(delete)?))
+            }
+            sql_ast::Statement::Update { table, assignments, selection, .. } => {
+                Ok(Statement::Update(self.convert_update(table, assignments, selection)?))
             }
             _ => Err(DbError::UnsupportedOperation(format!(
                 "Statement type not supported: {:?}",
@@ -70,6 +86,108 @@ impl SqlParserAdapter {
             table_name,
             columns,
             if_not_exists: create.if_not_exists,
+        })
+    }
+
+    fn convert_drop_table(&self, names: Vec<sql_ast::ObjectName>, if_exists: bool) -> Result<DropTableStmt> {
+        if names.len() != 1 {
+            return Err(DbError::UnsupportedOperation(
+                "Only single table DROP supported".into()
+            ));
+        }
+
+        let table_name = extract_table_name(&names[0])?;
+
+        Ok(DropTableStmt {
+            table_name,
+            if_exists,
+        })
+    }
+
+    fn convert_delete(&self, delete: sql_ast::Delete) -> Result<DeleteStmt> {
+        // In sqlparser, DELETE has a FromTable enum variant
+        let table_name = match delete.from {
+            sql_ast::FromTable::WithFromKeyword(tables) => {
+                if tables.is_empty() {
+                    return Err(DbError::ParseError("DELETE requires FROM clause".into()));
+                }
+                match &tables[0].relation {
+                    sql_ast::TableFactor::Table { name, .. } => extract_table_name(name)?,
+                    _ => return Err(DbError::UnsupportedOperation(
+                        "Complex table references not supported in DELETE".into()
+                    )),
+                }
+            }
+            sql_ast::FromTable::WithoutKeyword(tables) => {
+                if tables.is_empty() {
+                    return Err(DbError::ParseError("DELETE requires table name".into()));
+                }
+                match &tables[0].relation {
+                    sql_ast::TableFactor::Table { name, .. } => extract_table_name(name)?,
+                    _ => return Err(DbError::UnsupportedOperation(
+                        "Complex table references not supported in DELETE".into()
+                    )),
+                }
+            }
+        };
+
+        let selection = delete
+            .selection
+            .map(|expr| self.expr_converter.convert(expr))
+            .transpose()?;
+
+        Ok(DeleteStmt {
+            table_name,
+            selection,
+        })
+    }
+
+    fn convert_update(
+        &self,
+        table: sql_ast::TableWithJoins,
+        assignments: Vec<sql_ast::Assignment>,
+        selection: Option<sql_ast::Expr>,
+    ) -> Result<UpdateStmt> {
+        let table_name = match table.relation {
+            sql_ast::TableFactor::Table { name, .. } => extract_table_name(&name)?,
+            _ => return Err(DbError::UnsupportedOperation(
+                "Complex table references not supported in UPDATE".into()
+            )),
+        };
+
+        let assignments = assignments
+            .into_iter()
+            .map(|assign| {
+                // In sqlparser, Assignment has target: AssignmentTarget
+                let column = match assign.target {
+                    sql_ast::AssignmentTarget::ColumnName(col_name) => {
+                        if col_name.0.len() == 1 {
+                            col_name.0[0].to_string()
+                        } else {
+                            return Err(DbError::UnsupportedOperation(
+                                "Qualified column names not supported in UPDATE".into()
+                            ));
+                        }
+                    }
+                    _ => return Err(DbError::UnsupportedOperation(
+                        "Only simple column names supported in UPDATE".into()
+                    )),
+                };
+
+                let value = self.expr_converter.convert(assign.value)?;
+
+                Ok(Assignment { column, value })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let selection = selection
+            .map(|expr| self.expr_converter.convert(expr))
+            .transpose()?;
+
+        Ok(UpdateStmt {
+            table_name,
+            assignments,
+            selection,
         })
     }
 

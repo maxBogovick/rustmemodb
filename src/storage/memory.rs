@@ -31,6 +31,14 @@ impl InMemoryStorage {
         Ok(())
     }
 
+    /// Удалить таблицу
+    pub fn drop_table(&mut self, table_name: &str) -> Result<()> {
+        if self.tables.remove(table_name).is_none() {
+            return Err(DbError::TableNotFound(table_name.to_string()));
+        }
+        Ok(())
+    }
+
     /// Получить handle на таблицу для конкурентного доступа
     pub fn get_table(&self, name: &str) -> Result<Arc<RwLock<Table>>> {
         self.tables

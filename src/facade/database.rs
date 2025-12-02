@@ -2,11 +2,13 @@ use crate::core::{Result, DbError, Column};
 use crate::storage::{InMemoryStorage, Catalog, TableSchema};
 use crate::parser::SqlParserAdapter;
 use crate::executor::{ExecutorPipeline, ExecutionContext};
-use crate::executor::ddl::CreateTableExecutor;
+use crate::executor::ddl::{CreateTableExecutor, DropTableExecutor};
 use crate::executor::dml::InsertExecutor;
+use crate::executor::delete::DeleteExecutor;
+use crate::executor::update::UpdateExecutor;
 use crate::executor::query::QueryExecutor;
 use crate::result::QueryResult;
-use crate::parser::ast::{Statement, CreateTableStmt};
+use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
 use std::sync::{Arc, RwLock};
 use lazy_static::lazy_static;
 
@@ -37,7 +39,10 @@ impl InMemoryDB {
 
         let mut pipeline = ExecutorPipeline::new();
         pipeline.register(Box::new(CreateTableExecutor));
+        pipeline.register(Box::new(DropTableExecutor));
         pipeline.register(Box::new(InsertExecutor));
+        pipeline.register(Box::new(DeleteExecutor::new()));
+        pipeline.register(Box::new(UpdateExecutor::new()));
         pipeline.register(Box::new(QueryExecutor::new(catalog.clone())));
 
         Self {
@@ -55,9 +60,15 @@ impl InMemoryDB {
             return Err(DbError::ParseError("No statement found".into()));
         }
 
-        // CREATE TABLE обрабатываем отдельно (DDL)
-        if let Statement::CreateTable(ref create) = statements[0] {
-            return self.execute_create_table(create);
+        // DDL operations (CREATE TABLE, DROP TABLE) обрабатываем отдельно
+        match &statements[0] {
+            Statement::CreateTable(create) => {
+                return self.execute_create_table(create);
+            }
+            Statement::DropTable(drop) => {
+                return self.execute_drop_table(drop);
+            }
+            _ => {}
         }
 
         // Остальное через pipeline (DML, DQL)
@@ -99,6 +110,37 @@ impl InMemoryDB {
         )));
 
         // Добавляем новый с обновленным catalog
+        self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+
+        Ok(QueryResult::empty())
+    }
+
+    fn execute_drop_table(&mut self, drop: &DropTableStmt) -> Result<QueryResult> {
+        // Check if table exists
+        if !self.catalog.table_exists(&drop.table_name) {
+            if drop.if_exists {
+                return Ok(QueryResult::empty());
+            }
+            return Err(DbError::TableNotFound(drop.table_name.clone()));
+        }
+
+        // 1. Drop table from storage
+        self.storage.drop_table(&drop.table_name)?;
+
+        // 2. Update catalog (Copy-on-Write)
+        self.catalog = self.catalog.clone().without_table(&drop.table_name)?;
+
+        // 3. Recreate QueryExecutor with updated catalog
+        self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
+            crate::parser::ast::QueryStmt {
+                projection: vec![],
+                from: vec![],
+                selection: None,
+                order_by: vec![],
+                limit: None,
+            }
+        )));
+
         self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
 
         Ok(QueryResult::empty())

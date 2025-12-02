@@ -4,6 +4,7 @@ use crate::core::{Value, DataType};
 #[derive(Debug, Clone)]
 pub enum Statement {
     CreateTable(CreateTableStmt),
+    DropTable(DropTableStmt),
     Insert(InsertStmt),
     Query(QueryStmt),
     Delete(DeleteStmt),
@@ -16,6 +17,13 @@ pub struct CreateTableStmt {
     pub table_name: String,
     pub columns: Vec<ColumnDef>,
     pub if_not_exists: bool,
+}
+
+/// DROP TABLE statement
+#[derive(Debug, Clone)]
+pub struct DropTableStmt {
+    pub table_name: String,
+    pub if_exists: bool,
 }
 
 #[derive(Debug, Clone)]

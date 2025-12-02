@@ -27,6 +27,40 @@ impl Table {
         Ok(())
     }
 
+    /// Delete rows by indices (in reverse order to maintain validity)
+    pub fn delete_rows(&mut self, mut indices: Vec<usize>) -> Result<usize> {
+        // Sort in reverse order to maintain index validity during deletion
+        indices.sort_by(|a, b| b.cmp(a));
+        indices.dedup();
+
+        let count = indices.len();
+        for idx in indices {
+            if idx >= self.rows.len() {
+                return Err(DbError::ExecutionError(format!(
+                    "Row index {} out of bounds",
+                    idx
+                )));
+            }
+            self.rows.remove(idx);
+        }
+
+        Ok(count)
+    }
+
+    /// Update a specific row
+    pub fn update_row(&mut self, index: usize, row: Row) -> Result<()> {
+        if index >= self.rows.len() {
+            return Err(DbError::ExecutionError(format!(
+                "Row index {} out of bounds",
+                index
+            )));
+        }
+
+        self.validate_row(&row)?;
+        self.rows[index] = row;
+        Ok(())
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }

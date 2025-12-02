@@ -1,5 +1,5 @@
 // ============================================================================
-// src/executor/query.rs - Полная версия с ORDER BY поддержкой
+// src/executor/query.rs - Refactored QueryExecutor with improved architecture
 // ============================================================================
 
 use crate::parser::ast::{Statement, Expr, OrderByExpr};
@@ -13,7 +13,7 @@ use super::{Executor, ExecutionContext};
 use std::cmp::Ordering;
 
 // ============================================================================
-// QUERY EXECUTOR - С evaluator registry и ORDER BY
+// QUERY EXECUTOR - Main structure
 // ============================================================================
 
 pub struct QueryExecutor {
@@ -23,7 +23,7 @@ pub struct QueryExecutor {
 }
 
 impl QueryExecutor {
-    /// Создать executor с дефолтными evaluators
+    /// Create executor with default evaluators
     pub fn new(catalog: Catalog) -> Self {
         Self {
             planner: QueryPlanner::new(),
@@ -32,7 +32,7 @@ impl QueryExecutor {
         }
     }
 
-    /// Создать executor с кастомными evaluators
+    /// Create executor with custom evaluators
     pub fn with_evaluators(catalog: Catalog, evaluator_registry: EvaluatorRegistry) -> Self {
         Self {
             planner: QueryPlanner::new(),
@@ -41,12 +41,12 @@ impl QueryExecutor {
         }
     }
 
-    /// Обновить catalog (вызывается при DDL операциях)
+    /// Update catalog (called during DDL operations)
     pub fn update_catalog(&mut self, new_catalog: Catalog) {
         self.catalog = new_catalog;
     }
 
-    /// Выполнить логический план
+    /// Execute logical plan - main entry point
     pub fn execute_plan(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<Row>> {
         match plan {
             LogicalPlan::TableScan(scan) => self.execute_scan(scan, ctx),
@@ -57,199 +57,7 @@ impl QueryExecutor {
         }
     }
 
-    /// Выполнить table scan
-    fn execute_scan(
-        &self,
-        scan: &crate::planner::logical_plan::TableScanNode,
-        ctx: &ExecutionContext,
-    ) -> Result<Vec<Row>> {
-        // Read lock только на одну таблицу
-        ctx.storage.scan_table(&scan.table_name)
-    }
-
-    /// Выполнить filter
-    fn execute_filter(
-        &self,
-        filter: &crate::planner::logical_plan::FilterNode,
-        ctx: &ExecutionContext,
-    ) -> Result<Vec<Row>> {
-        // Получаем строки из input плана
-        let input_rows = self.execute_plan(&filter.input, ctx)?;
-
-        // Получаем имя таблицы для схемы
-        let table_name = self.get_table_name(&filter.input)?;
-        let schema = ctx.storage.get_schema(table_name.as_str())?;
-
-        // Создаем evaluation context
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
-
-        // Фильтруем строки
-        Ok(input_rows
-            .into_iter()
-            .filter(|row| {
-                eval_ctx
-                    .evaluate(&filter.predicate, row, schema.schema())
-                    .map(|v| v.as_bool())
-                    .unwrap_or(false)
-            })
-            .collect())
-    }
-
-    /// Выполнить projection
-    fn execute_projection(
-        &self,
-        proj: &crate::planner::logical_plan::ProjectionNode,
-        ctx: &ExecutionContext,
-    ) -> Result<Vec<Row>> {
-        // Получаем строки из input плана
-        let input_rows = self.execute_plan(&proj.input, ctx)?;
-
-        // Получаем схему
-        let table_name = self.get_table_name(&proj.input)?;
-        let schema = ctx.storage.get_schema(table_name.as_str())?;
-
-        // Создаем evaluation context
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
-
-        // Проецируем каждую строку
-        input_rows
-            .into_iter()
-            .map(|row| self.project_row(&proj.expressions, &row, schema.schema(), &eval_ctx))
-            .collect()
-    }
-
-    // ========================================================================
-    // ✅ РЕАЛИЗАЦИЯ ORDER BY
-    // ========================================================================
-    fn execute_sort(
-        &self,
-        sort: &SortNode,
-        ctx: &ExecutionContext,
-    ) -> Result<Vec<Row>> {
-        // 1. Получаем строки из input плана
-        let mut input_rows = self.execute_plan(&sort.input, ctx)?;
-
-        // 2. Если нет ORDER BY expressions - возвращаем как есть
-        if sort.order_by.is_empty() {
-            return Ok(input_rows);
-        }
-
-        // 3. Получаем схему таблицы для вычисления выражений
-        let table_name = self.get_table_name(&sort.input)?;
-        let table_schema = ctx.storage.get_schema(&table_name)?;
-        let schema = table_schema.schema();
-
-        // 4. Создаём evaluation context
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
-
-        // 5. Собираем ошибки во время сортировки
-        let mut sort_error: Option<DbError> = None;
-
-        // 6. Сортируем строки
-        input_rows.sort_by(|row_a, row_b| {
-            // Если уже была ошибка - не продолжаем вычисления
-            if sort_error.is_some() {
-                return Ordering::Equal;
-            }
-
-            // Сравниваем по каждому ORDER BY выражению
-            for order_expr in &sort.order_by {
-                // Вычисляем выражения для обеих строк
-                let val_a = match eval_ctx.evaluate(&order_expr.expr, row_a, schema) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return Ordering::Equal;
-                    }
-                };
-                let val_b = match eval_ctx.evaluate(&order_expr.expr, row_b, schema) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return Ordering::Equal;
-                    }
-                };
-
-                // ✅ Use Value::compare instead of self.compare_values
-                let mut cmp = match val_a.compare(&val_b) {
-                    Ok(ordering) => ordering,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return Ordering::Equal;
-                    }
-                };
-
-                // DESC - инвертируем порядок
-                if order_expr.descending {
-                    cmp = cmp.reverse();
-                }
-
-                // Если не равны - возвращаем результат
-                if cmp != Ordering::Equal {
-                    return cmp;
-                }
-                // Иначе переходим к следующему ORDER BY выражению
-            }
-
-            // Все выражения равны
-            Ordering::Equal
-        });
-
-        // 7. Если была ошибка во время сортировки - возвращаем её
-        if let Some(err) = sort_error {
-            return Err(err);
-        }
-
-        Ok(input_rows)
-    }
-
-    /// Сравнение значений с поддержкой NULL (NULL LAST по умолчанию)
-    fn compare_values(&self, a: &Value, b: &Value) -> Ordering {
-        match (a, b) {
-            // NULL handling: NULL считается "больше" всех значений (NULL LAST)
-            (Value::Null, Value::Null) => Ordering::Equal,
-            (Value::Null, _) => Ordering::Greater,
-            (_, Value::Null) => Ordering::Less,
-
-            // Integer comparison
-            (Value::Integer(a), Value::Integer(b)) => a.cmp(b),
-
-            // Float comparison
-            (Value::Float(a), Value::Float(b)) => {
-                a.partial_cmp(b).unwrap_or(Ordering::Equal)
-            }
-
-            // Text comparison
-            (Value::Text(a), Value::Text(b)) => a.cmp(b),
-
-            // Boolean comparison (false < true)
-            (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
-
-            // Mixed numeric types
-            (Value::Integer(a), Value::Float(b)) => {
-                (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal)
-            }
-            (Value::Float(a), Value::Integer(b)) => {
-                a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
-            }
-
-            // Type mismatch - compare as strings (fallback)
-            _ => format!("{:?}", a).cmp(&format!("{:?}", b)),
-        }
-    }
-
-    /// Выполнить limit
-    fn execute_limit(
-        &self,
-        limit: &crate::planner::logical_plan::LimitNode,
-        ctx: &ExecutionContext,
-    ) -> Result<Vec<Row>> {
-        let mut input_rows = self.execute_plan(&limit.input, ctx)?;
-        input_rows.truncate(limit.limit);
-        Ok(input_rows)
-    }
-
-    /// Получить имя таблицы из плана (рекурсивно)
+    /// Get table name from plan recursively
     fn get_table_name(&self, plan: &LogicalPlan) -> Result<String> {
         match plan {
             LogicalPlan::TableScan(scan) => Ok(scan.table_name.clone()),
@@ -260,7 +68,144 @@ impl QueryExecutor {
         }
     }
 
-    /// Проецировать строку согласно expressions
+    /// Get output column names from plan
+    fn get_output_columns(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<String>> {
+        match plan {
+            LogicalPlan::TableScan(scan) => {
+                let schema = ctx.storage.get_schema(&scan.table_name)?;
+
+                if let Some(ref cols) = scan.projected_columns {
+                    Ok(cols.clone())
+                } else {
+                    Ok(schema.schema().columns().iter().map(|col| col.name.clone()).collect())
+                }
+            }
+
+            LogicalPlan::Projection(proj) => {
+                Ok(proj.expressions.iter().enumerate().map(|(i, expr)| {
+                    match expr {
+                        Expr::Column(name) => name.clone(),
+                        _ => format!("col_{}", i),
+                    }
+                }).collect())
+            }
+
+            // Recurse for other nodes
+            LogicalPlan::Filter(filter) => self.get_output_columns(&filter.input, ctx),
+            LogicalPlan::Sort(sort) => self.get_output_columns(&sort.input, ctx),
+            LogicalPlan::Limit(limit) => self.get_output_columns(&limit.input, ctx),
+        }
+    }
+}
+
+// ============================================================================
+// PLAN EXECUTION - Individual operators
+// ============================================================================
+
+impl QueryExecutor {
+    /// Execute table scan
+    fn execute_scan(
+        &self,
+        scan: &crate::planner::logical_plan::TableScanNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        ctx.storage.scan_table(&scan.table_name)
+    }
+
+    /// Execute filter operation
+    fn execute_filter(
+        &self,
+        filter: &crate::planner::logical_plan::FilterNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        let input_rows = self.execute_plan(&filter.input, ctx)?;
+        let table_name = self.get_table_name(&filter.input)?;
+        let schema = ctx.storage.get_schema(&table_name)?;
+
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+
+        Ok(input_rows
+            .into_iter()
+            .filter(|row| self.evaluate_predicate(&eval_ctx, &filter.predicate, row, schema.schema()))
+            .collect())
+    }
+
+    /// Execute projection operation
+    fn execute_projection(
+        &self,
+        proj: &crate::planner::logical_plan::ProjectionNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        let input_rows = self.execute_plan(&proj.input, ctx)?;
+        let table_name = self.get_table_name(&proj.input)?;
+        let schema = ctx.storage.get_schema(&table_name)?;
+
+        // Check for aggregate functions
+        if self.has_aggregate_functions(&proj.expressions) {
+            return self.execute_aggregation(&proj.expressions, &input_rows, schema.schema());
+        }
+
+        // Regular projection
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        input_rows
+            .into_iter()
+            .map(|row| self.project_row(&proj.expressions, &row, schema.schema(), &eval_ctx))
+            .collect()
+    }
+
+    /// Execute sort operation
+    fn execute_sort(
+        &self,
+        sort: &SortNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        let mut rows = self.execute_plan(&sort.input, ctx)?;
+
+        if sort.order_by.is_empty() {
+            return Ok(rows);
+        }
+
+        let table_name = self.get_table_name(&sort.input)?;
+        let schema = ctx.storage.get_schema(&table_name)?;
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+
+        // Sort with error handling
+        let sort_result = self.sort_rows(&mut rows, &sort.order_by, schema.schema(), &eval_ctx);
+        sort_result.map(|_| rows)
+    }
+
+    /// Execute limit operation
+    fn execute_limit(
+        &self,
+        limit: &crate::planner::logical_plan::LimitNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        let mut rows = self.execute_plan(&limit.input, ctx)?;
+        rows.truncate(limit.limit);
+        Ok(rows)
+    }
+}
+
+// ============================================================================
+// HELPER METHODS - Expression evaluation
+// ============================================================================
+
+impl QueryExecutor {
+    /// Evaluate predicate for filtering
+    fn evaluate_predicate(
+        &self,
+        eval_ctx: &EvaluationContext,
+        predicate: &Expr,
+        row: &Row,
+        schema: &Schema,
+    ) -> bool {
+        eval_ctx
+            .evaluate(predicate, row, schema)
+            .map(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Project a single row
     fn project_row(
         &self,
         expressions: &[Expr],
@@ -274,44 +219,309 @@ impl QueryExecutor {
             .collect()
     }
 
-    /// Получить имена выходных колонок из плана
-    fn get_output_columns(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<String>> {
-        match plan {
-            LogicalPlan::TableScan(scan) => {
-                let schema = ctx.storage.get_schema(&scan.table_name)?;
+    /// Check if expressions contain aggregate functions
+    fn has_aggregate_functions(&self, expressions: &[Expr]) -> bool {
+        expressions.iter().any(|expr| self.is_aggregate_function(expr))
+    }
 
-                // Если указаны конкретные колонки, используем их
-                if let Some(ref cols) = scan.projected_columns {
-                    Ok(cols.clone())
-                } else {
-                    // Иначе все колонки
-                    Ok(schema
-                        .schema()
-                        .columns()
-                        .iter()
-                        .map(|col| col.name.clone())
-                        .collect())
+    /// Check if expression is an aggregate function
+    fn is_aggregate_function(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Function { name, .. } => {
+                matches!(
+                    name.to_uppercase().as_str(),
+                    "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+                )
+            }
+            _ => false,
+        }
+    }
+}
+
+// ============================================================================
+// AGGREGATION LOGIC
+// ============================================================================
+
+impl QueryExecutor {
+    /// Execute aggregation functions
+    fn execute_aggregation(
+        &self,
+        expressions: &[Expr],
+        rows: &[Row],
+        schema: &Schema,
+    ) -> Result<Vec<Row>> {
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let mut result_row = Vec::new();
+
+        for expr in expressions {
+            let value = match expr {
+                Expr::Function { name, args } => {
+                    self.evaluate_aggregate(name, args, rows, schema, &eval_ctx)?
+                }
+                _ => {
+                    // Non-aggregate expressions evaluated on first row
+                    if !rows.is_empty() {
+                        eval_ctx.evaluate(expr, &rows[0], schema)?
+                    } else {
+                        Value::Null
+                    }
+                }
+            };
+            result_row.push(value);
+        }
+
+        Ok(vec![result_row])
+    }
+
+    /// Evaluate aggregate function
+    fn evaluate_aggregate(
+        &self,
+        name: &str,
+        args: &[Expr],
+        rows: &[Row],
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<Value> {
+        match name.to_uppercase().as_str() {
+            "COUNT" => self.aggregate_count(args, rows, schema, eval_ctx),
+            "SUM" => self.aggregate_sum(args, rows, schema, eval_ctx),
+            "AVG" => self.aggregate_avg(args, rows, schema, eval_ctx),
+            "MIN" => self.aggregate_min(args, rows, schema, eval_ctx),
+            "MAX" => self.aggregate_max(args, rows, schema, eval_ctx),
+            _ => Err(DbError::UnsupportedOperation(format!(
+                "Unknown aggregate function: {}",
+                name
+            ))),
+        }
+    }
+
+    fn aggregate_count(
+        &self,
+        args: &[Expr],
+        rows: &[Row],
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<Value> {
+        if args.is_empty() || matches!(args[0], Expr::Literal(Value::Text(ref s)) if s == "*") {
+            return Ok(Value::Integer(rows.len() as i64));
+        }
+
+        let count = rows.iter().fold(0i64, |acc, row| {
+            let val = eval_ctx.evaluate(&args[0], row, schema).unwrap();
+            if matches!(val, Value::Null) { acc } else { acc + 1 }
+        });
+
+        Ok(Value::Integer(count))
+    }
+
+    fn aggregate_sum(
+        &self,
+        args: &[Expr],
+        rows: &[Row],
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<Value> {
+        if args.is_empty() {
+            return Err(DbError::ExecutionError("SUM requires an argument".into()));
+        }
+
+        let mut int_sum: i64 = 0;
+        let mut float_sum: f64 = 0.0;
+        let mut is_integer = true;
+
+        for row in rows {
+            let val = eval_ctx.evaluate(&args[0], row, schema)?;
+            match val {
+                Value::Integer(i) => {
+                    if is_integer {
+                        int_sum += i;
+                    } else {
+                        float_sum += i as f64;
+                    }
+                }
+                Value::Float(f) => {
+                    if is_integer {
+                        float_sum = int_sum as f64 + f;
+                        is_integer = false;
+                    } else {
+                        float_sum += f;
+                    }
+                }
+                Value::Null => {}
+                _ => return Err(DbError::TypeMismatch("SUM requires numeric values".into())),
+            }
+        }
+
+        Ok(if is_integer {
+            Value::Integer(int_sum)
+        } else {
+            Value::Float(float_sum)
+        })
+    }
+
+    fn aggregate_avg(
+        &self,
+        args: &[Expr],
+        rows: &[Row],
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<Value> {
+        if args.is_empty() {
+            return Err(DbError::ExecutionError("AVG requires an argument".into()));
+        }
+
+        let (sum, count) = rows.iter().try_fold((0.0f64, 0usize), |(sum, count), row| {
+            let val = eval_ctx.evaluate(&args[0], row, schema)?;
+            match val {
+                Value::Integer(i) => Ok((sum + i as f64, count + 1)),
+                Value::Float(f) => Ok((sum + f, count + 1)),
+                Value::Null => Ok((sum, count)),
+                _ => Err(DbError::TypeMismatch("AVG requires numeric values".into())),
+            }
+        })?;
+
+        Ok(if count == 0 {
+            Value::Null
+        } else {
+            Value::Float(sum / count as f64)
+        })
+    }
+
+    fn aggregate_min(
+        &self,
+        args: &[Expr],
+        rows: &[Row],
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<Value> {
+        if args.is_empty() {
+            return Err(DbError::ExecutionError("MIN requires an argument".into()));
+        }
+
+        rows.iter()
+            .try_fold(None, |min_val: Option<Value>, row| {
+                let val = eval_ctx.evaluate(&args[0], row, schema)?;
+                if matches!(val, Value::Null) {
+                    return Ok(min_val);
+                }
+
+                Ok(Some(match min_val {
+                    None => val,
+                    Some(current) => {
+                        if val.compare(&current)? == Ordering::Less {
+                            val
+                        } else {
+                            current
+                        }
+                    }
+                }))
+            })
+            .map(|opt| opt.unwrap_or(Value::Null))
+    }
+
+    fn aggregate_max(
+        &self,
+        args: &[Expr],
+        rows: &[Row],
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<Value> {
+        if args.is_empty() {
+            return Err(DbError::ExecutionError("MAX requires an argument".into()));
+        }
+
+        rows.iter()
+            .try_fold(None, |max_val: Option<Value>, row| {
+                let val = eval_ctx.evaluate(&args[0], row, schema)?;
+                if matches!(val, Value::Null) {
+                    return Ok(max_val);
+                }
+
+                Ok(Some(match max_val {
+                    None => val,
+                    Some(current) => {
+                        if val.compare(&current)? == Ordering::Greater {
+                            val
+                        } else {
+                            current
+                        }
+                    }
+                }))
+            })
+            .map(|opt| opt.unwrap_or(Value::Null))
+    }
+}
+
+// ============================================================================
+// SORTING LOGIC
+// ============================================================================
+
+impl QueryExecutor {
+    /// Sort rows with proper error handling
+    fn sort_rows(
+        &self,
+        rows: &mut [Row],
+        order_by: &[OrderByExpr],
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<()> {
+        let mut sort_error: Option<DbError> = None;
+
+        rows.sort_by(|row_a, row_b| {
+            if sort_error.is_some() {
+                return Ordering::Equal;
+            }
+
+            for order_expr in order_by {
+                let cmp = self.compare_rows_by_expr(
+                    row_a,
+                    row_b,
+                    &order_expr.expr,
+                    order_expr.descending,
+                    schema,
+                    eval_ctx,
+                );
+
+                match cmp {
+                    Ok(Ordering::Equal) => continue,
+                    Ok(ordering) => return ordering,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return Ordering::Equal;
+                    }
                 }
             }
 
-            LogicalPlan::Projection(proj) => {
-                // Для projection используем имена из expressions
-                Ok(proj
-                    .expressions
-                    .iter()
-                    .enumerate()
-                    .map(|(i, expr)| match expr {
-                        Expr::Column(name) => name.clone(),
-                        _ => format!("col_{}", i),
-                    })
-                    .collect())
-            }
+            Ordering::Equal
+        });
 
-            // Для других узлов - рекурсивно получаем из input
-            LogicalPlan::Filter(filter) => self.get_output_columns(&filter.input, ctx),
-            LogicalPlan::Sort(sort) => self.get_output_columns(&sort.input, ctx),
-            LogicalPlan::Limit(limit) => self.get_output_columns(&limit.input, ctx),
+        if let Some(err) = sort_error {
+            Err(err)
+        } else {
+            Ok(())
         }
+    }
+
+    /// Compare two rows by expression
+    fn compare_rows_by_expr(
+        &self,
+        row_a: &Row,
+        row_b: &Row,
+        expr: &Expr,
+        descending: bool,
+        schema: &Schema,
+        eval_ctx: &EvaluationContext,
+    ) -> Result<Ordering> {
+        let val_a = eval_ctx.evaluate(expr, row_a, schema)?;
+        let val_b = eval_ctx.evaluate(expr, row_b, schema)?;
+
+        let mut cmp = val_a.compare(&val_b)?;
+
+        if descending {
+            cmp = cmp.reverse();
+        }
+
+        Ok(cmp)
     }
 }
 
@@ -335,16 +545,15 @@ impl Executor for QueryExecutor {
             ));
         };
 
-        // 1. Планирование (БЕЗ блокировок - catalog immutable!)
+        // Planning (no locks - catalog is immutable)
         let plan = self.planner.plan(&Statement::Query(query.clone()), &self.catalog)?;
 
-        // 2. Выполнение плана
+        // Execute plan
         let rows = self.execute_plan(&plan, ctx)?;
 
-        // 3. Получение имен колонок
+        // Get column names
         let columns = self.get_output_columns(&plan, ctx)?;
 
-        // 4. Возврат результата
         Ok(QueryResult::new(columns, rows))
     }
 }

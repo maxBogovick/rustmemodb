@@ -5,6 +5,7 @@ pub mod in_list;
 pub mod is_null;
 pub mod like;
 pub mod nested;
+pub mod function;
 mod boolean;
 
 use crate::core::Result;
@@ -48,6 +49,7 @@ impl ExpressionPluginRegistry {
         // Автоматически регистрируем все плагины
         // Nested должен быть первым, чтобы обрабатывать скобки
         registry.register(Box::new(nested::NestedPlugin));
+        registry.register(Box::new(function::FunctionPlugin));
         registry.register(Box::new(like::LikePlugin));
         registry.register(Box::new(between::BetweenPlugin));
         registry.register(Box::new(is_null::IsNullPlugin));

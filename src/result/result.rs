@@ -1,9 +1,10 @@
-use crate::core::{Row, Value};
+use crate::core::Row;
 
 #[derive(Debug, Clone)]
 pub struct QueryResult {
     columns: Vec<String>,
     rows: Vec<Row>,
+    affected_rows: Option<usize>, // For UPDATE/DELETE operations
 }
 
 impl QueryResult {
@@ -11,11 +12,36 @@ impl QueryResult {
         Self {
             columns: Vec::new(),
             rows: Vec::new(),
+            affected_rows: None,
         }
     }
 
     pub fn new(columns: Vec<String>, rows: Vec<Row>) -> Self {
-        Self { columns, rows }
+        Self {
+            columns,
+            rows,
+            affected_rows: None,
+        }
+    }
+
+    pub fn deleted(count: usize) -> Self {
+        Self {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: Some(count),
+        }
+    }
+
+    pub fn updated(count: usize) -> Self {
+        Self {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: Some(count),
+        }
+    }
+
+    pub fn affected_rows(&self) -> Option<usize> {
+        self.affected_rows
     }
 
     #[inline]
