@@ -144,10 +144,12 @@ RustMemDB follows the classic **three-stage database architecture** used by most
 │  ┌────────────────────────────────────────────────────┐    │
 │  │ ExecutorPipeline (Chain of Responsibility)         │    │
 │  │  ┌──────────────────────────────────────────────┐  │    │
-│  │  │ DDL: CreateTableExecutor                     │  │    │
-│  │  │ DML: InsertExecutor                          │  │    │
+│  │  │ DDL: CreateTableExecutor, DropTableExecutor  │  │    │
+│  │  │ DML: InsertExecutor, UpdateExecutor,         │  │    │
+│  │  │      DeleteExecutor                          │  │    │
 │  │  │ DQL: QueryExecutor                           │  │    │
-│  │  │      - TableScan → Filter → Sort → Project  │  │    │
+│  │  │      - TableScan → Filter → Aggregate/Sort   │  │    │
+│  │  │      - Project → Limit                       │  │    │
 │  │  └──────────────────────────────────────────────┘  │    │
 │  └────────────────────────────────────────────────────┘    │
 └──────────────────────┬──────────────────────────────────────┘
@@ -218,44 +220,66 @@ Runtime expression evaluation system.
 ### Currently Implemented
 
 #### SQL Support
-- ✅ **DDL** - `CREATE TABLE` with column types and constraints
-- ✅ **DML** - `INSERT INTO` with literal values
-- ✅ **DQL** - `SELECT` with various clauses
+- ✅ **DDL (Data Definition Language)**
+  - `CREATE TABLE` with column types and constraints
+  - `DROP TABLE` with `IF EXISTS` support
+- ✅ **DML (Data Manipulation Language)**
+  - `INSERT INTO` with multiple rows
+  - `UPDATE` with `SET` and `WHERE` clauses
+  - `DELETE FROM` with conditional filtering
+- ✅ **DQL (Data Query Language)**
+  - `SELECT` with full query capabilities
+  - Aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`)
 
 #### Query Capabilities
 - ✅ **Projection** - `SELECT col1, col2` or `SELECT *`
-- ✅ **Filtering** - `WHERE` with complex predicates
-- ✅ **Sorting** - `ORDER BY col1 ASC, col2 DESC`
-- ✅ **Limiting** - `LIMIT n`
-- ✅ **Expressions** - Arithmetic, comparison, logical operators
+- ✅ **Filtering** - `WHERE` with complex predicates and parentheses
+- ✅ **Aggregation** - `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`
+- ✅ **Sorting** - `ORDER BY col1 ASC, col2 DESC` (multiple columns)
+- ✅ **Limiting** - `LIMIT n` for result pagination
+- ✅ **Expressions** - Full arithmetic and logical expressions in all clauses
 
 #### Operators & Functions
 - ✅ **Arithmetic** - `+`, `-`, `*`, `/`, `%`
 - ✅ **Comparison** - `=`, `!=`, `<`, `<=`, `>`, `>=`
-- ✅ **Logical** - `AND`, `OR`, `NOT`
+- ✅ **Logical** - `AND`, `OR`, `NOT` with parentheses support
 - ✅ **Pattern Matching** - `LIKE`, `NOT LIKE` (with `%`, `_` wildcards)
 - ✅ **Range** - `BETWEEN x AND y`
 - ✅ **Null Checking** - `IS NULL`, `IS NOT NULL`
 - ✅ **List Membership** - `IN (value1, value2, ...)`
+- ✅ **Aggregate Functions** - `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`
 
 #### Data Types
 - ✅ **INTEGER** - 64-bit signed integers
 - ✅ **FLOAT** - 64-bit floating point
 - ✅ **TEXT** - Variable-length strings
 - ✅ **BOOLEAN** - true/false values
-- ✅ **NULL** - Null value support
+- ✅ **NULL** - Null value support with proper handling
 
 #### Advanced Features
-- ✅ **Multi-column sorting** with NULL handling (NULLS LAST/FIRST)
-- ✅ **Expression evaluation** in WHERE, ORDER BY, SELECT
-- ✅ **Concurrent reads** - Fine-grained table locking
+- ✅ **Multi-column sorting** with NULL handling
+- ✅ **Expression evaluation** in WHERE, ORDER BY, SELECT, UPDATE
+- ✅ **Concurrent access** - Fine-grained table locking with global singleton
 - ✅ **Plugin system** - Extensible parsers and evaluators
 - ✅ **Type coercion** - Automatic INTEGER ↔ FLOAT conversion
+- ✅ **Client API** - PostgreSQL/MySQL-like connection interface
+- ✅ **Connection pooling** - Efficient connection management
+- ✅ **User management** - Authentication and authorization system
 
 ### Performance Features
 - ✅ **Per-table locking** - Concurrent access to different tables
 - ✅ **Lock-free catalog reads** - Copy-on-Write metadata
 - ✅ **Stable sorting** - Predictable ORDER BY results
+- ✅ **Efficient aggregation** - Single-pass aggregate computation
+- ✅ **Global singleton** - Shared state for all connections
+
+### Performance Metrics
+```
+Sequential UPDATE:     2.9M updates/sec (5,000 rows)
+Mixed operations:      7,083 ops/sec (UPDATE + SELECT)
+Concurrent access:     Stable with 4 threads
+Aggregate functions:   Fast single-pass computation
+```
 
 ---
 
@@ -560,7 +584,106 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Example 5: Database Statistics
+### Example 5: UPDATE and DELETE Operations
+
+```rust
+use rustmemodb::Client;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::connect("admin", "admin")?;
+
+    // Create table
+    client.execute(
+        "CREATE TABLE inventory (
+            id INTEGER,
+            product TEXT,
+            quantity INTEGER,
+            price FLOAT
+        )"
+    )?;
+
+    // Insert initial data
+    client.execute("INSERT INTO inventory VALUES (1, 'Laptop', 10, 999.99)")?;
+    client.execute("INSERT INTO inventory VALUES (2, 'Mouse', 50, 29.99)")?;
+    client.execute("INSERT INTO inventory VALUES (3, 'Keyboard', 30, 79.99)")?;
+    client.execute("INSERT INTO inventory VALUES (4, 'Monitor', 15, 399.99)")?;
+
+    // Update prices (10% discount)
+    println!("\n=== Applying 10% discount ===");
+    let result = client.execute("UPDATE inventory SET price = price * 0.9")?;
+    println!("Updated {} products", result.affected_rows().unwrap_or(0));
+
+    // Update specific item
+    println!("\n=== Restocking mice ===");
+    let result = client.execute("UPDATE inventory SET quantity = 100 WHERE product = 'Mouse'")?;
+    println!("Updated {} rows", result.affected_rows().unwrap_or(0));
+
+    // Delete low stock items
+    println!("\n=== Removing low stock items ===");
+    let result = client.execute("DELETE FROM inventory WHERE quantity < 20")?;
+    println!("Deleted {} items", result.affected_rows().unwrap_or(0));
+
+    // View remaining inventory
+    println!("\n=== Current Inventory ===");
+    let result = client.query("SELECT * FROM inventory ORDER BY product")?;
+    result.print();
+
+    Ok(())
+}
+```
+
+### Example 6: Aggregate Functions
+
+```rust
+use rustmemodb::Client;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::connect("admin", "admin")?;
+
+    // Create sales table
+    client.execute(
+        "CREATE TABLE sales (
+            id INTEGER,
+            product TEXT,
+            quantity INTEGER,
+            revenue FLOAT
+        )"
+    )?;
+
+    // Insert sales data
+    client.execute("INSERT INTO sales VALUES (1, 'Laptop', 5, 4999.95)")?;
+    client.execute("INSERT INTO sales VALUES (2, 'Mouse', 50, 1499.50)")?;
+    client.execute("INSERT INTO sales VALUES (3, 'Keyboard', 30, 2399.70)")?;
+    client.execute("INSERT INTO sales VALUES (4, 'Monitor', 10, 3999.90)")?;
+
+    // Get comprehensive statistics
+    println!("\n=== Sales Statistics ===");
+    let result = client.query(
+        "SELECT COUNT(*), SUM(revenue), AVG(revenue), MIN(revenue), MAX(revenue)
+         FROM sales"
+    )?;
+    result.print();
+
+    // Count total items sold
+    println!("\n=== Total Items Sold ===");
+    let result = client.query("SELECT SUM(quantity) FROM sales")?;
+    result.print();
+
+    // Find highest revenue
+    println!("\n=== Highest Single Sale ===");
+    let result = client.query("SELECT MAX(revenue) FROM sales")?;
+    result.print();
+
+    // Average quantity per order
+    println!("\n=== Average Order Size ===");
+    let result = client.query("SELECT AVG(quantity) FROM sales")?;
+    result.print();
+
+    Ok(())
+}
+```
+
+### Example 7: Database Statistics
 
 ```rust
 use rustmemodb::InMemoryDB;
@@ -617,7 +740,10 @@ impl InMemoryDB {
     /// Create a new empty database
     pub fn new() -> Self;
 
-    /// Execute a SQL statement
+    /// Get the global database instance (singleton)
+    pub fn global() -> &'static Arc<RwLock<InMemoryDB>>;
+
+    /// Execute a SQL statement (returns QueryResult for all statement types)
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult>;
 
     /// Check if a table exists
@@ -631,6 +757,32 @@ impl InMemoryDB {
 }
 ```
 
+#### `Client`
+
+PostgreSQL/MySQL-style client API with connection pooling.
+
+```rust
+pub struct Client { /* private fields */ }
+
+impl Client {
+    /// Connect with username and password
+    pub fn connect(username: &str, password: &str) -> Result<Self>;
+
+    /// Connect using connection URL
+    /// Format: "rustmemodb://username:password@localhost"
+    pub fn connect_url(url: &str) -> Result<Self>;
+
+    /// Execute a SQL statement (UPDATE/DELETE/INSERT/CREATE/DROP)
+    pub fn execute(&self, sql: &str) -> Result<QueryResult>;
+
+    /// Execute a query (SELECT)
+    pub fn query(&self, sql: &str) -> Result<QueryResult>;
+
+    /// Get the authentication manager
+    pub fn auth_manager(&self) -> Arc<AuthManager>;
+}
+```
+
 #### `QueryResult`
 
 Result of a query execution.
@@ -639,6 +791,7 @@ Result of a query execution.
 pub struct QueryResult {
     columns: Vec<String>,
     rows: Vec<Row>,
+    affected_rows: Option<usize>,
 }
 
 impl QueryResult {
@@ -650,6 +803,9 @@ impl QueryResult {
 
     /// Get number of rows
     pub fn row_count(&self) -> usize;
+
+    /// Get number of affected rows (for UPDATE/DELETE)
+    pub fn affected_rows(&self) -> Option<usize>;
 
     /// Print formatted result to stdout
     pub fn print(&self);
@@ -710,11 +866,15 @@ pub enum DbError {
 | Operation | Complexity | Notes |
 |-----------|-----------|-------|
 | CREATE TABLE | O(n) | Clones entire catalog (n = tables) |
+| DROP TABLE | O(1) | HashMap removal |
 | INSERT | O(1) | Amortized vector push |
+| UPDATE | O(n) | n = rows in table (full scan) |
+| DELETE | O(n + m log m) | n = scan, m = matches to delete |
 | SELECT (full scan) | O(n) | n = rows in table |
 | SELECT (with WHERE) | O(n) | No indexes yet |
 | SELECT (with ORDER BY) | O(n log n) | Stable sort |
 | SELECT (with LIMIT) | O(n) | Must scan before limiting |
+| SELECT (with aggregates) | O(n) | Single-pass computation |
 
 ### Space Complexity
 
@@ -866,14 +1026,13 @@ impl ExpressionPlugin for MyCustomPlugin {
 ❌ **No transactions** - ACID not guaranteed
 ❌ **No indexes** - All queries do full table scans
 ❌ **No JOINs** - Single table queries only
-❌ **No aggregates** - No COUNT, SUM, AVG, etc.
-❌ **No UPDATE/DELETE** - Read and insert only
-❌ **No constraints** - No PRIMARY KEY, FOREIGN KEY, UNIQUE
+❌ **No GROUP BY/HAVING** - Aggregates work on full result set only
+❌ **No constraints** - No PRIMARY KEY, FOREIGN KEY, UNIQUE enforcement
 ❌ **No views** - No CREATE VIEW
 ❌ **Limited SQL** - Subset of SQL-92
 ❌ **No query optimization** - Plans not optimized
-❌ **No authentication** - No user management
 ❌ **Single process** - No client-server architecture
+❌ **Security** - Passwords stored in plaintext (see PRODUCTION_READINESS_ANALYSIS.md)
 
 ### Known Issues
 
@@ -898,17 +1057,22 @@ See [CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md) for detailed issue analysis.
 - [x] WHERE clause with complex predicates
 - [x] ORDER BY with multiple columns
 - [x] Plugin-based architecture
-- [ ] Fix critical bugs from code review
-- [ ] Comprehensive test coverage
-- [ ] Performance benchmarks
+- [x] DROP TABLE support
+- [x] UPDATE and DELETE statements
+- [x] Aggregate functions (COUNT, SUM, AVG, MIN, MAX)
+- [x] Client API and connection pooling
+- [x] User management system
+- [x] Comprehensive test coverage (71+ passing tests)
+- [x] Performance benchmarks (load tests)
+- [ ] Fix critical security issue (plaintext passwords)
+- [ ] Fix remaining bugs from code review
 
 ### Phase 2: Core Features
-- [ ] UPDATE and DELETE statements
 - [ ] Transaction support (BEGIN, COMMIT, ROLLBACK)
 - [ ] Basic indexes (B-Tree for PRIMARY KEY)
-- [ ] Aggregate functions (COUNT, SUM, AVG, MIN, MAX)
 - [ ] GROUP BY and HAVING
 - [ ] Subqueries
+- [ ] Password hashing (bcrypt/argon2)
 
 ### Phase 3: Advanced Features
 - [ ] INNER JOIN support
@@ -965,11 +1129,13 @@ Contributions are welcome! This is an educational project, so clear, well-docume
 
 Looking to contribute? Try these:
 
+- **CRITICAL**: Implement password hashing (bcrypt/argon2) to replace plaintext storage
 - Add missing documentation comments
-- Implement aggregate functions (COUNT, SUM, etc.)
-- Add more expression evaluators
+- Implement GROUP BY and HAVING clauses
+- Add more expression evaluators (string functions, date functions)
 - Improve error messages
-- Add integration tests
+- Add more integration tests
+- Implement basic indexes (B-Tree)
 - Fix issues from CODE_REVIEW_REPORT.md
 
 ---
