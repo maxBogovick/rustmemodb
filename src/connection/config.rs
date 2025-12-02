@@ -201,7 +201,7 @@ impl ConnectionConfig {
 
 impl Default for ConnectionConfig {
     fn default() -> Self {
-        Self::new("admin", "admin")
+        Self::new("admin", "adminpass")
     }
 }
 

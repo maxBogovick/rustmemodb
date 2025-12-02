@@ -7,7 +7,7 @@ use rustmemodb::Client;
 
 #[test]
 fn test_boolean_literal_insert() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_bool2 (id INTEGER, active BOOLEAN)").unwrap();
     client.execute("INSERT INTO test_bool2 VALUES (1, true)").unwrap();
@@ -20,7 +20,7 @@ fn test_boolean_literal_insert() {
 
 #[test]
 fn test_boolean_comparison_true() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_bool1 (id INTEGER, active BOOLEAN)").unwrap();
     client.execute("INSERT INTO test_bool1 VALUES (1, true)").unwrap();
@@ -34,7 +34,7 @@ fn test_boolean_comparison_true() {
 
 #[test]
 fn test_boolean_comparison_false() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_bool (id INTEGER, active BOOLEAN)").unwrap();
     client.execute("INSERT INTO test_bool VALUES (1, true)").unwrap();
@@ -48,7 +48,7 @@ fn test_boolean_comparison_false() {
 
 #[test]
 fn test_float_comparison() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_float (id INTEGER, score FLOAT)").unwrap();
     client.execute("INSERT INTO test_float VALUES (1, 95.5)").unwrap();
@@ -63,7 +63,7 @@ fn test_float_comparison() {
 
 #[test]
 fn test_combined_boolean_and_float() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE mixed_data (
@@ -103,7 +103,7 @@ fn test_combined_boolean_and_float() {
 
 #[test]
 fn test_mixed_type_arithmetic() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_arithmetic (id INTEGER, value FLOAT)").unwrap();
     client.execute("INSERT INTO test_arithmetic VALUES (1, 10.5)").unwrap();

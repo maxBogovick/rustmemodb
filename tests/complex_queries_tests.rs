@@ -7,7 +7,7 @@ use rustmemodb::{Client, Value};
 
 #[test]
 fn test_complex_multi_table_setup() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create multiple related tables
     client.execute(
@@ -57,7 +57,7 @@ fn test_complex_multi_table_setup() {
 }
 #[test]
 fn test_boolean_not_operator() {
-    let mut client = Client::connect("admin", "admin").unwrap();
+    let mut client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE permissions2 (user_id INTEGER, can_read BOOLEAN, can_write BOOLEAN, can_delete BOOLEAN, is_admin BOOLEAN)").unwrap();
 
@@ -78,7 +78,7 @@ fn test_boolean_not_operator() {
 
 #[test]
 fn test_boolean_complex_expression() {
-    let mut client = Client::connect("admin", "admin").unwrap();
+    let mut client = Client::connect("admin", "adminpass").unwrap();
     client.execute("CREATE TABLE permissions1 (user_id INTEGER, can_read BOOLEAN, can_write BOOLEAN, can_delete BOOLEAN, is_admin BOOLEAN)").unwrap();
 
     client.execute("INSERT INTO permissions1 VALUES (1, true, true, false, false)").unwrap();
@@ -99,7 +99,7 @@ fn test_boolean_complex_expression() {
 
 #[test]
 fn test_boolean_with_parentheses() {
-    let mut client = Client::connect("admin", "admin").unwrap();
+    let mut client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE permissions (user_id INTEGER, can_read BOOLEAN, can_write BOOLEAN, can_delete BOOLEAN, is_admin BOOLEAN)").unwrap();
 
@@ -120,7 +120,7 @@ fn test_boolean_with_parentheses() {
 
 #[test]
 fn test_complex_where_with_multiple_conditions() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE employees (
@@ -152,7 +152,7 @@ fn test_complex_where_with_multiple_conditions() {
 
 #[test]
 fn test_complex_or_conditions() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE products2 (
@@ -180,7 +180,7 @@ fn test_complex_or_conditions() {
 
 #[test]
 fn test_complex_nested_logic() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE items (
@@ -209,7 +209,7 @@ fn test_complex_nested_logic() {
 
 #[test]
 fn test_complex_like_patterns() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE users (id INTEGER, email TEXT, name TEXT)").unwrap();
 
@@ -231,7 +231,7 @@ fn test_complex_like_patterns() {
 
 #[test]
 fn test_complex_between_and_conditions() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE transactions (
@@ -263,7 +263,7 @@ fn test_complex_between_and_conditions() {
 
 #[test]
 fn test_complex_multi_column_order_by() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE leaderboard (
@@ -296,7 +296,7 @@ fn test_complex_multi_column_order_by() {
 
 #[test]
 fn test_complex_null_handling() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE contacts (
@@ -324,7 +324,7 @@ fn test_complex_null_handling() {
 
 #[test]
 fn test_complex_arithmetic_in_where() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE products (
@@ -352,7 +352,7 @@ fn test_complex_arithmetic_in_where() {
 
 #[test]
 fn test_complex_string_patterns() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE files (id INTEGER, filename TEXT, extension TEXT)").unwrap();
 
@@ -373,7 +373,7 @@ fn test_complex_string_patterns() {
 
 #[test]
 fn test_complex_limit_with_order_by() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE high_scores (
@@ -410,7 +410,7 @@ fn test_complex_limit_with_order_by() {
 
 #[test]
 fn test_complex_boolean_logic() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE permissions3 (
@@ -438,7 +438,7 @@ fn test_complex_boolean_logic() {
 
 #[test]
 fn test_complex_data_types_mix() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE mixed_data (
@@ -466,7 +466,7 @@ fn test_complex_data_types_mix() {
 
 #[test]
 fn test_complex_edge_case_empty_strings() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE texts (id INTEGER, content TEXT)").unwrap();
 
@@ -484,7 +484,7 @@ fn test_complex_edge_case_empty_strings() {
 
 #[test]
 fn test_complex_large_dataset_query() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE large_dataset (

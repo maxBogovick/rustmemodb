@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_pool_creation() {
-        let config = ConnectionConfig::new("admin", "admin")
+        let config = ConnectionConfig::new("admin", "adminpass")
             .min_connections(2)
             .max_connections(5);
 
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_get_connection() {
-        let config = ConnectionConfig::new("admin", "admin")
+        let config = ConnectionConfig::new("admin", "adminpass")
             .max_connections(5);
 
         let pool = ConnectionPool::new(config).unwrap();
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_connection_return_to_pool() {
-        let config = ConnectionConfig::new("admin", "admin")
+        let config = ConnectionConfig::new("admin", "adminpass")
             .min_connections(1)
             .max_connections(5);
 
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_max_connections_limit() {
-        let config = ConnectionConfig::new("admin", "admin")
+        let config = ConnectionConfig::new("admin", "adminpass")
             .max_connections(2)
             .connect_timeout(Duration::from_millis(100));
 
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_pool_stats() {
-        let config = ConnectionConfig::new("admin", "admin")
+        let config = ConnectionConfig::new("admin", "adminpass")
             .min_connections(2)
             .max_connections(10);
 

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 #[test]
 fn test_concurrent_reads() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute("CREATE TABLE concurrent_read (id INTEGER, data TEXT)").unwrap();
 
@@ -42,7 +42,7 @@ fn test_concurrent_reads() {
 
 #[test]
 fn test_concurrent_writes() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute("CREATE TABLE concurrent_write (id INTEGER, thread_id INTEGER)").unwrap();
 
@@ -77,7 +77,7 @@ fn test_concurrent_writes() {
 
 #[test]
 fn test_concurrent_read_write_mix() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute("CREATE TABLE concurrent_mix (id INTEGER, value INTEGER)").unwrap();
 
@@ -137,7 +137,7 @@ fn test_concurrent_read_write_mix() {
 
 #[test]
 fn test_connection_pool_under_load() {
-    let config = ConnectionConfig::new("admin", "admin")
+    let config = ConnectionConfig::new("admin", "adminpass")
         .min_connections(3)
         .max_connections(10);
 
@@ -174,7 +174,7 @@ fn test_connection_pool_under_load() {
 
 #[test]
 fn test_connection_pool_reuse() {
-    let config = ConnectionConfig::new("admin", "admin")
+    let config = ConnectionConfig::new("admin", "adminpass")
         .min_connections(2)
         .max_connections(5);
 
@@ -205,7 +205,7 @@ fn test_connection_pool_reuse() {
 
 #[test]
 fn test_concurrent_table_creation() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     let mut handles = vec![];
 
@@ -237,7 +237,7 @@ fn test_concurrent_table_creation() {
 
 #[test]
 fn test_concurrent_queries_different_tables() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     // Create multiple tables
     for i in 0..5 {
@@ -280,7 +280,7 @@ fn test_concurrent_queries_different_tables() {
 
 #[test]
 fn test_concurrent_transactions() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute("CREATE TABLE concurrent_tx (id INTEGER, thread_id INTEGER)").unwrap();
 
@@ -319,7 +319,7 @@ fn test_concurrent_transactions() {
 
 #[test]
 fn test_concurrent_stress_test() {
-    let config = ConnectionConfig::new("admin", "admin")
+    let config = ConnectionConfig::new("admin", "adminpass")
         .min_connections(5)
         .max_connections(20);
 
@@ -371,7 +371,7 @@ fn test_concurrent_stress_test() {
 
 #[test]
 fn test_pool_exhaustion_recovery() {
-    let config = ConnectionConfig::new("admin", "admin")
+    let config = ConnectionConfig::new("admin", "adminpass")
         .min_connections(2)
         .max_connections(3)
         .connect_timeout(Duration::from_millis(500));
@@ -412,7 +412,7 @@ fn test_pool_exhaustion_recovery() {
 
 #[test]
 fn test_concurrent_order_by_queries() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute("CREATE TABLE concurrent_sort (id INTEGER, value INTEGER)").unwrap();
 
@@ -447,7 +447,7 @@ fn test_concurrent_order_by_queries() {
 
 #[test]
 fn test_concurrent_complex_queries() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute(
         "CREATE TABLE concurrent_complex (
@@ -507,7 +507,7 @@ fn test_concurrent_complex_queries() {
 
 #[test]
 fn test_barrier_synchronized_access() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute("CREATE TABLE barrier_test (id INTEGER, timestamp INTEGER)").unwrap();
 
@@ -548,7 +548,7 @@ fn test_barrier_synchronized_access() {
 
 #[test]
 fn test_connection_state_isolation() {
-    let client = Arc::new(Client::connect("admin", "admin").unwrap());
+    let client = Arc::new(Client::connect("admin", "adminpass").unwrap());
 
     client.execute("CREATE TABLE state_isolation (id INTEGER)").unwrap();
 

@@ -111,7 +111,7 @@ impl AuthManager {
     }
 
     const DEFAULT_ADMIN_USERNAME: &'static str = "admin";
-    const DEFAULT_ADMIN_PASSWORD: &'static str = "admin";
+    const DEFAULT_ADMIN_PASSWORD: &'static str = "adminpass";
 
     /// Creates a new manager with default administrator
     pub fn new() -> Self {
@@ -135,18 +135,20 @@ impl AuthManager {
         }
     }
 
-    /// Hashes a password
+    /// Hashes a password using bcrypt
     ///
-    /// WARNING: This is a simple implementation for demonstration!
-    /// In production, use bcrypt, argon2, or similar libraries
+    /// Uses bcrypt with default cost factor (12) for secure password hashing.
+    /// Each hash includes a random salt, so the same password will produce different hashes.
     fn hash_password(password: &str) -> String {
-        // TODO: Replace with secure hashing (bcrypt, argon2)
-        format!("hash_{}", password)
+        bcrypt::hash(password, bcrypt::DEFAULT_COST)
+            .expect("Failed to hash password")
     }
 
-    /// Verifies password against hash
+    /// Verifies password against bcrypt hash
+    ///
+    /// Returns true if the password matches the hash, false otherwise.
     fn verify_password(password: &str, hash: &str) -> bool {
-        Self::hash_password(password) == hash
+        bcrypt::verify(password, hash).unwrap_or(false)
     }
 
     /// Authenticates a user
@@ -172,6 +174,7 @@ impl AuthManager {
         permissions: Vec<Permission>,
     ) -> Result<()> {
         self.validate_username(username)?;
+        self.validate_password(password)?;  // Validate BEFORE hashing
 
         let mut users = self.users.write()
             .map_err(|_| DbError::LockError("Failed to acquire users write lock".into()))?;
@@ -331,14 +334,20 @@ impl AuthManager {
         Ok(())
     }
 
-    /// Validates password
+    /// Validates password complexity
+    ///
+    /// Enforces the following rules:
+    /// - Minimum 8 characters
+    /// - Cannot be empty
     fn validate_password(&self, password: &str) -> Result<()> {
         if password.is_empty() {
             return Err(DbError::ExecutionError("Password cannot be empty".into()));
         }
 
-        if password.len() < 4 {
-            return Err(DbError::ExecutionError("Password too short (min 4 characters)".into()));
+        if password.len() < 8 {
+            return Err(DbError::ExecutionError(
+                "Password must be at least 8 characters long".into()
+            ));
         }
 
         Ok(())
@@ -358,7 +367,7 @@ mod tests {
     #[test]
     fn test_default_admin_user() {
         let auth = AuthManager::new();
-        let user = auth.authenticate("admin", "admin").unwrap();
+        let user = auth.authenticate("admin", "adminpass").unwrap();
         assert!(user.is_admin());
         assert_eq!(user.username(), "admin");
     }
@@ -378,34 +387,34 @@ mod tests {
     #[test]
     fn test_invalid_credentials() {
         let auth = AuthManager::new();
-        assert!(auth.authenticate("admin", "wrong_password").is_err());
-        assert!(auth.authenticate("nonexistent", "password").is_err());
+        assert!(auth.authenticate("admin", "wrongpass").is_err());
+        assert!(auth.authenticate("nonexistent", "password123").is_err());
     }
 
     #[test]
     fn test_duplicate_user() {
         let auth = AuthManager::new();
-        auth.create_user("bob", "pass1234", vec![]).unwrap();
+        auth.create_user("bob", "password1234", vec![]).unwrap();
 
-        let result = auth.create_user("bob", "pass1234", vec![]);
+        let result = auth.create_user("bob", "password1234", vec![]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_update_password() {
         let auth = AuthManager::new();
-        auth.create_user("charlie", "old_pass", vec![]).unwrap();
+        auth.create_user("charlie", "oldpassword", vec![]).unwrap();
 
-        auth.update_password("charlie", "new_pass").unwrap();
+        auth.update_password("charlie", "newpassword").unwrap();
 
-        assert!(auth.authenticate("charlie", "old_pass").is_err());
-        assert!(auth.authenticate("charlie", "new_pass").is_ok());
+        assert!(auth.authenticate("charlie", "oldpassword").is_err());
+        assert!(auth.authenticate("charlie", "newpassword").is_ok());
     }
 
     #[test]
     fn test_grant_revoke_permission() {
         let auth = AuthManager::new();
-        auth.create_user("diana", "pass1234", vec![]).unwrap();
+        auth.create_user("diana", "password1234", vec![]).unwrap();
 
         auth.grant_permission("diana", Permission::Select).unwrap();
         let user = auth.get_user("diana").unwrap();
@@ -447,8 +456,8 @@ mod tests {
     #[test]
     fn test_list_users() {
         let auth = AuthManager::new();
-        auth.create_user("user1", "pass1234", vec![]).unwrap();
-        auth.create_user("user2", "pass1234", vec![]).unwrap();
+        auth.create_user("user1", "password1234", vec![]).unwrap();
+        auth.create_user("user2", "password1234", vec![]).unwrap();
 
         let users = auth.list_users().unwrap();
         assert!(users.contains(&"admin".to_string()));
@@ -468,7 +477,7 @@ mod tests {
         let auth = AuthManager::new();
         assert_eq!(auth.user_count().unwrap(), 1);
 
-        auth.create_user("user1", "pass1234", vec![]).unwrap();
+        auth.create_user("user1", "password1234", vec![]).unwrap();
         assert_eq!(auth.user_count().unwrap(), 2);
     }
 
@@ -477,21 +486,28 @@ mod tests {
         let auth = AuthManager::new();
 
         // Пустое имя
-        assert!(auth.create_user("", "pass1234", vec![]).is_err());
+        assert!(auth.create_user("", "password123", vec![]).is_err());
 
         // Слишком длинное имя
         let long_name = "a".repeat(51);
-        assert!(auth.create_user(&long_name, "pass1234", vec![]).is_err());
+        assert!(auth.create_user(&long_name, "password123", vec![]).is_err());
     }
 
     #[test]
     fn test_validate_password() {
         let auth = AuthManager::new();
 
-        // Короткий пароль
-        assert!(auth.create_user("test", "123", vec![]).is_err());
+        // Короткий пароль (меньше 8 символов)
+        let result = auth.create_user("test", "short", vec![]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("at least 8 characters"));
 
         // Пустой пароль
-        assert!(auth.create_user("test", "", vec![]).is_err());
+        let result = auth.create_user("test2", "", vec![]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+
+        // Валидный пароль (8+ символов)
+        assert!(auth.create_user("test3", "validpass123", vec![]).is_ok());
     }
 }

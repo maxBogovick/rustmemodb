@@ -5,7 +5,7 @@ use rustmemodb::Client;
 
 #[test]
 fn test_drop_table() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create table
     client.execute("CREATE TABLE test_drop (id INTEGER, name TEXT)").unwrap();
@@ -24,7 +24,7 @@ fn test_drop_table() {
 
 #[test]
 fn test_drop_table_if_exists() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Drop non-existent table with IF EXISTS should not fail
     let result = client.execute("DROP TABLE IF EXISTS non_existent");
@@ -33,7 +33,7 @@ fn test_drop_table_if_exists() {
 
 #[test]
 fn test_drop_table_non_existent() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Drop non-existent table without IF EXISTS should fail
     let result = client.execute("DROP TABLE non_existent");
@@ -42,7 +42,7 @@ fn test_drop_table_non_existent() {
 
 #[test]
 fn test_delete_all_rows() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_delete (id INTEGER, name TEXT)").unwrap();
@@ -59,7 +59,7 @@ fn test_delete_all_rows() {
 
 #[test]
 fn test_delete_with_where() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_delete_where (id INTEGER, name TEXT)").unwrap();
@@ -76,7 +76,7 @@ fn test_delete_with_where() {
 
 #[test]
 fn test_delete_with_complex_where() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_delete_complex (id INTEGER, age INTEGER)").unwrap();
@@ -93,7 +93,7 @@ fn test_delete_with_complex_where() {
 
 #[test]
 fn test_update_all_rows() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_update (id INTEGER, name TEXT)").unwrap();
@@ -110,7 +110,7 @@ fn test_update_all_rows() {
 
 #[test]
 fn test_update_with_where() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_update_where (id INTEGER, name TEXT, age INTEGER)").unwrap();
@@ -127,7 +127,7 @@ fn test_update_with_where() {
 
 #[test]
 fn test_update_multiple_columns() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_update_multi (id INTEGER, name TEXT, age INTEGER)").unwrap();
@@ -140,7 +140,7 @@ fn test_update_multiple_columns() {
 
 #[test]
 fn test_update_with_expression() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_update_expr (id INTEGER, age INTEGER)").unwrap();
@@ -153,7 +153,7 @@ fn test_update_with_expression() {
 
 #[test]
 fn test_delete_and_select() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_del_sel (id INTEGER, name TEXT)").unwrap();
@@ -169,7 +169,7 @@ fn test_delete_and_select() {
 
 #[test]
 fn test_update_and_select() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Create and populate table
     client.execute("CREATE TABLE test_upd_sel (id INTEGER, status TEXT)").unwrap();
@@ -185,7 +185,7 @@ fn test_update_and_select() {
 
 #[test]
 fn test_update_load_sequential() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Setup: Create table and insert test data
     client.execute("CREATE TABLE load_test_update (id INTEGER, value INTEGER, status TEXT)").unwrap();
@@ -223,7 +223,7 @@ fn test_update_load_sequential() {
 
 #[test]
 fn test_update_load_batch() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Setup
     client.execute("CREATE TABLE load_test_batch (id INTEGER, counter INTEGER)").unwrap();
@@ -266,7 +266,7 @@ fn test_update_load_batch() {
 
 #[test]
 fn test_update_load_all_rows() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Setup
     client.execute("CREATE TABLE load_test_all (id INTEGER, flag BOOLEAN, timestamp INTEGER)").unwrap();
@@ -303,7 +303,7 @@ fn test_update_load_all_rows() {
 
 #[test]
 fn test_update_load_complex_where() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Setup
     client.execute("CREATE TABLE load_test_complex (id INTEGER, score INTEGER, category TEXT)").unwrap();
@@ -350,7 +350,7 @@ fn test_update_load_complex_where() {
 
 #[test]
 fn test_update_load_concurrent() {
-    let client = Arc::new(Mutex::new(Client::connect("admin", "admin").unwrap()));
+    let client = Arc::new(Mutex::new(Client::connect("admin", "adminpass").unwrap()));
 
     // Setup
     {
@@ -414,7 +414,7 @@ fn test_update_load_concurrent() {
 
 #[test]
 fn test_update_load_mixed_operations() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     // Setup
     client.execute("CREATE TABLE load_test_mixed (id INTEGER, data TEXT, version INTEGER)").unwrap();

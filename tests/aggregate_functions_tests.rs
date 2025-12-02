@@ -2,7 +2,7 @@ use rustmemodb::Client;
 
 #[test]
 fn test_count_star() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_count (id INTEGER, name TEXT)").unwrap();
     client.execute("INSERT INTO test_count VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')").unwrap();
@@ -18,7 +18,7 @@ fn test_count_star() {
 
 #[test]
 fn test_count_column() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_count_col (id INTEGER, value INTEGER)").unwrap();
     client.execute("INSERT INTO test_count_col VALUES (1, 10), (2, NULL), (3, 30)").unwrap();
@@ -33,7 +33,7 @@ fn test_count_column() {
 
 #[test]
 fn test_count_with_where() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_count_where (id INTEGER, age INTEGER)").unwrap();
     client.execute("INSERT INTO test_count_where VALUES (1, 25), (2, 30), (3, 35), (4, 40)").unwrap();
@@ -45,7 +45,7 @@ fn test_count_with_where() {
 
 #[test]
 fn test_sum_function() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_sum (value INTEGER)").unwrap();
     client.execute("INSERT INTO test_sum VALUES (10), (20), (30), (40)").unwrap();
@@ -57,7 +57,7 @@ fn test_sum_function() {
 
 #[test]
 fn test_sum_with_nulls() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_sum_null (value INTEGER)").unwrap();
     client.execute("INSERT INTO test_sum_null VALUES (10), (NULL), (30)").unwrap();
@@ -69,7 +69,7 @@ fn test_sum_with_nulls() {
 
 #[test]
 fn test_avg_function() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_avg (value INTEGER)").unwrap();
     client.execute("INSERT INTO test_avg VALUES (10), (20), (30), (40)").unwrap();
@@ -81,7 +81,7 @@ fn test_avg_function() {
 
 #[test]
 fn test_min_function() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_min (value INTEGER)").unwrap();
     client.execute("INSERT INTO test_min VALUES (50), (20), (80), (10)").unwrap();
@@ -93,7 +93,7 @@ fn test_min_function() {
 
 #[test]
 fn test_max_function() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_max (value INTEGER)").unwrap();
     client.execute("INSERT INTO test_max VALUES (50), (20), (80), (10)").unwrap();
@@ -105,7 +105,7 @@ fn test_max_function() {
 
 #[test]
 fn test_multiple_aggregates() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_multi_agg (value INTEGER)").unwrap();
     client.execute("INSERT INTO test_multi_agg VALUES (10), (20), (30), (40)").unwrap();
@@ -124,7 +124,7 @@ fn test_multiple_aggregates() {
 
 #[test]
 fn test_aggregate_with_float() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_agg_float (value FLOAT)").unwrap();
     client.execute("INSERT INTO test_agg_float VALUES (1.5), (2.5), (3.0)").unwrap();
@@ -136,7 +136,7 @@ fn test_aggregate_with_float() {
 
 #[test]
 fn test_aggregate_empty_table() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_agg_empty (value INTEGER)").unwrap();
 
@@ -151,7 +151,7 @@ fn test_aggregate_empty_table() {
 
 #[test]
 fn test_count_with_expression() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_count_expr (id INTEGER, status TEXT)").unwrap();
     client.execute("INSERT INTO test_count_expr VALUES (1, 'active'), (2, 'inactive'), (3, 'active')").unwrap();
@@ -163,7 +163,7 @@ fn test_count_with_expression() {
 
 #[test]
 fn test_aggregate_with_text() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_agg_text (name TEXT)").unwrap();
     client.execute("INSERT INTO test_agg_text VALUES ('Alice'), ('Bob'), ('Charlie')").unwrap();

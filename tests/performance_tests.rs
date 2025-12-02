@@ -10,7 +10,7 @@ use std::time::Instant;
 
 #[test]
 fn test_performance_bulk_insert() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE perf_insert (id INTEGER, data TEXT)").unwrap();
 
@@ -38,7 +38,7 @@ fn test_performance_bulk_insert() {
 
 #[test]
 fn test_performance_bulk_select() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE perf_select (id INTEGER, data TEXT)").unwrap();
 
@@ -67,7 +67,7 @@ fn test_performance_bulk_select() {
 
 #[test]
 fn test_performance_filtered_select() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE perf_filter (id INTEGER, category TEXT, value INTEGER)").unwrap();
 
@@ -99,7 +99,7 @@ fn test_performance_filtered_select() {
 
 #[test]
 fn test_performance_order_by() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE perf_sort (id INTEGER, value INTEGER)").unwrap();
 
@@ -131,7 +131,7 @@ fn test_performance_order_by() {
 
 #[test]
 fn test_performance_complex_query() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE perf_complex (
@@ -187,7 +187,7 @@ fn test_performance_connection_pool() {
     use rustmemodb::ConnectionConfig;
     use std::time::Duration;
 
-    let config = ConnectionConfig::new("admin", "admin")
+    let config = ConnectionConfig::new("admin", "adminpass")
         .min_connections(5)
         .max_connections(10);
 
@@ -213,7 +213,7 @@ fn test_performance_connection_pool() {
 
 #[test]
 fn test_performance_table_scan_sizes() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     let sizes = vec![100, 500, 1000, 5000];
 
@@ -248,7 +248,7 @@ fn test_performance_table_scan_sizes() {
 
 #[test]
 fn test_performance_like_operator() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE perf_like (id INTEGER, email TEXT)").unwrap();
 
@@ -280,7 +280,7 @@ fn test_performance_like_operator() {
 
 #[test]
 fn test_performance_between_operator() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE perf_between (id INTEGER, value INTEGER)").unwrap();
 
@@ -311,7 +311,7 @@ fn test_performance_between_operator() {
 
 #[test]
 fn test_performance_multi_column_sort() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE perf_multi_sort (category TEXT, subcategory TEXT, value INTEGER)"
@@ -357,7 +357,7 @@ fn test_performance_multi_column_sort() {
 
 #[test]
 fn test_performance_memory_usage_estimation() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute(
         "CREATE TABLE perf_memory (
@@ -400,7 +400,7 @@ fn test_performance_memory_usage_estimation() {
 
 #[test]
 fn test_performance_transaction_overhead() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE perf_tx_overhead (id INTEGER)").unwrap();
 

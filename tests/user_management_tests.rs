@@ -8,7 +8,7 @@ use rustmemodb::connection::auth::{AuthManager, Permission};
 
 #[test]
 fn test_default_admin_user() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     let auth = client.auth_manager();
     let users = auth.list_users().unwrap();
@@ -18,7 +18,7 @@ fn test_default_admin_user() {
 
 #[test]
 fn test_admin_authentication() {
-    let result = Client::connect("admin", "admin");
+    let result = Client::connect("admin", "adminpass");
     assert!(result.is_ok());
 }
 
@@ -33,7 +33,7 @@ fn test_invalid_credentials() {
 
 #[test]
 fn test_create_new_user() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![Permission::Select, Permission::Insert];
@@ -47,19 +47,19 @@ fn test_create_new_user() {
 
 #[test]
 fn test_new_user_login() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("bob", "bob123", vec![Permission::Select]).unwrap();
+    auth.create_user("bob", "bob123000", vec![Permission::Select]).unwrap();
 
     // Now Bob should be able to connect
-    let bob_client = Client::connect("bob", "bob123");
+    let bob_client = Client::connect("bob", "bob123000");
     assert!(bob_client.is_ok());
 }
 
 #[test]
 fn test_user_permissions() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![
@@ -81,10 +81,10 @@ fn test_user_permissions() {
 
 #[test]
 fn test_admin_permission() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
-    let admin_user = auth.authenticate("admin", "admin").unwrap();
+    let admin_user = auth.authenticate("admin", "adminpass").unwrap();
 
     // Admin should have all permissions
     assert!(admin_user.has_permission(Permission::Admin));
@@ -98,7 +98,7 @@ fn test_admin_permission() {
 
 #[test]
 fn test_duplicate_user_creation() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     auth.create_user("diana", "diana123", vec![Permission::Select]).unwrap();
@@ -110,10 +110,10 @@ fn test_duplicate_user_creation() {
 
 #[test]
 fn test_delete_user() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("eve", "eve123", vec![Permission::Select]).unwrap();
+    auth.create_user("eve", "eve123456", vec![Permission::Select]).unwrap();
 
     let users = auth.list_users().unwrap();
     assert!(users.contains(&"eve".to_string()));
@@ -125,13 +125,13 @@ fn test_delete_user() {
     assert!(!users.contains(&"eve".to_string()));
 
     // Eve should no longer be able to connect
-    let result = Client::connect("eve", "eve123");
+    let result = Client::connect("eve", "eve123456");
     assert!(result.is_err());
 }
 
 #[test]
 fn test_cannot_delete_admin() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let result = auth.delete_user("admin");
@@ -140,7 +140,7 @@ fn test_cannot_delete_admin() {
 
 #[test]
 fn test_update_user_password() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     auth.create_user("frank", "frank123", vec![Permission::Select]).unwrap();
@@ -159,7 +159,7 @@ fn test_update_user_password() {
 
 #[test]
 fn test_grant_permission() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     auth.create_user("grace", "grace123", vec![Permission::Select]).unwrap();
@@ -177,7 +177,7 @@ fn test_grant_permission() {
 
 #[test]
 fn test_revoke_permission() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![Permission::Select, Permission::Insert, Permission::Delete];
@@ -197,27 +197,27 @@ fn test_revoke_permission() {
 
 #[test]
 fn test_list_all_users() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let initial_users = auth.list_users().unwrap();
     let initial_count = initial_users.len();
 
     // Create several users
-    auth.create_user("user1", "pass1", vec![Permission::Select]).unwrap();
-    auth.create_user("user2", "pass2", vec![Permission::Insert]).unwrap();
-    auth.create_user("user3", "pass3", vec![Permission::Delete]).unwrap();
+    auth.create_user("user10", "pass1000", vec![Permission::Select]).unwrap();
+    auth.create_user("user20", "pass2000", vec![Permission::Insert]).unwrap();
+    auth.create_user("user30", "pass3000", vec![Permission::Delete]).unwrap();
 
     let users = auth.list_users().unwrap();
     assert_eq!(users.len(), initial_count + 3);
-    assert!(users.contains(&"user1".to_string()));
-    assert!(users.contains(&"user2".to_string()));
-    assert!(users.contains(&"user3".to_string()));
+    assert!(users.contains(&"user10".to_string()));
+    assert!(users.contains(&"user20".to_string()));
+    assert!(users.contains(&"user30".to_string()));
 }
 
 #[test]
 fn test_user_info() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![
@@ -226,9 +226,9 @@ fn test_user_info() {
         Permission::Update,
     ];
 
-    auth.create_user("iris", "iris123", permissions).unwrap();
+    auth.create_user("iris", "iris1234", permissions).unwrap();
 
-    let user = auth.authenticate("iris", "iris123").unwrap();
+    let user = auth.authenticate("iris", "iris1234").unwrap();
 
     assert_eq!(user.username(), "iris");
     assert!(user.has_permission(Permission::Select));
@@ -239,7 +239,7 @@ fn test_user_info() {
 
 #[test]
 fn test_connection_with_different_users() {
-    let admin_client = Client::connect("admin", "admin").unwrap();
+    let admin_client = Client::connect("admin", "adminpass").unwrap();
     let auth = admin_client.auth_manager();
 
     auth.create_user("reader", "reader123", vec![Permission::Select]).unwrap();
@@ -266,7 +266,7 @@ fn test_connection_with_different_users() {
 
 #[test]
 fn test_permission_enforcement_select() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     // User with only INSERT permission
@@ -284,7 +284,7 @@ fn test_permission_enforcement_select() {
 
 #[test]
 fn test_connection_pool_with_auth() {
-    let config = ConnectionConfig::new("admin", "admin")
+    let config = ConnectionConfig::new("admin", "adminpass")
         .min_connections(2)
         .max_connections(5);
 
@@ -300,22 +300,22 @@ fn test_multiple_users_concurrent_access() {
     use std::sync::Arc;
     use std::thread;
 
-    let admin_client = Client::connect("admin", "admin").unwrap();
+    let admin_client = Client::connect("admin", "adminpass").unwrap();
     let auth = admin_client.auth_manager();
 
     // Create multiple users
-    auth.create_user("concurrent1", "pass1", vec![Permission::Select, Permission::Insert]).unwrap();
-    auth.create_user("concurrent2", "pass2", vec![Permission::Select, Permission::Insert]).unwrap();
-    auth.create_user("concurrent3", "pass3", vec![Permission::Select, Permission::Insert]).unwrap();
+    auth.create_user("concurrent1", "pass1000", vec![Permission::Select, Permission::Insert]).unwrap();
+    auth.create_user("concurrent2", "pass2000", vec![Permission::Select, Permission::Insert]).unwrap();
+    auth.create_user("concurrent3", "pass3000", vec![Permission::Select, Permission::Insert]).unwrap();
 
     admin_client.execute("CREATE TABLE multi_user (id INTEGER, user TEXT)").unwrap();
 
     let mut handles = vec![];
 
     for (username, password) in &[
-        ("concurrent1", "pass1"),
-        ("concurrent2", "pass2"),
-        ("concurrent3", "pass3"),
+        ("concurrent1", "pass1000"),
+        ("concurrent2", "pass2000"),
+        ("concurrent3", "pass3000"),
     ] {
         let user = username.to_string();
         let pass = password.to_string();
@@ -344,7 +344,7 @@ fn test_multiple_users_concurrent_access() {
 
 #[test]
 fn test_username_case_sensitivity() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     auth.create_user("TestUser", "password123", vec![Permission::Select]).unwrap();
@@ -365,7 +365,7 @@ fn test_username_case_sensitivity() {
 #[ignore]
 //TODO need fix it
 fn test_empty_username_or_password() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     // Empty username
@@ -379,7 +379,7 @@ fn test_empty_username_or_password() {
 
 #[test]
 fn test_special_characters_in_credentials() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     // Username with special characters
@@ -396,7 +396,7 @@ fn test_special_characters_in_credentials() {
 
 #[test]
 fn test_user_permissions_inheritance() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     // User starts with SELECT only
@@ -420,7 +420,7 @@ fn test_user_permissions_inheritance() {
 
 #[test]
 fn test_revoke_all_permissions() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![
@@ -451,7 +451,7 @@ fn test_revoke_all_permissions() {
 
 #[test]
 fn test_user_with_all_permissions() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     let all_permissions = vec![
@@ -479,12 +479,12 @@ fn test_user_with_all_permissions() {
 
 #[test]
 fn test_connection_url_with_credentials() {
-    let admin_client = Client::connect("admin", "admin").unwrap();
+    let admin_client = Client::connect("admin", "adminpass").unwrap();
     let auth = admin_client.auth_manager();
 
-    auth.create_user("urluser", "urlpass", vec![Permission::Select]).unwrap();
+    auth.create_user("urluser", "urlpass80", vec![Permission::Select]).unwrap();
 
-    let client = Client::connect_url("rustmemodb://urluser:urlpass@localhost:5432/testdb");
+    let client = Client::connect_url("rustmemodb://urluser:urlpass80@localhost:5432/testdb");
     assert!(client.is_ok());
 
     // Wrong password in URL
@@ -494,7 +494,7 @@ fn test_connection_url_with_credentials() {
 
 #[test]
 fn test_max_username_length() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     // Very long username
@@ -505,7 +505,7 @@ fn test_max_username_length() {
 
 #[test]
 fn test_max_password_length() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
     let auth = client.auth_manager();
 
     // Very long password

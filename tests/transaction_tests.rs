@@ -7,7 +7,7 @@ use rustmemodb::Client;
 
 #[test]
 fn test_transaction_begin_commit() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_tx (id INTEGER, data TEXT)").unwrap();
 
@@ -32,7 +32,7 @@ fn test_transaction_begin_commit() {
 
 #[test]
 fn test_transaction_begin_rollback() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_rollback (id INTEGER)").unwrap();
 
@@ -54,7 +54,7 @@ fn test_transaction_begin_rollback() {
 
 #[test]
 fn test_transaction_auto_rollback_on_drop() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_auto_rollback (id INTEGER)").unwrap();
 
@@ -73,7 +73,7 @@ fn test_transaction_auto_rollback_on_drop() {
 
 #[test]
 fn test_transaction_multiple_operations() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE accounts (id INTEGER, balance FLOAT)").unwrap();
     client.execute("INSERT INTO accounts VALUES (1, 1000.0)").unwrap();
@@ -96,7 +96,7 @@ fn test_transaction_multiple_operations() {
 
 #[test]
 fn test_transaction_error_no_transaction() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     let mut conn = client.get_connection().unwrap();
 
@@ -111,7 +111,7 @@ fn test_transaction_error_no_transaction() {
 
 #[test]
 fn test_transaction_error_double_begin() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     let mut conn = client.get_connection().unwrap();
 
@@ -124,7 +124,7 @@ fn test_transaction_error_double_begin() {
 
 #[test]
 fn test_transaction_nested_not_supported() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     let mut conn = client.get_connection().unwrap();
 
@@ -139,7 +139,7 @@ fn test_transaction_nested_not_supported() {
 
 #[test]
 fn test_transaction_isolation_between_connections() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_isolation (id INTEGER)").unwrap();
 
@@ -160,7 +160,7 @@ fn test_transaction_isolation_between_connections() {
 
 #[test]
 fn test_transaction_rollback_preserves_previous_state() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_preserve (id INTEGER, value INTEGER)").unwrap();
     client.execute("INSERT INTO test_preserve VALUES (1, 100)").unwrap();
@@ -180,7 +180,7 @@ fn test_transaction_rollback_preserves_previous_state() {
 
 #[test]
 fn test_transaction_commit_after_rollback_fails() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     let mut conn = client.get_connection().unwrap();
 
@@ -194,7 +194,7 @@ fn test_transaction_commit_after_rollback_fails() {
 
 #[test]
 fn test_transaction_multiple_sequential() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_sequential (id INTEGER)").unwrap();
 
@@ -216,7 +216,7 @@ fn test_transaction_multiple_sequential() {
 
 #[test]
 fn test_transaction_state_tracking() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     let mut conn = client.get_connection().unwrap();
 
@@ -242,7 +242,7 @@ fn test_transaction_state_tracking() {
 
 #[test]
 fn test_transaction_with_query_in_middle() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_query_tx (id INTEGER)").unwrap();
 
@@ -263,7 +263,7 @@ fn test_transaction_with_query_in_middle() {
 
 #[test]
 fn test_transaction_error_handling() {
-    let client = Client::connect("admin", "admin").unwrap();
+    let client = Client::connect("admin", "adminpass").unwrap();
 
     client.execute("CREATE TABLE test_error_tx (id INTEGER)").unwrap();
 

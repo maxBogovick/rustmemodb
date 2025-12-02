@@ -45,7 +45,7 @@ pub use connection::{
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// // Connect to database
-/// let client = Client::connect("admin", "admin")?;
+/// let client = Client::connect("admin", "adminpass")?;
 ///
 /// // Execute queries
 /// client.execute("CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)")?;
@@ -70,7 +70,7 @@ impl Client {
     /// ```
     /// # use rustmemodb::Client;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = Client::connect("admin", "admin")?;
+    /// let client = Client::connect("admin", "adminpass")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -110,7 +110,7 @@ impl Client {
     /// # use rustmemodb::Client;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let client = Client::connect_url(
-    ///     "rustmemodb://admin:admin@localhost:5432/mydb"
+    ///     "rustmemodb://admin:adminpass@localhost:5432/mydb"
     /// )?;
     /// # Ok(())
     /// # }
@@ -129,7 +129,7 @@ impl Client {
     /// ```
     /// # use rustmemodb::Client;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let client = Client::connect("admin", "admin")?;
+    /// # let client = Client::connect("admin", "adminpass")?;
     /// let result = client.query("SELECT * FROM users")?;
     /// for row in result.rows() {
     ///     println!("{:?}", row);
@@ -149,7 +149,7 @@ impl Client {
     /// ```
     /// # use rustmemodb::Client;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let client = Client::connect("admin", "admin")?;
+    /// # let client = Client::connect("admin", "adminpass")?;
     /// client.execute("CREATE TABLE users (id INTEGER, name TEXT)")?;
     /// client.execute("INSERT INTO users VALUES (1, 'Alice')")?;
     /// # Ok(())
@@ -169,7 +169,7 @@ impl Client {
     /// ```
     /// # use rustmemodb::Client;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let client = Client::connect("admin", "admin")?;
+    /// # let client = Client::connect("admin", "adminpass")?;
     /// let mut conn = client.get_connection()?;
     ///
     /// conn.begin()?;
@@ -190,7 +190,7 @@ impl Client {
     /// ```
     /// # use rustmemodb::Client;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let client = Client::connect("admin", "admin")?;
+    /// # let client = Client::connect("admin", "adminpass")?;
     /// let stats = client.stats();
     /// println!("Active connections: {}", stats.active_connections);
     /// # Ok(())
@@ -207,7 +207,7 @@ impl Client {
     /// ```
     /// # use rustmemodb::{Client, Permission};
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let client = Client::connect("admin", "admin")?;
+    /// # let client = Client::connect("admin", "adminpass")?;
     /// let auth = client.auth_manager();
     /// auth.create_user("alice", "password123", vec![Permission::Select])?;
     /// # Ok(())
@@ -224,14 +224,14 @@ mod tests {
 
     #[test]
     fn test_client_connect() {
-        let client = Client::connect("admin", "admin").unwrap();
+        let client = Client::connect("admin", "adminpass").unwrap();
         let stats = client.stats();
         assert!(stats.total_connections > 0);
     }
 
     #[test]
     fn test_client_execute() {
-        let client = Client::connect("admin", "admin").unwrap();
+        let client = Client::connect("admin", "adminpass").unwrap();
 
         client.execute("CREATE TABLE test (id INTEGER)").unwrap();
         client.execute("INSERT INTO test VALUES (1)").unwrap();
@@ -242,25 +242,25 @@ mod tests {
 
     #[test]
     fn test_client_transaction() {
-        let client = Client::connect("admin", "admin").unwrap();
+        let client = Client::connect("admin", "adminpass").unwrap();
 
-        client.execute("CREATE TABLE test (id INTEGER)").unwrap();
+        client.execute("CREATE TABLE test1 (id INTEGER)").unwrap();
 
         let mut conn = client.get_connection().unwrap();
 
         conn.begin().unwrap();
-        conn.execute("INSERT INTO test VALUES (1)").unwrap();
-        conn.execute("INSERT INTO test VALUES (2)").unwrap();
+        conn.execute("INSERT INTO test1 VALUES (1)").unwrap();
+        conn.execute("INSERT INTO test1 VALUES (2)").unwrap();
         conn.commit().unwrap();
 
-        let result = client.query("SELECT * FROM test").unwrap();
+        let result = client.query("SELECT * FROM test1").unwrap();
         assert_eq!(result.row_count(), 2);
     }
 
     #[test]
     fn test_client_from_url() {
         let client = Client::connect_url(
-            "rustmemodb://admin:admin@localhost:5432/testdb"
+            "rustmemodb://admin:adminpass@localhost:5432/testdb"
         ).unwrap();
 
         assert!(client.stats().total_connections > 0);
