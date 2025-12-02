@@ -16,8 +16,6 @@ pub struct ConnectionPool {
     available: Arc<Mutex<VecDeque<PooledConnection>>>,
     /// Total number of connections created
     total_connections: Arc<Mutex<usize>>,
-    /// Authentication manager
-    auth_manager: Arc<AuthManager>,
     /// Shared database instance
     db: Arc<RwLock<InMemoryDB>>,
     /// Next connection ID
@@ -77,8 +75,7 @@ impl ConnectionPool {
         config.validate()
             .map_err(|e| DbError::ExecutionError(e))?;
 
-        let auth_manager = Arc::new(AuthManager::new());
-        let db = Arc::new(RwLock::new(InMemoryDB::new()));
+        let db = Arc::clone(InMemoryDB::global());
         let available = Arc::new(Mutex::new(VecDeque::new()));
         let total_connections = Arc::new(Mutex::new(0));
         let next_id = Arc::new(Mutex::new(1));
@@ -87,7 +84,6 @@ impl ConnectionPool {
             config,
             available,
             total_connections,
-            auth_manager,
             db,
             next_id,
         };
@@ -99,31 +95,16 @@ impl ConnectionPool {
     }
 
     /// Create a connection pool with custom authentication manager
+    ///
+    /// DEPRECATED: This method is deprecated as AuthManager is now a global singleton.
+    /// Use `ConnectionPool::new()` instead. The auth_manager parameter is ignored.
+    #[deprecated(since = "0.1.0", note = "AuthManager is now a global singleton. Use ConnectionPool::new() instead.")]
     pub fn with_auth_manager(
         config: ConnectionConfig,
-        auth_manager: AuthManager,
+        _auth_manager: AuthManager,
     ) -> Result<Self> {
-        config.validate()
-            .map_err(|e| DbError::ExecutionError(e))?;
-
-        let auth_manager = Arc::new(auth_manager);
-        let db = Arc::new(RwLock::new(InMemoryDB::new()));
-        let available = Arc::new(Mutex::new(VecDeque::new()));
-        let total_connections = Arc::new(Mutex::new(0));
-        let next_id = Arc::new(Mutex::new(1));
-
-        let pool = Self {
-            config,
-            available,
-            total_connections,
-            auth_manager,
-            db,
-            next_id,
-        };
-
-        pool.ensure_min_connections()?;
-
-        Ok(pool)
+        // Ignore the provided auth_manager and use the global singleton
+        Self::new(config)
     }
 
     /// Get a connection from the pool
@@ -186,7 +167,7 @@ impl ConnectionPool {
         }
 
         // Authenticate user
-        let user = self.auth_manager.authenticate(
+        let user = AuthManager::global().authenticate(
             &self.config.username,
             &self.config.password,
         )?;
@@ -215,7 +196,7 @@ impl ConnectionPool {
 
         while *total < self.config.min_connections {
             // Authenticate user
-            let user = self.auth_manager.authenticate(
+            let user = AuthManager::global().authenticate(
                 &self.config.username,
                 &self.config.password,
             )?;
@@ -249,7 +230,7 @@ impl ConnectionPool {
 
     /// Get the authentication manager
     pub fn auth_manager(&self) -> &Arc<AuthManager> {
-        &self.auth_manager
+        AuthManager::global()
     }
 }
 

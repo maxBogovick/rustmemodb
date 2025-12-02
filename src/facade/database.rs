@@ -7,6 +7,13 @@ use crate::executor::dml::InsertExecutor;
 use crate::executor::query::QueryExecutor;
 use crate::result::QueryResult;
 use crate::parser::ast::{Statement, CreateTableStmt};
+use std::sync::{Arc, RwLock};
+use lazy_static::lazy_static;
+
+// Global singleton instance of InMemoryDB
+lazy_static! {
+    static ref GLOBAL_DB: Arc<RwLock<InMemoryDB>> = Arc::new(RwLock::new(InMemoryDB::new()));
+}
 
 pub struct InMemoryDB {
     parser: SqlParserAdapter,
@@ -17,6 +24,14 @@ pub struct InMemoryDB {
 }
 
 impl InMemoryDB {
+    /// Get the global InMemoryDB instance
+    ///
+    /// Returns a reference to the singleton database that is shared across all connections.
+    /// This ensures that all clients see the same tables and data.
+    pub fn global() -> &'static Arc<RwLock<InMemoryDB>> {
+        &GLOBAL_DB
+    }
+
     pub fn new() -> Self {
         let catalog = Catalog::new();
 

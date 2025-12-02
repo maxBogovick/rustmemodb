@@ -1,6 +1,7 @@
 use crate::core::{DbError, Result};
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
+use lazy_static::lazy_static;
 
 /// User permission level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,7 +96,20 @@ pub struct AuthManager {
     users: RwLock<HashMap<String, User>>,
 }
 
+// Global singleton instance of AuthManager
+lazy_static! {
+    static ref GLOBAL_AUTH_MANAGER: Arc<AuthManager> = Arc::new(AuthManager::new());
+}
+
 impl AuthManager {
+    /// Get the global AuthManager instance
+    ///
+    /// Returns a reference to the singleton AuthManager that is shared across all connections.
+    /// This ensures that users created in one connection are available in all other connections.
+    pub fn global() -> &'static Arc<AuthManager> {
+        &GLOBAL_AUTH_MANAGER
+    }
+
     const DEFAULT_ADMIN_USERNAME: &'static str = "admin";
     const DEFAULT_ADMIN_PASSWORD: &'static str = "admin";
 

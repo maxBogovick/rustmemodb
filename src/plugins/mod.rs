@@ -4,6 +4,7 @@ pub mod comparison;
 pub mod in_list;
 pub mod is_null;
 pub mod like;
+pub mod nested;
 mod boolean;
 
 use crate::core::Result;
@@ -45,6 +46,8 @@ impl ExpressionPluginRegistry {
         let mut registry = Self::new();
 
         // Автоматически регистрируем все плагины
+        // Nested должен быть первым, чтобы обрабатывать скобки
+        registry.register(Box::new(nested::NestedPlugin));
         registry.register(Box::new(like::LikePlugin));
         registry.register(Box::new(between::BetweenPlugin));
         registry.register(Box::new(is_null::IsNullPlugin));

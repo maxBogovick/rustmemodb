@@ -89,17 +89,17 @@ fn main() -> Result<()> {
 
     let alice = auth.get_user("alice")?;
     println!("   Alice permissions:");
-    println!("     - SELECT: {}", alice.has_permission(&Permission::Select));
-    println!("     - INSERT: {}", alice.has_permission(&Permission::Insert));
-    println!("     - CREATE TABLE: {}", alice.has_permission(&Permission::CreateTable));
+    println!("     - SELECT: {}", alice.has_permission(Permission::Select));
+    println!("     - INSERT: {}", alice.has_permission(Permission::Insert));
+    println!("     - CREATE TABLE: {}", alice.has_permission(Permission::CreateTable));
     println!();
 
     let bob = auth.get_user("bob")?;
     println!("   Bob permissions:");
-    println!("     - SELECT: {}", bob.has_permission(&Permission::Select));
-    println!("     - INSERT: {}", bob.has_permission(&Permission::Insert));
-    println!("     - UPDATE: {}", bob.has_permission(&Permission::Update));
-    println!("     - DELETE: {}", bob.has_permission(&Permission::Delete));
+    println!("     - SELECT: {}", bob.has_permission(Permission::Select));
+    println!("     - INSERT: {}", bob.has_permission(Permission::Insert));
+    println!("     - UPDATE: {}", bob.has_permission(Permission::Update));
+    println!("     - DELETE: {}", bob.has_permission(Permission::Delete));
     println!();
 
     // ============================================================================
@@ -108,19 +108,19 @@ fn main() -> Result<()> {
     println!("5. Modifying permissions...");
 
     println!("   Alice before: INSERT = {}",
-        auth.get_user("alice")?.has_permission(&Permission::Insert));
+        auth.get_user("alice")?.has_permission(Permission::Insert));
 
     auth.grant_permission("alice", Permission::Insert)?;
     println!("   ✓ Granted INSERT to Alice");
 
     println!("   Alice after: INSERT = {}",
-        auth.get_user("alice")?.has_permission(&Permission::Insert));
+        auth.get_user("alice")?.has_permission(Permission::Insert));
 
     auth.revoke_permission("alice", Permission::Insert)?;
     println!("   ✓ Revoked INSERT from Alice");
 
     println!("   Alice final: INSERT = {}",
-        auth.get_user("alice")?.has_permission(&Permission::Insert));
+        auth.get_user("alice")?.has_permission(Permission::Insert));
     println!();
 
     // ============================================================================

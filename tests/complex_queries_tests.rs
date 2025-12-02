@@ -11,7 +11,7 @@ fn test_complex_multi_table_setup() {
 
     // Create multiple related tables
     client.execute(
-        "CREATE TABLE customers (
+        "CREATE TABLE customers1 (
             id INTEGER,
             name TEXT,
             email TEXT,
@@ -20,7 +20,7 @@ fn test_complex_multi_table_setup() {
     ).unwrap();
 
     client.execute(
-        "CREATE TABLE orders (
+        "CREATE TABLE orders1 (
             id INTEGER,
             customer_id INTEGER,
             amount FLOAT,
@@ -29,7 +29,7 @@ fn test_complex_multi_table_setup() {
     ).unwrap();
 
     client.execute(
-        "CREATE TABLE products (
+        "CREATE TABLE products1 (
             id INTEGER,
             name TEXT,
             price FLOAT,
@@ -38,37 +38,37 @@ fn test_complex_multi_table_setup() {
     ).unwrap();
 
     // Insert test data
-    client.execute("INSERT INTO customers VALUES (1, 'Alice', 'alice@example.com', 'USA')").unwrap();
-    client.execute("INSERT INTO customers VALUES (2, 'Bob', 'bob@example.com', 'UK')").unwrap();
-    client.execute("INSERT INTO customers VALUES (3, 'Charlie', 'charlie@example.com', 'USA')").unwrap();
+    client.execute("INSERT INTO customers1 VALUES (1, 'Alice', 'alice@example.com', 'USA')").unwrap();
+    client.execute("INSERT INTO customers1 VALUES (2, 'Bob', 'bob@example.com', 'UK')").unwrap();
+    client.execute("INSERT INTO customers1 VALUES (3, 'Charlie', 'charlie@example.com', 'USA')").unwrap();
 
-    client.execute("INSERT INTO orders VALUES (1, 1, 150.0, 'completed')").unwrap();
-    client.execute("INSERT INTO orders VALUES (2, 1, 200.0, 'pending')").unwrap();
-    client.execute("INSERT INTO orders VALUES (3, 2, 100.0, 'completed')").unwrap();
+    client.execute("INSERT INTO orders1 VALUES (1, 1, 150.0, 'completed')").unwrap();
+    client.execute("INSERT INTO orders1 VALUES (2, 1, 200.0, 'pending')").unwrap();
+    client.execute("INSERT INTO orders1 VALUES (3, 2, 100.0, 'completed')").unwrap();
 
-    client.execute("INSERT INTO products VALUES (1, 'Laptop', 999.99, 'Electronics')").unwrap();
-    client.execute("INSERT INTO products VALUES (2, 'Mouse', 29.99, 'Electronics')").unwrap();
-    client.execute("INSERT INTO products VALUES (3, 'Desk', 299.99, 'Furniture')").unwrap();
+    client.execute("INSERT INTO products1 VALUES (1, 'Laptop', 999.99, 'Electronics')").unwrap();
+    client.execute("INSERT INTO products1 VALUES (2, 'Mouse', 29.99, 'Electronics')").unwrap();
+    client.execute("INSERT INTO products1 VALUES (3, 'Desk', 299.99, 'Furniture')").unwrap();
 
     // Verify all tables created
-    assert!(client.query("SELECT * FROM customers").unwrap().row_count() == 3);
-    assert!(client.query("SELECT * FROM orders").unwrap().row_count() == 3);
-    assert!(client.query("SELECT * FROM products").unwrap().row_count() == 3);
+    assert!(client.query("SELECT * FROM customers1").unwrap().row_count() == 3);
+    assert!(client.query("SELECT * FROM orders1").unwrap().row_count() == 3);
+    assert!(client.query("SELECT * FROM products1").unwrap().row_count() == 3);
 }
 #[test]
 fn test_boolean_not_operator() {
     let mut client = Client::connect("admin", "admin").unwrap();
 
-    client.execute("CREATE TABLE permissions (user_id INTEGER, can_read BOOLEAN, can_write BOOLEAN, can_delete BOOLEAN, is_admin BOOLEAN)").unwrap();
+    client.execute("CREATE TABLE permissions2 (user_id INTEGER, can_read BOOLEAN, can_write BOOLEAN, can_delete BOOLEAN, is_admin BOOLEAN)").unwrap();
 
-    client.execute("INSERT INTO permissions VALUES (1, true, true, false, false)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (2, true, false, false, false)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (3, true, true, true, true)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (4, false, false, false, false)").unwrap();
+    client.execute("INSERT INTO permissions2 VALUES (1, true, true, false, false)").unwrap();
+    client.execute("INSERT INTO permissions2 VALUES (2, true, false, false, false)").unwrap();
+    client.execute("INSERT INTO permissions2 VALUES (3, true, true, true, true)").unwrap();
+    client.execute("INSERT INTO permissions2 VALUES (4, false, false, false, false)").unwrap();
 
     // Тест: Users who are NOT admin
     let result = client.query(
-        "SELECT user_id FROM permissions
+        "SELECT user_id FROM permissions2
              WHERE NOT is_admin"
     ).unwrap();
 
@@ -79,18 +79,17 @@ fn test_boolean_not_operator() {
 #[test]
 fn test_boolean_complex_expression() {
     let mut client = Client::connect("admin", "admin").unwrap();
+    client.execute("CREATE TABLE permissions1 (user_id INTEGER, can_read BOOLEAN, can_write BOOLEAN, can_delete BOOLEAN, is_admin BOOLEAN)").unwrap();
 
-    client.execute("CREATE TABLE permissions (user_id INTEGER, can_read BOOLEAN, can_write BOOLEAN, can_delete BOOLEAN, is_admin BOOLEAN)").unwrap();
-
-    client.execute("INSERT INTO permissions VALUES (1, true, true, false, false)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (2, true, false, false, false)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (3, true, true, true, true)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (4, false, false, false, false)").unwrap();
+    client.execute("INSERT INTO permissions1 VALUES (1, true, true, false, false)").unwrap();
+    client.execute("INSERT INTO permissions1 VALUES (2, true, false, false, false)").unwrap();
+    client.execute("INSERT INTO permissions1 VALUES (3, true, true, true, true)").unwrap();
+    client.execute("INSERT INTO permissions1 VALUES (4, false, false, false, false)").unwrap();
 
     // Тест: Complex boolean expression
     // (can_read AND can_write) AND NOT is_admin
     let result = client.query(
-        "SELECT user_id FROM permissions
+        "SELECT user_id FROM permissions1
              WHERE can_read = true AND can_write = true AND NOT is_admin"
     ).unwrap();
 
@@ -99,8 +98,6 @@ fn test_boolean_complex_expression() {
 }
 
 #[test]
-#[ignore]
-//TODO need fix
 fn test_boolean_with_parentheses() {
     let mut client = Client::connect("admin", "admin").unwrap();
 
@@ -154,13 +151,11 @@ fn test_complex_where_with_multiple_conditions() {
 }
 
 #[test]
-#[ignore]
-//TODO need fix
 fn test_complex_or_conditions() {
     let client = Client::connect("admin", "admin").unwrap();
 
     client.execute(
-        "CREATE TABLE products (
+        "CREATE TABLE products2 (
             id INTEGER,
             name TEXT,
             price FLOAT,
@@ -169,14 +164,14 @@ fn test_complex_or_conditions() {
         )"
     ).unwrap();
 
-    client.execute("INSERT INTO products VALUES (1, 'A', 100.0, 5, false)").unwrap();
-    client.execute("INSERT INTO products VALUES (2, 'B', 50.0, 0, true)").unwrap();
-    client.execute("INSERT INTO products VALUES (3, 'C', 200.0, 10, false)").unwrap();
-    client.execute("INSERT INTO products VALUES (4, 'D', 75.0, 3, false)").unwrap();
-    client.execute("INSERT INTO products VALUES (5, 'E', 150.0, 0, true)").unwrap();
+    client.execute("INSERT INTO products2 VALUES (1, 'A', 100.0, 5, false)").unwrap();
+    client.execute("INSERT INTO products2 VALUES (2, 'B', 50.0, 0, true)").unwrap();
+    client.execute("INSERT INTO products2 VALUES (3, 'C', 200.0, 10, false)").unwrap();
+    client.execute("INSERT INTO products2 VALUES (4, 'D', 75.0, 3, false)").unwrap();
+    client.execute("INSERT INTO products2 VALUES (5, 'E', 150.0, 0, true)").unwrap();
 
     let result = client.query(
-        "SELECT * FROM products
+        "SELECT * FROM products2
          WHERE stock = 0 OR (price > 120 AND featured = false)"
     ).unwrap();
 
@@ -184,8 +179,6 @@ fn test_complex_or_conditions() {
 }
 
 #[test]
-#[ignore]
-//TODO need fix
 fn test_complex_nested_logic() {
     let client = Client::connect("admin", "admin").unwrap();
 
@@ -330,8 +323,6 @@ fn test_complex_null_handling() {
 }
 
 #[test]
-#[ignore]
-//TODO need fix it
 fn test_complex_arithmetic_in_where() {
     let client = Client::connect("admin", "admin").unwrap();
 
@@ -344,7 +335,7 @@ fn test_complex_arithmetic_in_where() {
         )"
     ).unwrap();
 
-    client.execute("INSERT INTO products VALUES (1, 100.0, 10, 5)").unwrap();
+    client.execute("INSERT INTO products VALUES (1, 150.1, 10, 5)").unwrap();
     client.execute("INSERT INTO products VALUES (2, 200.0, 20, 5)").unwrap();
     client.execute("INSERT INTO products VALUES (3, 50.0, 5, 10)").unwrap();
     client.execute("INSERT INTO products VALUES (4, 150.0, 15, 8)").unwrap();
@@ -422,7 +413,7 @@ fn test_complex_boolean_logic() {
     let client = Client::connect("admin", "admin").unwrap();
 
     client.execute(
-        "CREATE TABLE permissions (
+        "CREATE TABLE permissions3 (
             user_id INTEGER,
             can_read BOOLEAN,
             can_write BOOLEAN,
@@ -431,14 +422,14 @@ fn test_complex_boolean_logic() {
         )"
     ).unwrap();
 
-    client.execute("INSERT INTO permissions VALUES (1, true, true, false, false)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (2, true, false, false, false)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (3, true, true, true, true)").unwrap();
-    client.execute("INSERT INTO permissions VALUES (4, false, false, false, false)").unwrap();
+    client.execute("INSERT INTO permissions3 VALUES (1, true, true, false, false)").unwrap();
+    client.execute("INSERT INTO permissions3 VALUES (2, true, false, false, false)").unwrap();
+    client.execute("INSERT INTO permissions3 VALUES (3, true, true, true, true)").unwrap();
+    client.execute("INSERT INTO permissions3 VALUES (4, false, false, false, false)").unwrap();
 
     // Users who can write but are not admin
     let result = client.query(
-        "SELECT user_id FROM permissions
+        "SELECT user_id FROM permissions3
          WHERE can_write = true AND is_admin = false"
     ).unwrap();
 

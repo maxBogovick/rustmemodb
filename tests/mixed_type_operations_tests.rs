@@ -9,11 +9,11 @@ use rustmemodb::Client;
 fn test_boolean_literal_insert() {
     let client = Client::connect("admin", "admin").unwrap();
 
-    client.execute("CREATE TABLE test_bool (id INTEGER, active BOOLEAN)").unwrap();
-    client.execute("INSERT INTO test_bool VALUES (1, true)").unwrap();
-    client.execute("INSERT INTO test_bool VALUES (2, false)").unwrap();
+    client.execute("CREATE TABLE test_bool2 (id INTEGER, active BOOLEAN)").unwrap();
+    client.execute("INSERT INTO test_bool2 VALUES (1, true)").unwrap();
+    client.execute("INSERT INTO test_bool2 VALUES (2, false)").unwrap();
 
-    let result = client.query("SELECT * FROM test_bool").unwrap();
+    let result = client.query("SELECT * FROM test_bool2").unwrap();
     println!("Total rows: {}", result.row_count());
     assert_eq!(result.row_count(), 2);
 }
@@ -22,12 +22,12 @@ fn test_boolean_literal_insert() {
 fn test_boolean_comparison_true() {
     let client = Client::connect("admin", "admin").unwrap();
 
-    client.execute("CREATE TABLE test_bool (id INTEGER, active BOOLEAN)").unwrap();
-    client.execute("INSERT INTO test_bool VALUES (1, true)").unwrap();
-    client.execute("INSERT INTO test_bool VALUES (2, false)").unwrap();
+    client.execute("CREATE TABLE test_bool1 (id INTEGER, active BOOLEAN)").unwrap();
+    client.execute("INSERT INTO test_bool1 VALUES (1, true)").unwrap();
+    client.execute("INSERT INTO test_bool1 VALUES (2, false)").unwrap();
 
     println!("Testing: WHERE active = true");
-    let result = client.query("SELECT * FROM test_bool WHERE active = true").unwrap();
+    let result = client.query("SELECT * FROM test_bool1 WHERE active = true").unwrap();
     println!("Rows returned: {}", result.row_count());
     assert_eq!(result.row_count(), 1);
 }
