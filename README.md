@@ -27,6 +27,10 @@
 - [Educational Resources](#educational-resources)
 - [License](#license)
 
+### 📚 Additional Documentation
+
+- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - Complete guide for adding new features to RustMemoDB
+- **[PRODUCTION_READINESS_ANALYSIS.md](PRODUCTION_READINESS_ANALYSIS.md)** - Production readiness assessment
 ---
 
 ## 🎯 Overview
@@ -119,52 +123,52 @@ RustMemDB follows the classic **three-stage database architecture** used by most
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    PARSER LAYER                             │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │ SqlParserAdapter (Facade Pattern)                  │    │
-│  │  - Uses sqlparser crate for SQL parsing            │    │
-│  │  - Converts external AST → Internal AST            │    │
-│  │  - Plugin-based expression conversion              │    │
-│  └────────────────────────────────────────────────────┘    │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │ SqlParserAdapter (Facade Pattern)                  │     │
+│  │  - Uses sqlparser crate for SQL parsing            │     │
+│  │  - Converts external AST → Internal AST            │     │
+│  │  - Plugin-based expression conversion              │     │
+│  └────────────────────────────────────────────────────┘     │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼  Statement AST
 ┌─────────────────────────────────────────────────────────────┐
 │                    PLANNER LAYER                            │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │ QueryPlanner (Strategy Pattern)                    │    │
-│  │  - AST → LogicalPlan transformation               │    │
-│  │  - Logical operators: Scan, Filter, Project, Sort  │    │
-│  │  - Future: Query optimization                      │    │
-│  └────────────────────────────────────────────────────┘    │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │ QueryPlanner (Strategy Pattern)                    │     │
+│  │  - AST → LogicalPlan transformation                │     │
+│  │  - Logical operators: Scan, Filter, Project, Sort  │     │
+│  │  - Future: Query optimization                      │     │
+│  └────────────────────────────────────────────────────┘     │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼  LogicalPlan
 ┌─────────────────────────────────────────────────────────────┐
 │                   EXECUTOR LAYER                            │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │ ExecutorPipeline (Chain of Responsibility)         │    │
-│  │  ┌──────────────────────────────────────────────┐  │    │
-│  │  │ DDL: CreateTableExecutor, DropTableExecutor  │  │    │
-│  │  │ DML: InsertExecutor, UpdateExecutor,         │  │    │
-│  │  │      DeleteExecutor                          │  │    │
-│  │  │ DQL: QueryExecutor                           │  │    │
-│  │  │      - TableScan → Filter → Aggregate/Sort   │  │    │
-│  │  │      - Project → Limit                       │  │    │
-│  │  └──────────────────────────────────────────────┘  │    │
-│  └────────────────────────────────────────────────────┘    │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │ ExecutorPipeline (Chain of Responsibility)         │     │
+│  │  ┌──────────────────────────────────────────────┐  │     │
+│  │  │ DDL: CreateTableExecutor, DropTableExecutor  │  │     │
+│  │  │ DML: InsertExecutor, UpdateExecutor,         │  │     │
+│  │  │      DeleteExecutor                          │  │     │
+│  │  │ DQL: QueryExecutor                           │  │     │
+│  │  │      - TableScan → Filter → Aggregate/Sort   │  │     │
+│  │  │      - Project → Limit                       │  │     │
+│  │  └──────────────────────────────────────────────┘  │     │
+│  └────────────────────────────────────────────────────┘     │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    STORAGE LAYER                            │
-│  ┌───────────────────┐        ┌─────────────────────┐      │
-│  │ Catalog           │        │ InMemoryStorage     │      │
-│  │ (Copy-on-Write)   │        │ (Row-based)         │      │
-│  │                   │        │                     │      │
-│  │ - Table schemas   │        │ - Per-table RwLock  │      │
-│  │ - Arc<HashMap>    │        │ - Concurrent access │      │
-│  │ - Lock-free reads │        │ - Vec<Row> storage  │      │
-│  └───────────────────┘        └─────────────────────┘      │
+│  ┌───────────────────┐        ┌─────────────────────┐       │
+│  │ Catalog           │        │ InMemoryStorage     │       │
+│  │ (Copy-on-Write)   │        │ (Row-based)         │       │
+│  │                   │        │                     │       │
+│  │ - Table schemas   │        │ - Per-table RwLock  │       │
+│  │ - Arc<HashMap>    │        │ - Concurrent access │       │
+│  │ - Lock-free reads │        │ - Vec<Row> storage  │       │
+│  └───────────────────┘        └─────────────────────┘       │
 └─────────────────────────────────────────────────────────────┘
                        │
                        ▼
@@ -954,67 +958,56 @@ Composable query plans.
 
 ## 🔧 Extensibility
 
-### Adding Custom Expression Evaluators
+RustMemDB uses a **plugin-based architecture** that makes it easy to add new SQL operators, functions, and statement types without modifying the core engine.
 
+### Developer Guide
+
+📚 **See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for comprehensive instructions on:**
+
+- Understanding the two plugin systems (conversion + evaluation)
+- Adding new SQL operators and functions (step-by-step)
+- Adding new statement types (e.g., CREATE INDEX)
+- Best practices and common pitfalls
+- Testing guidelines
+- Complete working examples
+
+### Quick Example: Adding UPPER() Function
+
+**Step 1: Create Conversion Plugin** (`src/plugins/string_functions.rs`)
 ```rust
-use rustmemodb::evaluator::{ExpressionEvaluator, EvaluatorRegistry};
-
-struct MyCustomEvaluator;
-
-impl ExpressionEvaluator for MyCustomEvaluator {
-    fn name(&self) -> &'static str {
-        "CUSTOM"
-    }
-
-    fn can_evaluate(&self, expr: &Expr) -> bool {
-        // Check if this evaluator handles the expression
-        matches!(expr, Expr::Function { name, .. } if name == "MY_FUNC")
-    }
-
-    fn evaluate(
-        &self,
-        expr: &Expr,
-        row: &Row,
-        schema: &Schema,
-        context: &EvaluationContext,
-    ) -> Result<Value> {
-        // Your custom evaluation logic
-        todo!()
-    }
-}
-
-// Register your evaluator
-let mut registry = EvaluatorRegistry::new();
-registry.register(Box::new(MyCustomEvaluator));
-```
-
-### Adding Custom Expression Converters
-
-```rust
-use rustmemodb::plugins::{ExpressionPlugin, ExpressionPluginRegistry};
-
-struct MyCustomPlugin;
-
-impl ExpressionPlugin for MyCustomPlugin {
-    fn name(&self) -> &'static str {
-        "CUSTOM_PLUGIN"
-    }
-
-    fn can_handle(&self, expr: &sql_ast::Expr) -> bool {
-        // Check if this plugin handles the SQL expression
-        todo!()
-    }
-
-    fn convert(
-        &self,
-        expr: sql_ast::Expr,
-        converter: &ExpressionConverter,
-    ) -> Result<Expr> {
-        // Convert SQL AST to internal AST
-        todo!()
+impl ExpressionPlugin for StringFunctionPlugin {
+    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr> {
+        // Convert SQL UPPER() to internal AST
+        Ok(Expr::Function { name: "UPPER".to_string(), args })
     }
 }
 ```
+
+**Step 2: Create Evaluation Plugin** (`src/evaluator/plugins/string_functions.rs`)
+```rust
+impl ExpressionEvaluator for StringFunctionEvaluator {
+    fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext) -> Result<Value> {
+        // Execute UPPER() at runtime
+        match value {
+            Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
+            _ => Err(DbError::TypeMismatch(/* ... */))
+        }
+    }
+}
+```
+
+**Step 3: Register Both Plugins**
+```rust
+// In src/plugins/mod.rs
+registry.register(Box::new(StringFunctionPlugin));
+
+// In src/evaluator/plugins/mod.rs
+registry.register(Box::new(StringFunctionEvaluator));
+```
+
+That's it! Now you can use `SELECT UPPER(name) FROM users`.
+
+For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
 ---
 
@@ -1104,25 +1097,34 @@ See [CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md) for detailed issue analysis.
 
 Contributions are welcome! This is an educational project, so clear, well-documented code is more valuable than clever optimizations.
 
+### Developer Resources
+
+📚 **New to the codebase?** Start with these guides:
+- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - Complete guide to adding new features
+- **[PRODUCTION_READINESS_ANALYSIS.md](PRODUCTION_READINESS_ANALYSIS.md)** - Architecture analysis and known issues
+- **[CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md)** - Detailed code review findings
+
 ### How to Contribute
 
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Write tests** for your changes
-4. **Ensure all tests pass** (`cargo test`)
-5. **Run clippy** (`cargo clippy -- -D warnings`)
-6. **Format code** (`cargo fmt`)
-7. **Commit changes** (`git commit -m 'Add amazing feature'`)
-8. **Push to branch** (`git push origin feature/amazing-feature`)
-9. **Open a Pull Request**
+1. **Read [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** for architecture overview
+2. **Fork the repository**
+3. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
+4. **Write tests** for your changes
+5. **Ensure all tests pass** (`cargo test`)
+6. **Run clippy** (`cargo clippy -- -D warnings`)
+7. **Format code** (`cargo fmt`)
+8. **Commit changes** (`git commit -m 'Add amazing feature'`)
+9. **Push to branch** (`git push origin feature/amazing-feature`)
+10. **Open a Pull Request**
 
 ### Development Guidelines
 
 - **Code Clarity** > Performance (unless critical path)
-- **Add tests** for all new features
+- **Add tests** for all new features (see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for test checklist)
 - **Document public APIs** with `///` comments
 - **Follow Rust conventions** (cargo fmt, clippy)
 - **Update README** if adding user-facing features
+- **Update DEVELOPER_GUIDE.md** if changing plugin architecture
 - **Reference issues** in commits when applicable
 
 ### Good First Issues
