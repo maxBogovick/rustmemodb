@@ -234,6 +234,12 @@ Runtime expression evaluation system.
 - ✅ **DQL (Data Query Language)**
   - `SELECT` with full query capabilities
   - Aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`)
+- ✅ **Transaction Control**
+  - `BEGIN` / `START TRANSACTION` - Start a new transaction
+  - `COMMIT` - Commit all changes atomically
+  - `ROLLBACK` - Undo all changes in the transaction
+  - Full MVCC support with snapshot isolation
+  - Auto-rollback on connection drop
 
 #### Query Capabilities
 - ✅ **Projection** - `SELECT col1, col2` or `SELECT *`
@@ -636,7 +642,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Example 6: Aggregate Functions
+### Example 6: Transactions (ACID Support)
+
+```rust
+use rustmemodb::Client;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::connect("admin", "adminpass")?;
+
+    // Create accounts table
+    client.execute(
+        "CREATE TABLE accounts (
+            id INTEGER,
+            name TEXT,
+            balance FLOAT
+        )"
+    )?;
+
+    // Insert initial data
+    client.execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)")?;
+    client.execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)")?;
+
+    // Get a connection from the pool
+    let mut conn = client.get_connection()?;
+
+    // Start a transaction
+    println!("=== Starting Transaction ===");
+    conn.begin()?;
+
+    // Transfer money from Alice to Bob
+    conn.execute("UPDATE accounts SET balance = balance - 200.0 WHERE id = 1")?;
+    conn.execute("UPDATE accounts SET balance = balance + 200.0 WHERE id = 2")?;
+
+    // Check balances within transaction
+    let result = conn.execute("SELECT name, balance FROM accounts ORDER BY id")?;
+    println!("Balances after transfer:");
+    result.print();
+
+    // Commit the transaction
+    conn.commit()?;
+    println!("=== Transaction Committed ===");
+
+    // Verify final state
+    let result = client.query("SELECT name, balance FROM accounts ORDER BY id")?;
+    println!("Final balances:");
+    result.print();
+
+    Ok(())
+}
+```
+
+### Example 7: Transaction Rollback
+
+```rust
+use rustmemodb::Client;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::connect("admin", "adminpass")?;
+
+    client.execute("CREATE TABLE inventory (id INTEGER, product TEXT, stock INTEGER)")?;
+    client.execute("INSERT INTO inventory VALUES (1, 'Widget', 100)")?;
+    client.execute("INSERT INTO inventory VALUES (2, 'Gadget', 50)")?;
+
+    let mut conn = client.get_connection()?;
+
+    // Transaction that will be rolled back
+    println!("=== Starting Transaction ===");
+    conn.begin()?;
+
+    conn.execute("UPDATE inventory SET stock = stock - 20 WHERE product = 'Widget'")?;
+    conn.execute("DELETE FROM inventory WHERE product = 'Gadget'")?;
+
+    println!("Changes within transaction:");
+    let result = conn.execute("SELECT * FROM inventory")?;
+    result.print();
+
+    // Rollback instead of commit
+    println!("\n=== Rolling Back Transaction ===");
+    conn.rollback()?;
+
+    // Verify data was restored
+    println!("After rollback:");
+    let result = client.query("SELECT * FROM inventory")?;
+    result.print();
+
+    Ok(())
+}
+```
+
+### Example 8: Aggregate Functions
 
 ```rust
 use rustmemodb::Client;
@@ -1016,7 +1110,6 @@ For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md
 ### Current Limitations
 
 ❌ **No persistent storage** - All data lost on shutdown
-❌ **No transactions** - ACID not guaranteed
 ❌ **No indexes** - All queries do full table scans
 ❌ **No JOINs** - Single table queries only
 ❌ **No GROUP BY/HAVING** - Aggregates work on full result set only
@@ -1025,7 +1118,14 @@ For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md
 ❌ **Limited SQL** - Subset of SQL-92
 ❌ **No query optimization** - Plans not optimized
 ❌ **Single process** - No client-server architecture
-❌ **Security** - Passwords stored in plaintext (see PRODUCTION_READINESS_ANALYSIS.md)
+
+### What We Have ✅
+
+✅ **Transactions** - Full ACID transaction support with MVCC
+✅ **Connection Pooling** - Efficient connection management
+✅ **User Authentication** - Secure password hashing with bcrypt
+✅ **Concurrent Access** - Fine-grained locking for multiple connections
+✅ **Auto-rollback** - Transactions automatically rolled back on connection drop
 
 ### Known Issues
 
@@ -1045,7 +1145,7 @@ See [CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md) for detailed issue analysis.
 
 ## 🗺️ Roadmap
 
-### Phase 1: Stability (Current)
+### Phase 1: Stability ✅ (Completed)
 - [x] Basic SELECT, INSERT, CREATE TABLE
 - [x] WHERE clause with complex predicates
 - [x] ORDER BY with multiple columns
@@ -1055,17 +1155,18 @@ See [CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md) for detailed issue analysis.
 - [x] Aggregate functions (COUNT, SUM, AVG, MIN, MAX)
 - [x] Client API and connection pooling
 - [x] User management system
-- [x] Comprehensive test coverage (71+ passing tests)
+- [x] Comprehensive test coverage (380+ passing tests)
 - [x] Performance benchmarks (load tests)
-- [ ] Fix critical security issue (plaintext passwords)
-- [ ] Fix remaining bugs from code review
+- [x] Password hashing with bcrypt
+- [x] **Transaction support (BEGIN, COMMIT, ROLLBACK)**
+- [x] **MVCC with snapshot isolation**
+- [x] **Auto-rollback on connection drop**
 
-### Phase 2: Core Features
-- [ ] Transaction support (BEGIN, COMMIT, ROLLBACK)
+### Phase 2: Core Features (Current)
 - [ ] Basic indexes (B-Tree for PRIMARY KEY)
 - [ ] GROUP BY and HAVING
 - [ ] Subqueries
-- [ ] Password hashing (bcrypt/argon2)
+- [ ] Fix remaining bugs from code review
 
 ### Phase 3: Advanced Features
 - [ ] INNER JOIN support

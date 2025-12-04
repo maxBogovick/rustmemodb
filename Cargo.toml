@@ -2,6 +2,23 @@
 name = "rustmemodb"
 version = "0.1.0"
 edition = "2024"
+authors = ["Maxim Bogovic <bogovick@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "In-memory SQL database with transaction support, connection pooling, and MVCC"
+readme = "README.md"
+homepage = "https://github.com/maxBogovick/rustmemodb"
+repository = "https://github.com/maxBogovick/rustmemodb"
+keywords = ["database", "sql", "in-memory", "transactions", "mvcc"]
+categories = ["database", "database-implementations"]
+
+[lib]
+name = "rustmemodb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustmemodb"
+path = "src/main.rs"
+required-features = []
 
 [dependencies]
 thiserror = "2.0.17"
