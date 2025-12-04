@@ -69,6 +69,17 @@ impl InMemoryStorage {
         Ok(table.rows().to_vec())
     }
 
+    /// Insert a row at a specific index (for transaction rollback)
+    pub fn insert_row_at_index(&self, table_name: &str, index: usize, row: Row) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+
+        let mut table = table_handle
+            .write()
+            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+
+        table.insert_row_at_index(index, row)
+    }
+
     /// Получить схему таблицы
     pub fn get_schema(&self, table_name: &str) -> Result<TableSchema> {
         let table_handle = self.get_table(table_name)?;
@@ -99,6 +110,34 @@ impl InMemoryStorage {
             .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
 
         Ok(table.row_count())
+    }
+
+    /// Update a row at a specific index (for transaction support)
+    pub fn update_row_at_index(&self, table_name: &str, index: usize, new_row: Row) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+
+        let mut table = table_handle
+            .write()
+            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+
+        table.update_row(index, new_row)
+    }
+
+    /// Delete a row at a specific index (for transaction support)
+    pub fn delete_row_at_index(&self, table_name: &str, index: usize) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+
+        let mut table = table_handle
+            .write()
+            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+
+        table.delete_rows(vec![index])?;
+        Ok(())
+    }
+
+    /// Get all rows from a table (for transaction snapshotting)
+    pub fn get_all_rows(&self, table_name: &str) -> Result<Vec<Row>> {
+        self.scan_table(table_name)
     }
 }
 

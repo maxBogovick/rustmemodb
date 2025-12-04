@@ -616,7 +616,8 @@ mod tests {
     fn test_simple_scan() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode};
         let plan = LogicalPlan::TableScan(TableScanNode {
@@ -632,7 +633,8 @@ mod tests {
     fn test_filter_execution() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
         use crate::parser::ast::{Expr, BinaryOp};
@@ -660,7 +662,8 @@ mod tests {
     fn test_projection_execution() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, ProjectionNode};
         use crate::parser::ast::Expr;
@@ -685,7 +688,8 @@ mod tests {
     fn test_limit_execution() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, LimitNode};
 
@@ -712,7 +716,8 @@ mod tests {
     fn test_order_by_asc() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -743,7 +748,8 @@ mod tests {
     fn test_order_by_desc() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -774,7 +780,8 @@ mod tests {
     fn test_order_by_multiple_columns() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -811,7 +818,8 @@ mod tests {
     fn test_order_by_with_filter() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, SortNode};
         use crate::parser::ast::BinaryOp;
@@ -853,7 +861,8 @@ mod tests {
     fn test_order_by_with_limit() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode, LimitNode};
 
@@ -906,7 +915,8 @@ mod tests {
         storage.insert_row("test", vec![Value::Integer(4), Value::Null]).unwrap();
 
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -937,7 +947,8 @@ mod tests {
     fn test_order_by_expression() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
         use crate::parser::ast::BinaryOp;
@@ -973,7 +984,8 @@ mod tests {
     fn test_complex_query() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, ProjectionNode, LimitNode};
         use crate::parser::ast::BinaryOp;
@@ -1012,7 +1024,8 @@ mod tests {
     fn test_like_evaluation() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
 
@@ -1040,7 +1053,8 @@ mod tests {
     fn test_between_evaluation() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
 
@@ -1091,7 +1105,8 @@ mod tests {
         ]).unwrap();
 
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
 
@@ -1117,7 +1132,8 @@ mod tests {
     fn test_logical_and() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
         use crate::parser::ast::BinaryOp;
@@ -1153,7 +1169,8 @@ mod tests {
     fn test_get_output_columns() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode};
 
@@ -1170,7 +1187,8 @@ mod tests {
     fn test_order_by_with_value_compare() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
-        let ctx = ExecutionContext::new(&storage);
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let ctx = ExecutionContext::new(&storage, &txn_mgr);
 
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),

@@ -7,8 +7,10 @@ use crate::executor::dml::InsertExecutor;
 use crate::executor::delete::DeleteExecutor;
 use crate::executor::update::UpdateExecutor;
 use crate::executor::query::QueryExecutor;
+use crate::executor::{BeginExecutor, CommitExecutor, RollbackExecutor};
 use crate::result::QueryResult;
 use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
+use crate::transaction::TransactionManager;
 use std::sync::{Arc, RwLock};
 use lazy_static::lazy_static;
 
@@ -23,6 +25,8 @@ pub struct InMemoryDB {
     /// Catalog - просто значение, не RwLock!
     catalog: Catalog,
     executor_pipeline: ExecutorPipeline,
+    /// Transaction manager for MVCC and transaction control
+    transaction_manager: Arc<TransactionManager>,
 }
 
 impl InMemoryDB {
@@ -36,13 +40,24 @@ impl InMemoryDB {
 
     pub fn new() -> Self {
         let catalog = Catalog::new();
+        let transaction_manager = Arc::new(TransactionManager::new());
 
         let mut pipeline = ExecutorPipeline::new();
+        // Register transaction control executors first
+        pipeline.register(Box::new(BeginExecutor));
+        pipeline.register(Box::new(CommitExecutor));
+        pipeline.register(Box::new(RollbackExecutor));
+
+        // Register DDL executors
         pipeline.register(Box::new(CreateTableExecutor));
         pipeline.register(Box::new(DropTableExecutor));
+
+        // Register DML executors
         pipeline.register(Box::new(InsertExecutor));
         pipeline.register(Box::new(DeleteExecutor::new()));
         pipeline.register(Box::new(UpdateExecutor::new()));
+
+        // Register query executor
         pipeline.register(Box::new(QueryExecutor::new(catalog.clone())));
 
         Self {
@@ -50,10 +65,30 @@ impl InMemoryDB {
             storage: InMemoryStorage::new(),
             catalog,
             executor_pipeline: pipeline,
+            transaction_manager,
         }
     }
 
+    /// Get reference to transaction manager
+    pub fn transaction_manager(&self) -> &Arc<TransactionManager> {
+        &self.transaction_manager
+    }
+
+    /// Get mutable reference to storage (for transaction commits)
+    pub(crate) fn storage_mut(&mut self) -> &mut InMemoryStorage {
+        &mut self.storage
+    }
+
     pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
+        self.execute_with_transaction(sql, None)
+    }
+
+    /// Execute SQL with an optional transaction context
+    pub fn execute_with_transaction(
+        &mut self,
+        sql: &str,
+        transaction_id: Option<crate::transaction::TransactionId>,
+    ) -> Result<QueryResult> {
         let statements = self.parser.parse(sql)?;
 
         if statements.is_empty() {
@@ -71,8 +106,12 @@ impl InMemoryDB {
             _ => {}
         }
 
-        // Остальное через pipeline (DML, DQL)
-        let ctx = ExecutionContext::new(&self.storage);
+        // Остальное через pipeline (DML, DQL, Transaction Control)
+        let ctx = if let Some(txn_id) = transaction_id {
+            ExecutionContext::with_transaction(&self.storage, &self.transaction_manager, txn_id)
+        } else {
+            ExecutionContext::new(&self.storage, &self.transaction_manager)
+        };
         self.executor_pipeline.execute(&statements[0], &ctx)
     }
 

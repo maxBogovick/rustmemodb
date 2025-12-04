@@ -7,6 +7,7 @@ pub mod storage;
 pub mod result;
 pub mod facade;
 pub mod connection;
+pub mod transaction;
 mod parser;
 mod planner;
 mod executor;

@@ -5,6 +5,7 @@ pub mod config;
 use crate::core::{DbError, Result};
 use crate::facade::InMemoryDB;
 use crate::result::QueryResult;
+use crate::transaction::TransactionId;
 use std::sync::{Arc, RwLock};
 use auth::{AuthManager, User};
 use config::ConnectionConfig;
@@ -23,7 +24,7 @@ pub struct Connection {
     /// Connection state
     state: ConnectionState,
     /// Active transaction ID (if any)
-    transaction_id: Option<u64>,
+    transaction_id: Option<TransactionId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,10 +71,22 @@ impl Connection {
             return Err(DbError::ExecutionError("Connection is closed".into()));
         }
 
+        // Handle transaction control statements specially
+        let trimmed = sql.trim().to_uppercase();
+        if trimmed == "BEGIN" || trimmed == "BEGIN TRANSACTION" || trimmed == "START TRANSACTION" {
+            return self.begin().map(|_| QueryResult::empty_with_message("Transaction started".to_string()));
+        }
+        if trimmed == "COMMIT" || trimmed == "COMMIT TRANSACTION" {
+            return self.commit().map(|_| QueryResult::empty_with_message("Transaction committed".to_string()));
+        }
+        if trimmed == "ROLLBACK" || trimmed == "ROLLBACK TRANSACTION" {
+            return self.rollback().map(|_| QueryResult::empty_with_message("Transaction rolled back".to_string()));
+        }
+
         let mut db = self.db.write()
             .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
 
-        db.execute(sql)
+        db.execute_with_transaction(sql, self.transaction_id)
     }
 
     /// Execute a query and return the result
@@ -110,8 +123,15 @@ impl Connection {
             return Err(DbError::ExecutionError("Transaction already active".into()));
         }
 
+        // Begin transaction via TransactionManager
+        let txn_id = {
+            let db = self.db.read()
+                .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
+            db.transaction_manager().begin()?
+        };
+
         self.state = ConnectionState::InTransaction;
-        self.transaction_id = Some(0); // TODO: Real transaction ID from TransactionManager
+        self.transaction_id = Some(txn_id);
 
         Ok(())
     }
@@ -122,7 +142,19 @@ impl Connection {
             return Err(DbError::ExecutionError("No active transaction".into()));
         }
 
-        // TODO: Call TransactionManager.commit()
+        let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
+
+        // Commit transaction via TransactionManager
+        {
+            let mut db = self.db.write()
+                .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
+
+            // Get transaction manager reference and storage, then commit
+            let txn_mgr = Arc::clone(db.transaction_manager());
+            let storage = db.storage_mut();
+            txn_mgr.commit(txn_id, storage)?;
+        }
+
         self.state = ConnectionState::Active;
         self.transaction_id = None;
 
@@ -132,10 +164,22 @@ impl Connection {
     /// Rollback the current transaction
     pub fn rollback(&mut self) -> Result<()> {
         if self.state != ConnectionState::InTransaction {
-            return Err(DbError::ExecutionError("No active transaction".into()));
+            // SQL standard: rollback without transaction is a no-op
+            return Ok(());
         }
 
-        // TODO: Call TransactionManager.rollback()
+        let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
+
+        // Rollback transaction via TransactionManager
+        {
+            let mut db = self.db.write()
+                .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
+
+            let txn_mgr = Arc::clone(db.transaction_manager());
+            let storage = db.storage_mut();
+            txn_mgr.rollback_with_storage(txn_id, storage)?;
+        }
+
         self.state = ConnectionState::Active;
         self.transaction_id = None;
 

@@ -16,6 +16,12 @@ impl QueryResult {
         }
     }
 
+    pub fn empty_with_message(_message: String) -> Self {
+        // For now, just return empty result
+        // In future, could add message field to QueryResult
+        Self::empty()
+    }
+
     pub fn new(columns: Vec<String>, rows: Vec<Row>) -> Self {
         Self {
             columns,

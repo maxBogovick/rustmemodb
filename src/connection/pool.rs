@@ -293,7 +293,12 @@ impl PoolGuard {
 
 impl Drop for PoolGuard {
     fn drop(&mut self) {
-        if let Some(connection) = self.connection.take() {
+        if let Some(mut connection) = self.connection.take() {
+            // Auto-rollback if connection has active transaction
+            if connection.is_in_transaction() {
+                let _ = connection.rollback();
+            }
+
             // Return connection to pool
             if let Ok(mut pool) = self.pool.lock() {
                 pool.push_back(PooledConnection::new(connection));

@@ -2,6 +2,7 @@ use super::{ExecutionContext, Executor};
 use crate::core::{Column, DbError, Result, Row, Value};
 use crate::parser::ast::{Expr, InsertStmt, Statement};
 use crate::result::QueryResult;
+use crate::transaction::Change;
 
 pub struct InsertExecutor;
 
@@ -34,9 +35,18 @@ impl InsertExecutor {
             .map(|row_exprs| self.evaluate_row(row_exprs, schema.schema().columns()))
             .collect::<Result<Vec<_>>>()?;
 
-        // Вставляем строки (write lock на одну таблицу)
+        // Insert rows into storage (both in transaction and auto-commit mode)
         for row in rows {
-            ctx.storage.insert_row(&insert.table_name, row)?;
+            ctx.storage.insert_row(&insert.table_name, row.clone())?;
+
+            // If in transaction, record change for potential rollback
+            if let Some(txn_id) = ctx.transaction_id {
+                let change = Change::InsertRow {
+                    table: insert.table_name.clone(),
+                    row,
+                };
+                ctx.transaction_manager.record_change(txn_id, change)?;
+            }
         }
 
         Ok(QueryResult::empty())

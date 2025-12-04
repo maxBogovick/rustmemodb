@@ -100,13 +100,13 @@ fn test_transaction_error_no_transaction() {
 
     let mut conn = client.get_connection().unwrap();
 
-    // Try to commit without begin
+    // Try to commit without begin - should fail
     let result = conn.commit();
     assert!(result.is_err());
 
-    // Try to rollback without begin
+    // Try to rollback without begin - SQL standard: no-op, not error
     let result = conn.rollback();
-    assert!(result.is_err());
+    assert!(result.is_ok(), "ROLLBACK without transaction should be no-op");
 }
 
 #[test]

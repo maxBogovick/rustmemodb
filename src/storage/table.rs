@@ -61,6 +61,20 @@ impl Table {
         Ok(())
     }
 
+    /// Insert a row at a specific index (for transaction rollback)
+    pub fn insert_row_at_index(&mut self, index: usize, row: Row) -> Result<()> {
+        if index > self.rows.len() {
+            return Err(DbError::ExecutionError(format!(
+                "Cannot insert at index {} (length is {})",
+                index, self.rows.len()
+            )));
+        }
+
+        self.validate_row(&row)?;
+        self.rows.insert(index, row);
+        Ok(())
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
@@ -84,7 +98,7 @@ impl Table {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TableSchema {
     name: String,
     schema: Schema,

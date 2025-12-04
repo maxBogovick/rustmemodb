@@ -9,6 +9,9 @@ pub enum Statement {
     Query(QueryStmt),
     Delete(DeleteStmt),
     Update(UpdateStmt),
+    Begin,
+    Commit,
+    Rollback,
 }
 
 /// CREATE TABLE statement

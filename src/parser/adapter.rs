@@ -31,6 +31,18 @@ impl SqlParserAdapter {
     }
 
     pub fn parse(&self, sql: &str) -> Result<Vec<Statement>> {
+        // Handle transaction control statements that sqlparser might not parse
+        let trimmed = sql.trim().to_uppercase();
+        if trimmed == "BEGIN" || trimmed == "BEGIN TRANSACTION" || trimmed == "START TRANSACTION" {
+            return Ok(vec![Statement::Begin]);
+        }
+        if trimmed == "COMMIT" || trimmed == "COMMIT TRANSACTION" {
+            return Ok(vec![Statement::Commit]);
+        }
+        if trimmed == "ROLLBACK" || trimmed == "ROLLBACK TRANSACTION" {
+            return Ok(vec![Statement::Rollback]);
+        }
+
         let external_stmts = Parser::parse_sql(&self.dialect, sql)
             .map_err(|e| DbError::ParseError(e.to_string()))?;
 

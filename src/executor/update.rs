@@ -3,6 +3,7 @@ use crate::core::{Result, Value};
 use crate::parser::ast::{UpdateStmt, Statement};
 use crate::result::QueryResult;
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
+use crate::transaction::Change;
 
 pub struct UpdateExecutor {
     evaluator_registry: EvaluatorRegistry,
@@ -83,19 +84,31 @@ impl UpdateExecutor {
                     new_row[col_idx] = new_value;
                 }
 
-                updates.push((idx, new_row));
+                updates.push((idx, row.clone(), new_row));
             }
         }
 
-        // Apply updates
         let updated_count = updates.len();
+
+        // Apply updates to storage (both in transaction and auto-commit mode)
         {
             let mut table = table_handle
                 .write()
                 .map_err(|_| crate::core::DbError::ExecutionError("Table lock poisoned".into()))?;
 
-            for (idx, new_row) in updates {
-                table.update_row(idx, new_row)?;
+            for (idx, old_row, new_row) in &updates {
+                table.update_row(*idx, new_row.clone())?;
+
+                // If in transaction, record change for potential rollback
+                if let Some(txn_id) = ctx.transaction_id {
+                    let change = Change::UpdateRow {
+                        table: update.table_name.clone(),
+                        row_index: *idx,
+                        old_row: old_row.clone(),
+                        new_row: new_row.clone(),
+                    };
+                    ctx.transaction_manager.record_change(txn_id, change)?;
+                }
             }
         }
 
