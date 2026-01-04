@@ -2,6 +2,7 @@ use super::{ExecutionContext, Executor};
 use crate::core::{Column, DbError, Result, Row, Value};
 use crate::parser::ast::{Expr, InsertStmt, Statement};
 use crate::result::QueryResult;
+use crate::storage::WalEntry;
 use crate::transaction::Change;
 
 pub struct InsertExecutor;
@@ -38,6 +39,16 @@ impl InsertExecutor {
         // Insert rows into storage (both in transaction and auto-commit mode)
         for row in rows {
             ctx.storage.insert_row(&insert.table_name, row.clone())?;
+
+            // Log to WAL if persistence is enabled
+            if let Some(ref persistence) = ctx.persistence {
+                let mut persistence_guard = persistence.lock()
+                    .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+                persistence_guard.log(&WalEntry::Insert {
+                    table: insert.table_name.clone(),
+                    row: row.clone(),
+                })?;
+            }
 
             // If in transaction, record change for potential rollback
             if let Some(txn_id) = ctx.transaction_id {

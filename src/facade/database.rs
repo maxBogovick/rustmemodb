@@ -1,5 +1,6 @@
 use crate::core::{Result, DbError, Column};
 use crate::storage::{InMemoryStorage, Catalog, TableSchema};
+use crate::storage::{PersistenceManager, DurabilityMode, WalEntry};
 use crate::parser::SqlParserAdapter;
 use crate::executor::{ExecutorPipeline, ExecutionContext};
 use crate::executor::ddl::{CreateTableExecutor, DropTableExecutor};
@@ -11,7 +12,8 @@ use crate::executor::{BeginExecutor, CommitExecutor, RollbackExecutor};
 use crate::result::QueryResult;
 use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
 use crate::transaction::TransactionManager;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
+use std::path::Path;
 use lazy_static::lazy_static;
 
 // Global singleton instance of InMemoryDB
@@ -27,6 +29,8 @@ pub struct InMemoryDB {
     executor_pipeline: ExecutorPipeline,
     /// Transaction manager for MVCC and transaction control
     transaction_manager: Arc<TransactionManager>,
+    /// Persistence manager for WAL and snapshots (optional, Arc<Mutex> for shared mutable access)
+    persistence: Option<Arc<Mutex<PersistenceManager>>>,
 }
 
 impl InMemoryDB {
@@ -66,6 +70,7 @@ impl InMemoryDB {
             catalog,
             executor_pipeline: pipeline,
             transaction_manager,
+            persistence: None,
         }
     }
 
@@ -107,10 +112,11 @@ impl InMemoryDB {
         }
 
         // Остальное через pipeline (DML, DQL, Transaction Control)
+        let persistence_ref = self.persistence.as_ref();
         let ctx = if let Some(txn_id) = transaction_id {
-            ExecutionContext::with_transaction(&self.storage, &self.transaction_manager, txn_id)
+            ExecutionContext::with_transaction(&self.storage, &self.transaction_manager, txn_id, persistence_ref)
         } else {
-            ExecutionContext::new(&self.storage, &self.transaction_manager)
+            ExecutionContext::new(&self.storage, &self.transaction_manager, persistence_ref)
         };
         self.executor_pipeline.execute(&statements[0], &ctx)
     }
@@ -130,19 +136,31 @@ impl InMemoryDB {
 
         let schema = TableSchema::new(create.table_name.clone(), columns);
 
-        // 1. Создаем таблицу в storage
+        // 1. Log to WAL BEFORE making changes
+        if let Some(ref persistence) = self.persistence {
+            let mut persistence_guard = persistence.lock()
+                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            persistence_guard.log(&WalEntry::CreateTable {
+                name: create.table_name.clone(),
+                schema: schema.clone(),
+            })?;
+        }
+
+        // 2. Создаем таблицу в storage
         self.storage.create_table(schema.clone())?;
 
-        // 2. Обновляем catalog (Copy-on-Write)
+        // 3. Обновляем catalog (Copy-on-Write)
         self.catalog = self.catalog.clone().with_table(schema)?;
 
-        // 3. Создаем НОВЫЙ QueryExecutor с обновленным catalog
+        // 4. Создаем НОВЫЙ QueryExecutor с обновленным catalog
         // Удаляем старый QueryExecutor
         self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
             crate::parser::ast::QueryStmt {
                 projection: vec![],
                 from: vec![],
                 selection: None,
+                group_by: vec![],
+                having: None,
                 order_by: vec![],
                 limit: None,
             }
@@ -150,6 +168,9 @@ impl InMemoryDB {
 
         // Добавляем новый с обновленным catalog
         self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+
+        // 5. Check if checkpoint is needed
+        self.maybe_checkpoint()?;
 
         Ok(QueryResult::empty())
     }
@@ -163,24 +184,49 @@ impl InMemoryDB {
             return Err(DbError::TableNotFound(drop.table_name.clone()));
         }
 
-        // 1. Drop table from storage
+        // 1. Get table data before dropping (for WAL)
+        let table = if self.persistence.is_some() {
+            let tables = self.storage.get_all_tables()?;
+            tables.get(&drop.table_name).cloned()
+        } else {
+            None
+        };
+
+        // 2. Log to WAL BEFORE making changes
+        if let Some(ref persistence) = self.persistence {
+            if let Some(table) = table {
+                let mut persistence_guard = persistence.lock()
+                    .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+                persistence_guard.log(&WalEntry::DropTable {
+                    name: drop.table_name.clone(),
+                    table,
+                })?;
+            }
+        }
+
+        // 3. Drop table from storage
         self.storage.drop_table(&drop.table_name)?;
 
-        // 2. Update catalog (Copy-on-Write)
+        // 4. Update catalog (Copy-on-Write)
         self.catalog = self.catalog.clone().without_table(&drop.table_name)?;
 
-        // 3. Recreate QueryExecutor with updated catalog
+        // 5. Recreate QueryExecutor with updated catalog
         self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
             crate::parser::ast::QueryStmt {
                 projection: vec![],
                 from: vec![],
                 selection: None,
+                group_by: vec![],
+                having: None,
                 order_by: vec![],
                 limit: None,
             }
         )));
 
         self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+
+        // 6. Check if checkpoint is needed
+        self.maybe_checkpoint()?;
 
         Ok(QueryResult::empty())
     }
@@ -202,6 +248,177 @@ impl InMemoryDB {
             column_count: schema.schema().column_count(),
             row_count,
         })
+    }
+
+    /// Create an index on a table column
+    pub fn create_index(&mut self, table_name: &str, column_name: &str) -> Result<()> {
+        // 1. Create index in storage
+        self.storage.create_index(table_name, column_name)?;
+        
+        // 2. Update catalog to reflect that column is indexed
+        // We need to fetch the updated schema from storage because storage.create_index updates it
+        let updated_schema = self.storage.get_schema(table_name)?;
+        
+        // 3. Update catalog
+        self.catalog = self.catalog.clone().without_table(table_name)?.with_table(updated_schema)?;
+
+        // 4. Recreate QueryExecutor with updated catalog so planner sees the new index
+        self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
+            crate::parser::ast::QueryStmt {
+                projection: vec![],
+                from: vec![],
+                selection: None,
+                group_by: vec![],
+                having: None,
+                order_by: vec![],
+                limit: None,
+            }
+        )));
+
+        self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Persistence Management
+    // ========================================================================
+
+    /// Enable persistence with Write-Ahead Logging
+    ///
+    /// # Arguments
+    /// * `data_dir` - Directory where WAL and snapshots will be stored
+    /// * `durability_mode` - SYNC, ASYNC, or NONE
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use rustmemodb::{InMemoryDB, DurabilityMode};
+    ///
+    /// let mut db = InMemoryDB::new();
+    /// db.enable_persistence("./data", DurabilityMode::Async).unwrap();
+    /// ```
+    pub fn enable_persistence<P: AsRef<Path>>(
+        &mut self,
+        data_dir: P,
+        durability_mode: DurabilityMode,
+    ) -> Result<()> {
+        if self.persistence.is_some() {
+            return Err(DbError::ExecutionError(
+                "Persistence already enabled".to_string(),
+            ));
+        }
+
+        let persistence = PersistenceManager::new(data_dir, durability_mode)?;
+        self.persistence = Some(Arc::new(Mutex::new(persistence)));
+
+        // Attempt recovery if snapshot/WAL files exist
+        self.recover_if_needed()?;
+
+        Ok(())
+    }
+
+    /// Disable persistence (switch to in-memory mode)
+    pub fn disable_persistence(&mut self) -> Result<()> {
+        self.persistence = None;
+        Ok(())
+    }
+
+    /// Manually trigger a checkpoint (snapshot + clear WAL)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use rustmemodb::InMemoryDB;
+    /// # let mut db = InMemoryDB::new();
+    /// db.checkpoint().unwrap();
+    /// ```
+    pub fn checkpoint(&mut self) -> Result<()> {
+        if let Some(ref persistence) = self.persistence {
+            let tables = self.storage.get_all_tables()?;
+            let mut persistence_guard = persistence.lock()
+                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            persistence_guard.checkpoint(&tables)?;
+        }
+        Ok(())
+    }
+
+    /// Check if persistence is enabled
+    pub fn is_persistence_enabled(&self) -> bool {
+        self.persistence.is_some()
+    }
+
+    /// Get durability mode (if persistence is enabled)
+    pub fn durability_mode(&self) -> Option<DurabilityMode> {
+        self.persistence.as_ref().and_then(|p| {
+            p.lock().ok().map(|guard| guard.durability_mode())
+        })
+    }
+
+    /// Recover database state from snapshot + WAL (if available)
+    fn recover_if_needed(&mut self) -> Result<()> {
+        let tables = if let Some(ref persistence) = self.persistence {
+            let persistence_guard = persistence.lock()
+                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            persistence_guard.recover()?
+        } else {
+            None
+        };
+
+        if let Some(tables) = tables {
+            // Restore tables to storage
+            self.storage.restore_tables(tables)?;
+
+            // Rebuild catalog from storage
+            self.rebuild_catalog()?;
+
+            println!("Database recovered from persistence");
+        }
+
+        Ok(())
+    }
+
+    /// Rebuild catalog from current storage state
+    fn rebuild_catalog(&mut self) -> Result<()> {
+        let mut new_catalog = Catalog::new();
+
+        for table_name in self.storage.list_tables() {
+            let schema = self.storage.get_schema(&table_name)?;
+            new_catalog = new_catalog.with_table(schema)?;
+        }
+
+        self.catalog = new_catalog;
+
+        // Recreate QueryExecutor with updated catalog
+        self.executor_pipeline.executors.retain(|e| {
+            !e.can_handle(&Statement::Query(crate::parser::ast::QueryStmt {
+                projection: vec![],
+                from: vec![],
+                selection: None,
+                group_by: vec![],
+                having: None,
+                order_by: vec![],
+                limit: None,
+            }))
+        });
+
+        self.executor_pipeline
+            .register(Box::new(QueryExecutor::new(self.catalog.clone())));
+
+        Ok(())
+    }
+
+    /// Check if automatic checkpoint is needed and perform it
+    fn maybe_checkpoint(&mut self) -> Result<()> {
+        if let Some(ref persistence) = self.persistence {
+            let mut persistence_guard = persistence.lock()
+                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            if persistence_guard.needs_checkpoint() {
+                let tables = self.storage.get_all_tables()?;
+                persistence_guard.checkpoint(&tables)?;
+            }
+        }
+        Ok(())
     }
 }
 

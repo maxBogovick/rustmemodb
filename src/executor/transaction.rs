@@ -158,7 +158,7 @@ mod tests {
         let txn_mgr = Arc::new(TransactionManager::new());
         let txn_id = txn_mgr.begin().unwrap();
 
-        let ctx = ExecutionContext::with_transaction(&storage, &txn_mgr, txn_id);
+        let ctx = ExecutionContext::with_transaction(&storage, &txn_mgr, txn_id, None);
 
         let result = executor.execute(&Statement::Begin, &ctx);
         assert!(result.is_err());
@@ -171,7 +171,7 @@ mod tests {
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
 
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         let result = executor.execute(&Statement::Commit, &ctx);
         assert!(result.is_err());
@@ -184,7 +184,7 @@ mod tests {
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
 
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         let result = executor.execute(&Statement::Rollback, &ctx);
         assert!(result.is_ok());

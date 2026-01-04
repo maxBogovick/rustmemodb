@@ -3,6 +3,7 @@ use crate::core::{Result, Value};
 use crate::parser::ast::{UpdateStmt, Statement};
 use crate::result::QueryResult;
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
+use crate::storage::WalEntry;
 use crate::transaction::Change;
 
 pub struct UpdateExecutor {
@@ -41,11 +42,11 @@ impl UpdateExecutor {
         let schema = ctx.storage.get_schema(&update.table_name)?;
 
         // Get all rows
-        let rows = {
+        let rows: Vec<(usize, crate::core::Row)> = {
             let table = table_handle
                 .read()
                 .map_err(|_| crate::core::DbError::ExecutionError("Table lock poisoned".into()))?;
-            table.rows().to_vec()
+            table.rows_iter().map(|(id, row)| (*id, row.clone())).collect()
         };
 
         // Create evaluation context
@@ -53,9 +54,9 @@ impl UpdateExecutor {
 
         // Find rows to update and compute new values
         let mut updates = Vec::new();
-        for (idx, row) in rows.iter().enumerate() {
+        for (id, row) in rows {
             let should_update = if let Some(ref condition) = update.selection {
-                match eval_ctx.evaluate(condition, row, schema.schema()) {
+                match eval_ctx.evaluate(condition, &row, schema.schema()) {
                     Ok(Value::Boolean(b)) => b,
                     Ok(Value::Null) => false,
                     Ok(_) => false,
@@ -80,11 +81,11 @@ impl UpdateExecutor {
                         ))?;
 
                     // Evaluate new value
-                    let new_value = eval_ctx.evaluate(&assignment.value, row, schema.schema())?;
+                    let new_value = eval_ctx.evaluate(&assignment.value, &row, schema.schema())?;
                     new_row[col_idx] = new_value;
                 }
 
-                updates.push((idx, row.clone(), new_row));
+                updates.push((id, row, new_row));
             }
         }
 
@@ -98,6 +99,18 @@ impl UpdateExecutor {
 
             for (idx, old_row, new_row) in &updates {
                 table.update_row(*idx, new_row.clone())?;
+
+                // Log to WAL if persistence is enabled
+                if let Some(ref persistence) = ctx.persistence {
+                    let mut persistence_guard = persistence.lock()
+                        .map_err(|e| crate::core::DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+                    persistence_guard.log(&WalEntry::Update {
+                        table: update.table_name.clone(),
+                        row_index: *idx,
+                        old_row: old_row.clone(),
+                        new_row: new_row.clone(),
+                    })?;
+                }
 
                 // If in transaction, record change for potential rollback
                 if let Some(txn_id) = ctx.transaction_id {

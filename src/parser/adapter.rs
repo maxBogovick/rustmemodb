@@ -297,11 +297,27 @@ impl SqlParserAdapter {
         let from = select
             .from
             .into_iter()
-            .map(|table| self.convert_table_ref(table))
+            .map(|table| self.convert_table_with_joins(table))
             .collect::<Result<Vec<_>>>()?;
 
         let selection = select
             .selection
+            .map(|expr| self.expr_converter.convert(expr))
+            .transpose()?;
+
+        let group_by = match select.group_by {
+            sql_ast::GroupByExpr::Expressions(exprs, _) => {
+                exprs.into_iter()
+                    .map(|expr| self.expr_converter.convert(expr))
+                    .collect::<Result<Vec<_>>>()?
+            }
+            sql_ast::GroupByExpr::All(_) => {
+                return Err(DbError::UnsupportedOperation("GROUP BY ALL not supported".into()));
+            }
+        };
+
+        let having = select
+            .having
             .map(|expr| self.expr_converter.convert(expr))
             .transpose()?;
 
@@ -315,14 +331,83 @@ impl SqlParserAdapter {
             projection,
             from,
             selection,
+            group_by,
+            having,
             order_by,
             limit,
         })
     }
 
-    // ========================================================================
-    // Конвертация ORDER BY из нового формата
-    // ========================================================================
+    fn convert_table_with_joins(&self, table: sql_ast::TableWithJoins) -> Result<TableWithJoins> {
+        let relation = self.convert_table_factor(table.relation)?;
+        let joins = table
+            .joins
+            .into_iter()
+            .map(|join| self.convert_join(join))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(TableWithJoins { relation, joins })
+    }
+
+    fn convert_table_factor(&self, factor: sql_ast::TableFactor) -> Result<TableFactor> {
+        match factor {
+            sql_ast::TableFactor::Table { name, alias, .. } => {
+                let table_name = extract_table_name(&name)?;
+                let table_alias = alias.map(|a| a.name.value);
+                Ok(TableFactor::Table {
+                    name: table_name,
+                    alias: table_alias,
+                })
+            }
+            _ => Err(DbError::UnsupportedOperation(
+                "Complex table references not supported".into()
+            )),
+        }
+    }
+
+    fn convert_join(&self, join: sql_ast::Join) -> Result<Join> {
+        let relation = self.convert_table_factor(join.relation)?;
+        let join_operator = self.convert_join_operator(join.join_operator)?;
+
+        Ok(Join {
+            relation,
+            join_operator,
+        })
+    }
+
+    fn convert_join_operator(&self, op: sql_ast::JoinOperator) -> Result<JoinOperator> {
+        match op {
+            sql_ast::JoinOperator::Inner(constraint) | sql_ast::JoinOperator::Join(constraint) => {
+                Ok(JoinOperator::Inner(self.convert_join_constraint(constraint)?))
+            }
+            sql_ast::JoinOperator::Left(constraint) => {
+                Ok(JoinOperator::LeftOuter(self.convert_join_constraint(constraint)?))
+            }
+            sql_ast::JoinOperator::Right(constraint) => {
+                Ok(JoinOperator::RightOuter(self.convert_join_constraint(constraint)?))
+            }
+            sql_ast::JoinOperator::FullOuter(constraint) => {
+                Ok(JoinOperator::FullOuter(self.convert_join_constraint(constraint)?))
+            }
+            sql_ast::JoinOperator::CrossJoin(_) => Ok(JoinOperator::CrossJoin),
+            _ => Err(DbError::UnsupportedOperation(format!(
+                "Unsupported join type: {:?}",
+                op
+            ))),
+        }
+    }
+
+    fn convert_join_constraint(&self, constraint: sql_ast::JoinConstraint) -> Result<JoinConstraint> {
+        match constraint {
+            sql_ast::JoinConstraint::On(expr) => {
+                Ok(JoinConstraint::On(self.expr_converter.convert(expr)?))
+            }
+            sql_ast::JoinConstraint::None => Ok(JoinConstraint::None),
+            _ => Err(DbError::UnsupportedOperation(
+                "Only ON constraint supported in JOIN".into()
+            )),
+        }
+    }
     fn convert_order_by(&self, order_by: Option<sql_ast::OrderBy>) -> Result<Vec<OrderByExpr>> {
         let Some(order_by) = order_by else {
             return Ok(Vec::new());
@@ -433,22 +518,6 @@ impl SqlParserAdapter {
             }
             _ => Err(DbError::UnsupportedOperation(
                 "Unsupported select item".into()
-            )),
-        }
-    }
-
-    fn convert_table_ref(&self, table: sql_ast::TableWithJoins) -> Result<TableRef> {
-        match table.relation {
-            sql_ast::TableFactor::Table { name, alias, .. } => {
-                let table_name = extract_table_name(&name)?;
-                let table_alias = alias.map(|a| a.name.value);
-                Ok(TableRef {
-                    name: table_name,
-                    alias: table_alias,
-                })
-            }
-            _ => Err(DbError::UnsupportedOperation(
-                "Complex table references not supported".into()
             )),
         }
     }

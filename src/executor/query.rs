@@ -4,7 +4,7 @@
 
 use crate::parser::ast::{Statement, Expr, OrderByExpr};
 use crate::planner::{LogicalPlan, QueryPlanner};
-use crate::planner::logical_plan::SortNode;
+use crate::planner::logical_plan::{SortNode, JoinType, TableScanNode};
 use crate::storage::Catalog;
 use crate::core::{Result, DbError, Row, Value, Schema};
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
@@ -54,47 +54,15 @@ impl QueryExecutor {
             LogicalPlan::Projection(proj) => self.execute_projection(proj, ctx),
             LogicalPlan::Sort(sort) => self.execute_sort(sort, ctx),
             LogicalPlan::Limit(limit) => self.execute_limit(limit, ctx),
-        }
-    }
-
-    /// Get table name from plan recursively
-    fn get_table_name(&self, plan: &LogicalPlan) -> Result<String> {
-        match plan {
-            LogicalPlan::TableScan(scan) => Ok(scan.table_name.clone()),
-            LogicalPlan::Filter(filter) => self.get_table_name(&filter.input),
-            LogicalPlan::Projection(proj) => self.get_table_name(&proj.input),
-            LogicalPlan::Sort(sort) => self.get_table_name(&sort.input),
-            LogicalPlan::Limit(limit) => self.get_table_name(&limit.input),
+            LogicalPlan::Join(join) => self.execute_join(join, ctx),
+            LogicalPlan::Aggregate(aggr) => self.execute_aggregate(aggr, ctx),
         }
     }
 
     /// Get output column names from plan
-    fn get_output_columns(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<String>> {
-        match plan {
-            LogicalPlan::TableScan(scan) => {
-                let schema = ctx.storage.get_schema(&scan.table_name)?;
-
-                if let Some(ref cols) = scan.projected_columns {
-                    Ok(cols.clone())
-                } else {
-                    Ok(schema.schema().columns().iter().map(|col| col.name.clone()).collect())
-                }
-            }
-
-            LogicalPlan::Projection(proj) => {
-                Ok(proj.expressions.iter().enumerate().map(|(i, expr)| {
-                    match expr {
-                        Expr::Column(name) => name.clone(),
-                        _ => format!("col_{}", i),
-                    }
-                }).collect())
-            }
-
-            // Recurse for other nodes
-            LogicalPlan::Filter(filter) => self.get_output_columns(&filter.input, ctx),
-            LogicalPlan::Sort(sort) => self.get_output_columns(&sort.input, ctx),
-            LogicalPlan::Limit(limit) => self.get_output_columns(&limit.input, ctx),
-        }
+    fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext) -> Result<Vec<String>> {
+        let schema = plan.schema();
+        Ok(schema.columns().iter().map(|c| c.name.clone()).collect())
     }
 }
 
@@ -103,12 +71,159 @@ impl QueryExecutor {
 // ============================================================================
 
 impl QueryExecutor {
+    /// Execute aggregation
+    fn execute_aggregate(
+        &self,
+        aggr: &crate::planner::logical_plan::AggregateNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        let input_rows = self.execute_plan(&aggr.input, ctx)?;
+        let input_schema = aggr.input.schema();
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+
+        // 1. Group rows
+        // Key: Grouping values, Value: List of rows in this group
+        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> = std::collections::HashMap::new();
+
+        if aggr.group_exprs.is_empty() {
+            // Implicit global group
+            groups.insert(vec![], input_rows);
+        } else {
+            for row in input_rows {
+                let mut key = Vec::new();
+                for expr in &aggr.group_exprs {
+                    key.push(eval_ctx.evaluate(expr, &row, input_schema)?);
+                }
+                groups.entry(key).or_insert_with(Vec::new).push(row);
+            }
+        }
+
+        // 2. Compute aggregates for each group
+        let mut result_rows = Vec::new();
+
+        for (group_key, group_rows) in groups {
+            let mut row = Vec::new();
+            
+            // Append grouping values first
+            row.extend(group_key);
+            
+            // Append aggregate results
+            for expr in &aggr.aggr_exprs {
+                if let Expr::Function { name, args } = expr {
+                    let val = self.evaluate_aggregate(name, args, &group_rows, input_schema, &eval_ctx)?;
+                    row.push(val);
+                } else {
+                    return Err(DbError::ExecutionError("Non-aggregate expression in aggregate list".into()));
+                }
+            }
+            
+            result_rows.push(row);
+        }
+
+        Ok(result_rows)
+    }
+
+    /// Execute join operation (Nested Loop Join)
+    fn execute_join(
+        &self,
+        join: &crate::planner::logical_plan::JoinNode,
+        ctx: &ExecutionContext,
+    ) -> Result<Vec<Row>> {
+        let left_rows = self.execute_plan(&join.left, ctx)?;
+        let right_rows = self.execute_plan(&join.right, ctx)?;
+        let schema = &join.schema; // Schema of the join result
+
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let mut result = Vec::new();
+
+        use crate::planner::logical_plan::JoinType;
+
+        match join.join_type {
+            JoinType::Inner | JoinType::Cross => {
+                for left_row in &left_rows {
+                    for right_row in &right_rows {
+                        // Combine rows temporarily to evaluate ON condition
+                        let mut combined_row = left_row.clone();
+                        combined_row.extend(right_row.clone());
+
+                        if join.join_type == JoinType::Cross || self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema) {
+                            result.push(combined_row);
+                        }
+                    }
+                }
+            }
+            JoinType::Left => {
+                let right_width = right_rows.first().map(|r| r.len()).unwrap_or(0); // This might be wrong if right is empty
+                // Need to get right width from schema?
+                // Actually, execute_plan returns rows, so if empty, we can't know width easily without schema.
+                // But join.right.schema() has it!
+                let right_width = join.right.schema().column_count();
+
+                for left_row in &left_rows {
+                    let mut matched = false;
+                    for right_row in &right_rows {
+                        let mut combined_row = left_row.clone();
+                        combined_row.extend(right_row.clone());
+
+                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema) {
+                            result.push(combined_row);
+                            matched = true;
+                        }
+                    }
+
+                    if !matched {
+                        let mut combined_row = left_row.clone();
+                        combined_row.extend(vec![Value::Null; right_width]);
+                        result.push(combined_row);
+                    }
+                }
+            }
+            JoinType::Right => {
+                let left_width = join.left.schema().column_count();
+                
+                for right_row in &right_rows {
+                    let mut matched = false;
+                    for left_row in &left_rows {
+                        let mut combined_row = left_row.clone();
+                        combined_row.extend(right_row.clone());
+
+                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema) {
+                            result.push(combined_row);
+                            matched = true;
+                        }
+                    }
+
+                    if !matched {
+                        let mut combined_row = vec![Value::Null; left_width];
+                        combined_row.extend(right_row.clone());
+                        result.push(combined_row);
+                    }
+                }
+            }
+            JoinType::Full => {
+                // TODO: Full Outer Join implementation
+                // Requires tracking matched rows from both sides
+                return Err(DbError::UnsupportedOperation("Full Outer Join not yet implemented".into()));
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Execute table scan
     fn execute_scan(
         &self,
         scan: &crate::planner::logical_plan::TableScanNode,
         ctx: &ExecutionContext,
     ) -> Result<Vec<Row>> {
+        if let Some(ref idx) = scan.index_scan {
+            // Try to use index
+            if let Some(rows) = ctx.storage.scan_index(&scan.table_name, &idx.column, &idx.value)? {
+                return Ok(rows);
+            }
+            // If index scan returned None (e.g. index dropped concurrently?), fallback to full scan
+        }
+        
         ctx.storage.scan_table(&scan.table_name)
     }
 
@@ -119,14 +234,13 @@ impl QueryExecutor {
         ctx: &ExecutionContext,
     ) -> Result<Vec<Row>> {
         let input_rows = self.execute_plan(&filter.input, ctx)?;
-        let table_name = self.get_table_name(&filter.input)?;
-        let schema = ctx.storage.get_schema(&table_name)?;
+        let schema = &filter.schema;
 
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
 
         Ok(input_rows
             .into_iter()
-            .filter(|row| self.evaluate_predicate(&eval_ctx, &filter.predicate, row, schema.schema()))
+            .filter(|row| self.evaluate_predicate(&eval_ctx, &filter.predicate, row, schema))
             .collect())
     }
 
@@ -137,19 +251,18 @@ impl QueryExecutor {
         ctx: &ExecutionContext,
     ) -> Result<Vec<Row>> {
         let input_rows = self.execute_plan(&proj.input, ctx)?;
-        let table_name = self.get_table_name(&proj.input)?;
-        let schema = ctx.storage.get_schema(&table_name)?;
+        let input_schema = proj.input.schema(); // Projection needs input schema to evaluate expressions
 
         // Check for aggregate functions
         if self.has_aggregate_functions(&proj.expressions) {
-            return self.execute_aggregation(&proj.expressions, &input_rows, schema.schema());
+            return self.execute_aggregation(&proj.expressions, &input_rows, input_schema);
         }
 
         // Regular projection
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
         input_rows
             .into_iter()
-            .map(|row| self.project_row(&proj.expressions, &row, schema.schema(), &eval_ctx))
+            .map(|row| self.project_row(&proj.expressions, &row, input_schema, &eval_ctx))
             .collect()
     }
 
@@ -165,12 +278,11 @@ impl QueryExecutor {
             return Ok(rows);
         }
 
-        let table_name = self.get_table_name(&sort.input)?;
-        let schema = ctx.storage.get_schema(&table_name)?;
+        let schema = &sort.schema;
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
 
         // Sort with error handling
-        let sort_result = self.sort_rows(&mut rows, &sort.order_by, schema.schema(), &eval_ctx);
+        let sort_result = self.sort_rows(&mut rows, &sort.order_by, schema, &eval_ctx);
         sort_result.map(|_| rows)
     }
 
@@ -567,7 +679,8 @@ mod tests {
     use super::*;
     use crate::storage::{InMemoryStorage, Catalog, TableSchema};
     use crate::core::{Column, DataType, Value};
-    use crate::planner::TableScanNode;
+    use crate::parser::ast::BinaryOp;
+    use crate::planner::{FilterNode, TableScanNode};
 
     fn setup_test_storage() -> (InMemoryStorage, Catalog) {
         let mut storage = InMemoryStorage::new();
@@ -612,17 +725,26 @@ mod tests {
         (storage, catalog)
     }
 
+    fn create_test_schema() -> Schema {
+        Schema::new(vec![
+            Column::new("id", DataType::Integer).not_null(),
+            Column::new("name", DataType::Text),
+            Column::new("age", DataType::Integer),
+        ])
+    }
+
     #[test]
     fn test_simple_scan() {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode};
         let plan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&plan, &ctx).unwrap();
@@ -634,15 +756,13 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-        use crate::parser::ast::{Expr, BinaryOp};
-
-        // SELECT * FROM users WHERE age > 26
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let filter = LogicalPlan::Filter(FilterNode {
@@ -652,6 +772,7 @@ mod tests {
                 op: BinaryOp::Gt,
                 right: Box::new(Expr::Literal(Value::Integer(26))),
             },
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&filter, &ctx).unwrap();
@@ -663,20 +784,19 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, ProjectionNode};
-        use crate::parser::ast::Expr;
-
-        // SELECT name FROM users
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let projection = LogicalPlan::Projection(ProjectionNode {
             input: Box::new(scan),
             expressions: vec![Expr::Column("name".to_string())],
+            schema: Schema::new(vec![Column::new("name", DataType::Text)]),
         });
 
         let rows = executor.execute_plan(&projection, &ctx).unwrap();
@@ -689,7 +809,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, LimitNode};
 
@@ -717,7 +837,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -749,7 +869,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -781,7 +901,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -819,7 +939,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, SortNode};
         use crate::parser::ast::BinaryOp;
@@ -862,7 +982,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode, LimitNode};
 
@@ -916,7 +1036,7 @@ mod tests {
 
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
 
@@ -948,7 +1068,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
         use crate::parser::ast::BinaryOp;
@@ -985,7 +1105,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, ProjectionNode, LimitNode};
         use crate::parser::ast::BinaryOp;
@@ -1025,7 +1145,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
 
@@ -1054,7 +1174,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
 
@@ -1106,7 +1226,7 @@ mod tests {
 
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
 
@@ -1133,7 +1253,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
         use crate::parser::ast::BinaryOp;
@@ -1170,7 +1290,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         use crate::planner::logical_plan::{LogicalPlan, TableScanNode};
 
@@ -1188,7 +1308,7 @@ mod tests {
         let (storage, catalog) = setup_test_storage();
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),

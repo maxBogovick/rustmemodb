@@ -1,6 +1,6 @@
-use crate::storage::InMemoryStorage;
+use crate::storage::{InMemoryStorage, PersistenceManager};
 use crate::transaction::{TransactionId, TransactionManager};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Execution context for query/statement execution
 ///
@@ -15,15 +15,23 @@ pub struct ExecutionContext<'a> {
 
     /// Current transaction ID (None = auto-commit mode)
     pub transaction_id: Option<TransactionId>,
+
+    /// Reference to persistence manager for WAL logging (optional)
+    pub persistence: Option<&'a Arc<Mutex<PersistenceManager>>>,
 }
 
 impl<'a> ExecutionContext<'a> {
     /// Create a new execution context (auto-commit mode)
-    pub fn new(storage: &'a InMemoryStorage, transaction_manager: &'a Arc<TransactionManager>) -> Self {
+    pub fn new(
+        storage: &'a InMemoryStorage,
+        transaction_manager: &'a Arc<TransactionManager>,
+        persistence: Option<&'a Arc<Mutex<PersistenceManager>>>,
+    ) -> Self {
         Self {
             storage,
             transaction_manager,
             transaction_id: None,
+            persistence,
         }
     }
 
@@ -32,11 +40,13 @@ impl<'a> ExecutionContext<'a> {
         storage: &'a InMemoryStorage,
         transaction_manager: &'a Arc<TransactionManager>,
         transaction_id: TransactionId,
+        persistence: Option<&'a Arc<Mutex<PersistenceManager>>>,
     ) -> Self {
         Self {
             storage,
             transaction_manager,
             transaction_id: Some(transaction_id),
+            persistence,
         }
     }
 

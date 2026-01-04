@@ -55,7 +55,8 @@ impl InMemoryStorage {
             .write()
             .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
 
-        table.insert(row)
+        table.insert(row)?;
+        Ok(())
     }
 
     /// Сканировать таблицу - read lock только на одну таблицу
@@ -66,7 +67,7 @@ impl InMemoryStorage {
             .read()
             .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
 
-        Ok(table.rows().to_vec())
+        Ok(table.rows_iter().map(|(_, r)| r.clone()).collect())
     }
 
     /// Insert a row at a specific index (for transaction rollback)
@@ -77,7 +78,7 @@ impl InMemoryStorage {
             .write()
             .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
 
-        table.insert_row_at_index(index, row)
+        table.insert_at_id(index, row)
     }
 
     /// Получить схему таблицы
@@ -138,6 +139,68 @@ impl InMemoryStorage {
     /// Get all rows from a table (for transaction snapshotting)
     pub fn get_all_rows(&self, table_name: &str) -> Result<Vec<Row>> {
         self.scan_table(table_name)
+    }
+
+    /// Create an index on a column
+    pub fn create_index(&self, table_name: &str, column_name: &str) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+        let mut table = table_handle
+            .write()
+            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        
+        table.create_index(column_name)
+    }
+
+    /// Scan a table using an index (exact match)
+    pub fn scan_index(&self, table_name: &str, column_name: &str, value: &crate::core::Value) -> Result<Option<Vec<Row>>> {
+        let table_handle = self.get_table(table_name)?;
+        let table = table_handle
+            .read()
+            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+
+        if let Some(index) = table.get_index(column_name) {
+            if let Some(ids) = index.get(value) {
+                let mut rows = Vec::with_capacity(ids.len());
+                for id in ids {
+                    if let Some(row) = table.get_row(*id) {
+                        rows.push(row.clone());
+                    }
+                }
+                return Ok(Some(rows));
+            } else {
+                return Ok(Some(Vec::new())); // Index exists but no match
+            }
+        }
+        
+        Ok(None) // Index does not exist
+    }
+
+    /// Get all tables (for persistence snapshots)
+    pub fn get_all_tables(&self) -> Result<std::collections::HashMap<String, Table>> {
+        let mut tables = std::collections::HashMap::new();
+
+        for (name, table_handle) in &self.tables {
+            let table = table_handle
+                .read()
+                .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+
+            tables.insert(name.clone(), table.clone());
+        }
+
+        Ok(tables)
+    }
+
+    /// Restore tables from a snapshot (for crash recovery)
+    pub fn restore_tables(&mut self, tables: std::collections::HashMap<String, Table>) -> Result<()> {
+        // Clear existing tables
+        self.tables.clear();
+
+        // Restore from snapshot
+        for (name, table) in tables {
+            self.tables.insert(name, Arc::new(RwLock::new(table)));
+        }
+
+        Ok(())
     }
 }
 

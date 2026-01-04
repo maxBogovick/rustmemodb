@@ -49,22 +49,50 @@ pub struct InsertStmt {
 #[derive(Debug, Clone)]
 pub struct QueryStmt {
     pub projection: Vec<SelectItem>,
-    pub from: Vec<TableRef>,
+    pub from: Vec<TableWithJoins>,
     pub selection: Option<Expr>,
+    pub group_by: Vec<Expr>,
+    pub having: Option<Expr>,
     pub order_by: Vec<OrderByExpr>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableWithJoins {
+    pub relation: TableFactor,
+    pub joins: Vec<Join>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TableFactor {
+    Table { name: String, alias: Option<String> },
+}
+
+#[derive(Debug, Clone)]
+pub struct Join {
+    pub relation: TableFactor,
+    pub join_operator: JoinOperator,
+}
+
+#[derive(Debug, Clone)]
+pub enum JoinOperator {
+    Inner(JoinConstraint),
+    LeftOuter(JoinConstraint),
+    RightOuter(JoinConstraint),
+    FullOuter(JoinConstraint),
+    CrossJoin,
+}
+
+#[derive(Debug, Clone)]
+pub enum JoinConstraint {
+    On(Expr),
+    None,
 }
 
 #[derive(Debug, Clone)]
 pub enum SelectItem {
     Wildcard,
     Expr { expr: Expr, alias: Option<String> },
-}
-
-#[derive(Debug, Clone)]
-pub struct TableRef {
-    pub name: String,
-    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,10 +123,13 @@ pub struct Assignment {
 }
 
 /// Expression types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// Column reference
     Column(String),
+
+    /// Compound identifier (e.g. table.column)
+    CompoundIdentifier(Vec<String>),
 
     /// Literal value
     Literal(Value),
@@ -185,4 +216,126 @@ pub enum UnaryOp {
     Not,
     Minus,
     Plus,
+}
+
+use std::fmt;
+
+
+
+impl fmt::Display for Expr {
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+        match self {
+
+            Expr::Column(name) => write!(f, "{}", name),
+
+            Expr::CompoundIdentifier(parts) => write!(f, "{}", parts.join(".")),
+
+            Expr::Literal(val) => write!(f, "{}", val),
+
+            Expr::BinaryOp { left, op, right } => write!(f, "({} {} {})", left, op, right),
+
+            Expr::UnaryOp { op, expr } => write!(f, "{}{}", op, expr),
+
+            Expr::Like { expr, pattern, negated, .. } => {
+
+                write!(f, "{} {}LIKE {}", expr, if *negated { "NOT " } else { "" }, pattern)
+
+            }
+
+            Expr::Between { expr, low, high, negated } => {
+
+                write!(f, "{} {}BETWEEN {} AND {}", expr, if *negated { "NOT " } else { "" }, low, high)
+
+            }
+
+            Expr::In { expr, list, negated } => {
+
+                let list_str: Vec<String> = list.iter().map(|e| format!("{}", e)).collect();
+
+                write!(f, "{} {}IN ({})", expr, if *negated { "NOT " } else { "" }, list_str.join(", "))
+
+            }
+
+            Expr::IsNull { expr, negated } => {
+
+                write!(f, "{} IS {}NULL", expr, if *negated { "NOT " } else { "" })
+
+            }
+
+            Expr::Not { expr } => write!(f, "NOT {}", expr),
+
+            Expr::Function { name, args } => {
+
+                let args_str: Vec<String> = args.iter().map(|e| format!("{}", e)).collect();
+
+                write!(f, "{}({})", name, args_str.join(", "))
+
+            }
+
+        }
+
+    }
+
+}
+
+
+
+impl fmt::Display for BinaryOp {
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+        match self {
+
+            BinaryOp::Add => write!(f, "+"),
+
+            BinaryOp::Subtract => write!(f, "-"),
+
+            BinaryOp::Multiply => write!(f, "*"),
+
+            BinaryOp::Divide => write!(f, "/"),
+
+            BinaryOp::Modulo => write!(f, "%"),
+
+            BinaryOp::Eq => write!(f, "="),
+
+            BinaryOp::NotEq => write!(f, "!="),
+
+            BinaryOp::Lt => write!(f, "<"),
+
+            BinaryOp::LtEq => write!(f, "<="),
+
+            BinaryOp::Gt => write!(f, ">"),
+
+            BinaryOp::GtEq => write!(f, ">="),
+
+            BinaryOp::And => write!(f, "AND"),
+
+            BinaryOp::Or => write!(f, "OR"),
+
+        }
+
+    }
+
+}
+
+
+
+impl fmt::Display for UnaryOp {
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+        match self {
+
+            UnaryOp::Not => write!(f, "NOT"),
+
+            UnaryOp::Minus => write!(f, "-"),
+
+            UnaryOp::Plus => write!(f, "+"),
+
+        }
+
+    }
+
 }

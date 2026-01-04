@@ -39,6 +39,16 @@ impl<'a> EvaluationContext<'a> {
                     ))?;
                 return Ok(row[idx].clone());
             }
+            Expr::CompoundIdentifier(parts) => {
+                let name = parts.join(".");
+                let idx = schema
+                    .find_column_index(&name)
+                    .ok_or_else(|| crate::core::DbError::ColumnNotFound(
+                        name.clone(),
+                        "table".into()
+                    ))?;
+                return Ok(row[idx].clone());
+            }
             Expr::Literal(val) => {
                 return Ok(val.clone());
             }

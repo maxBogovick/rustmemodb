@@ -99,6 +99,10 @@ impl ExpressionConverter {
             sql_ast::Expr::Identifier(ident) => {
                 return Ok(Expr::Column(ident.value.clone()));
             }
+            sql_ast::Expr::CompoundIdentifier(idents) => {
+                let parts: Vec<String> = idents.iter().map(|i| i.value.clone()).collect();
+                return Ok(Expr::CompoundIdentifier(parts));
+            }
             sql_ast::Expr::Value(val) => {
                 return Ok(Expr::Literal(self.convert_value(&val.value)?));
             }

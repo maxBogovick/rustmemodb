@@ -29,8 +29,8 @@
 
 ### 📚 Additional Documentation
 
-- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - Complete guide for adding new features to RustMemoDB
-- **[PRODUCTION_READINESS_ANALYSIS.md](PRODUCTION_READINESS_ANALYSIS.md)** - Production readiness assessment
+- **[DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)** - Complete guide for adding new features to RustMemoDB
+- **[PRODUCTION_READINESS_ANALYSIS.md](docs/PRODUCTION_READINESS_ANALYSIS.md)** - Production readiness assessment
 ---
 
 ## 🎯 Overview
@@ -1056,7 +1056,7 @@ RustMemDB uses a **plugin-based architecture** that makes it easy to add new SQL
 
 ### Developer Guide
 
-📚 **See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for comprehensive instructions on:**
+📚 **See [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for comprehensive instructions on:**
 
 - Understanding the two plugin systems (conversion + evaluation)
 - Adding new SQL operators and functions (step-by-step)
@@ -1101,7 +1101,7 @@ registry.register(Box::new(StringFunctionEvaluator));
 
 That's it! Now you can use `SELECT UPPER(name) FROM users`.
 
-For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md).
 
 ---
 
@@ -1129,7 +1129,7 @@ For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md
 
 ### Known Issues
 
-See [CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md) for detailed issue analysis.
+See [CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md) for detailed issue analysis.
 
 **Critical:**
 - Float comparison uses fixed epsilon (incorrect for large numbers)
@@ -1201,13 +1201,13 @@ Contributions are welcome! This is an educational project, so clear, well-docume
 ### Developer Resources
 
 📚 **New to the codebase?** Start with these guides:
-- **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** - Complete guide to adding new features
-- **[PRODUCTION_READINESS_ANALYSIS.md](PRODUCTION_READINESS_ANALYSIS.md)** - Architecture analysis and known issues
-- **[CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md)** - Detailed code review findings
+- **[DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)** - Complete guide to adding new features
+- **[PRODUCTION_READINESS_ANALYSIS.md](docs/PRODUCTION_READINESS_ANALYSIS.md)** - Architecture analysis and known issues
+- **[CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md)** - Detailed code review findings
 
 ### How to Contribute
 
-1. **Read [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** for architecture overview
+1. **Read [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)** for architecture overview
 2. **Fork the repository**
 3. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
 4. **Write tests** for your changes
@@ -1221,7 +1221,7 @@ Contributions are welcome! This is an educational project, so clear, well-docume
 ### Development Guidelines
 
 - **Code Clarity** > Performance (unless critical path)
-- **Add tests** for all new features (see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) for test checklist)
+- **Add tests** for all new features (see [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for test checklist)
 - **Document public APIs** with `///` comments
 - **Follow Rust conventions** (cargo fmt, clippy)
 - **Update README** if adding user-facing features

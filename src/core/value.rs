@@ -1,9 +1,10 @@
 use crate::core::{DbError, Result};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
     Null,
     Integer(i64),
@@ -11,8 +12,6 @@ pub enum Value {
     Text(String),
     Boolean(bool),
 }
-
-use std::str::FromStr;
 
 impl Value {
     /// Парсинг числа БЕЗ аллокаций
@@ -154,6 +153,16 @@ impl Value {
     pub fn is_numeric(&self) -> bool {
         matches!(self, Self::Integer(_) | Self::Float(_))
     }
+
+    fn type_index(&self) -> u8 {
+        match self {
+            Self::Null => 0,
+            Self::Integer(_) => 1,
+            Self::Float(_) => 2,
+            Self::Text(_) => 3,
+            Self::Boolean(_) => 4,
+        }
+    }
 }
 
 impl PartialEq for Value {
@@ -202,6 +211,36 @@ impl PartialOrd for Value {
             (Self::Boolean(a), Self::Boolean(b)) => a.partial_cmp(b),
 
             _ => None,
+        }
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Null, Self::Null) => Ordering::Equal,
+            (Self::Null, _) => Ordering::Less,
+            (_, Self::Null) => Ordering::Greater,
+
+            (Self::Integer(a), Self::Integer(b)) => a.cmp(b),
+            (Self::Float(a), Self::Float(b)) => {
+                match (a.is_nan(), b.is_nan()) {
+                    (true, true) => Ordering::Equal,
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                    (false, false) => a.partial_cmp(b).unwrap(),
+                }
+            }
+            (Self::Text(a), Self::Text(b)) => a.cmp(b),
+            (Self::Boolean(a), Self::Boolean(b)) => a.cmp(b),
+
+            // Cross-type comparison: order by type variant index
+            // Null (0) < Integer (1) < Float (2) < Text (3) < Boolean (4)
+            (a, b) => {
+                let a_idx = a.type_index();
+                let b_idx = b.type_index();
+                a_idx.cmp(&b_idx)
+            }
         }
     }
 }
@@ -285,7 +324,7 @@ impl From<bool> for Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DataType {
     Integer,
     Float,

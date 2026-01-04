@@ -8,6 +8,7 @@ pub mod result;
 pub mod facade;
 pub mod connection;
 pub mod transaction;
+pub mod json;
 mod parser;
 mod planner;
 mod executor;
@@ -19,6 +20,12 @@ mod evaluator;
 pub use facade::InMemoryDB;
 pub use core::{Result, DbError, Value, DataType};
 pub use result::QueryResult;
+
+// Re-export persistence types
+pub use storage::{DurabilityMode, PersistenceManager, WalEntry};
+
+// Re-export JSON API
+pub use json::{JsonStorageAdapter, JsonError, JsonResult};
 
 // Re-export connection API
 pub use connection::{
