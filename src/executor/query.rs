@@ -680,7 +680,7 @@ mod tests {
     use crate::storage::{InMemoryStorage, Catalog, TableSchema};
     use crate::core::{Column, DataType, Value};
     use crate::parser::ast::BinaryOp;
-    use crate::planner::{FilterNode, TableScanNode};
+    use crate::planner::logical_plan::{FilterNode, TableScanNode, ProjectionNode, LimitNode, SortNode};
 
     fn setup_test_storage() -> (InMemoryStorage, Catalog) {
         let mut storage = InMemoryStorage::new();
@@ -811,17 +811,17 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, LimitNode};
-
-        // SELECT * FROM users LIMIT 2
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let limit = LogicalPlan::Limit(LimitNode {
             input: Box::new(scan),
             limit: 2,
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&limit, &ctx).unwrap();
@@ -839,12 +839,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
-
         // SELECT * FROM users ORDER BY age ASC
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -853,6 +853,7 @@ mod tests {
                 expr: Expr::Column("age".to_string()),
                 descending: false,
             }],
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&sort, &ctx).unwrap();
@@ -871,12 +872,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
-
         // SELECT * FROM users ORDER BY age DESC
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -885,6 +886,7 @@ mod tests {
                 expr: Expr::Column("age".to_string()),
                 descending: true,
             }],
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&sort, &ctx).unwrap();
@@ -903,12 +905,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
-
         // SELECT * FROM users ORDER BY age ASC, name ASC
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -923,6 +925,7 @@ mod tests {
                     descending: false,
                 },
             ],
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&sort, &ctx).unwrap();
@@ -941,13 +944,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, SortNode};
-        use crate::parser::ast::BinaryOp;
-
         // SELECT * FROM users WHERE age > 24 ORDER BY name DESC
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let filter = LogicalPlan::Filter(FilterNode {
@@ -957,6 +959,7 @@ mod tests {
                 op: BinaryOp::Gt,
                 right: Box::new(Expr::Literal(Value::Integer(24))),
             },
+            schema: create_test_schema(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -965,6 +968,7 @@ mod tests {
                 expr: Expr::Column("name".to_string()),
                 descending: true,
             }],
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&sort, &ctx).unwrap();
@@ -984,12 +988,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode, LimitNode};
-
         // SELECT * FROM users ORDER BY age DESC LIMIT 2
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -998,11 +1002,13 @@ mod tests {
                 expr: Expr::Column("age".to_string()),
                 descending: true,
             }],
+            schema: create_test_schema(),
         });
 
         let limit = LogicalPlan::Limit(LimitNode {
             input: Box::new(sort),
             limit: 2,
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&limit, &ctx).unwrap();
@@ -1023,7 +1029,8 @@ mod tests {
             Column::new("id", DataType::Integer).not_null(),
             Column::new("value", DataType::Integer), // nullable
         ];
-        let schema = TableSchema::new("test", columns);
+        let schema = TableSchema::new("test", columns.clone());
+        let test_schema = Schema::new(columns);
 
         storage.create_table(schema.clone()).unwrap();
         catalog = catalog.with_table(schema).unwrap();
@@ -1038,12 +1045,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
-
         // SELECT * FROM test ORDER BY value ASC
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "test".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: test_schema.clone(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -1052,6 +1059,7 @@ mod tests {
                 expr: Expr::Column("value".to_string()),
                 descending: false,
             }],
+            schema: test_schema,
         });
 
         let rows = executor.execute_plan(&sort, &ctx).unwrap();
@@ -1070,13 +1078,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, SortNode};
-        use crate::parser::ast::BinaryOp;
-
         // SELECT * FROM users ORDER BY age * -1 ASC (equivalent to ORDER BY age DESC)
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -1089,6 +1096,7 @@ mod tests {
                 },
                 descending: false,
             }],
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&sort, &ctx).unwrap();
@@ -1107,13 +1115,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode, ProjectionNode, LimitNode};
-        use crate::parser::ast::BinaryOp;
-
         // SELECT name FROM users WHERE age > 26 LIMIT 1
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let filter = LogicalPlan::Filter(FilterNode {
@@ -1123,16 +1130,19 @@ mod tests {
                 op: BinaryOp::Gt,
                 right: Box::new(Expr::Literal(Value::Integer(26))),
             },
+            schema: create_test_schema(),
         });
 
         let projection = LogicalPlan::Projection(ProjectionNode {
             input: Box::new(filter),
             expressions: vec![Expr::Column("name".to_string())],
+            schema: Schema::new(vec![Column::new("name", DataType::Text)]),
         });
 
         let limit = LogicalPlan::Limit(LimitNode {
             input: Box::new(projection),
             limit: 1,
+            schema: Schema::new(vec![Column::new("name", DataType::Text)]),
         });
 
         let rows = executor.execute_plan(&limit, &ctx).unwrap();
@@ -1147,12 +1157,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-
         // SELECT * FROM users WHERE name LIKE 'A%'
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let filter = LogicalPlan::Filter(FilterNode {
@@ -1163,6 +1173,7 @@ mod tests {
                 negated: false,
                 case_insensitive: false,
             },
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&filter, &ctx).unwrap();
@@ -1176,12 +1187,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-
         // SELECT * FROM users WHERE age BETWEEN 25 AND 30
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let filter = LogicalPlan::Filter(FilterNode {
@@ -1192,6 +1203,7 @@ mod tests {
                 high: Box::new(Expr::Literal(Value::Integer(30))),
                 negated: false,
             },
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&filter, &ctx).unwrap();
@@ -1208,7 +1220,8 @@ mod tests {
             Column::new("id", DataType::Integer).not_null(),
             Column::new("name", DataType::Text), // nullable
         ];
-        let schema = TableSchema::new("test", columns);
+        let schema = TableSchema::new("test", columns.clone());
+        let test_schema = Schema::new(columns);
 
         storage.create_table(schema.clone()).unwrap();
         catalog = catalog.with_table(schema).unwrap();
@@ -1228,12 +1241,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-
         // SELECT * FROM test WHERE name IS NULL
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "test".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: test_schema.clone(),
         });
 
         let filter = LogicalPlan::Filter(FilterNode {
@@ -1242,6 +1255,7 @@ mod tests {
                 expr: Box::new(Expr::Column("name".to_string())),
                 negated: false,
             },
+            schema: test_schema,
         });
 
         let rows = executor.execute_plan(&filter, &ctx).unwrap();
@@ -1255,13 +1269,12 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode, FilterNode};
-        use crate::parser::ast::BinaryOp;
-
         // SELECT * FROM users WHERE age > 26 AND age < 32
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let filter = LogicalPlan::Filter(FilterNode {
@@ -1279,6 +1292,7 @@ mod tests {
                     right: Box::new(Expr::Literal(Value::Integer(32))),
                 }),
             },
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&filter, &ctx).unwrap();
@@ -1292,17 +1306,18 @@ mod tests {
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        use crate::planner::logical_plan::{LogicalPlan, TableScanNode};
-
         // Test wildcard
-        let scan = LogicalPlan::TableScan(TableScanNode {
+        let scan = TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
-        });
+            index_scan: None,
+            schema: create_test_schema(),
+        };
 
-        let columns = executor.get_output_columns(&scan, &ctx).unwrap();
+        let columns = executor.get_output_columns(&LogicalPlan::TableScan(scan), &ctx).unwrap();
         assert_eq!(columns, vec!["id", "name", "age"]);
     }
+
     #[test]
     fn test_order_by_with_value_compare() {
         let (storage, catalog) = setup_test_storage();
@@ -1313,6 +1328,8 @@ mod tests {
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
             projected_columns: None,
+            index_scan: None,
+            schema: create_test_schema(),
         });
 
         let sort = LogicalPlan::Sort(SortNode {
@@ -1321,6 +1338,7 @@ mod tests {
                 expr: Expr::Column("age".to_string()),
                 descending: false,
             }],
+            schema: create_test_schema(),
         });
 
         let rows = executor.execute_plan(&sort, &ctx).unwrap();
