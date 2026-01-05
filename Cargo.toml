@@ -31,3 +31,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rmp-serde = "1.3"      # MessagePack for compact binary serialization
 tempfile = "3.8"       # For atomic writes
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+async-recursion = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"

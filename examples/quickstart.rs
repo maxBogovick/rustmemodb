@@ -6,7 +6,8 @@
 
 use rustmemodb::{Client, InMemoryDB};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 RustMemDB Quick Start\n");
     println!("{}", "=".repeat(60));
 
@@ -26,22 +27,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             age INTEGER,
             active BOOLEAN
         )"
-    )?;
+    ).await?;
 
     // Insert data
-    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)")?;
-    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)")?;
-    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)")?;
+    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)").await?;
+    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)").await?;
+    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)").await?;
 
     // Query data
     println!("\n📊 All users:");
-    let result = db.execute("SELECT * FROM users")?;
+    let result = db.execute("SELECT * FROM users").await?;
     result.print();
 
     println!("\n📊 Active users over 26:");
     let result = db.execute(
         "SELECT name, age FROM users WHERE active = true AND age > 26"
-    )?;
+    ).await?;
     result.print();
 
     // ============================================
@@ -52,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     // Connect to database
-    let client = Client::connect("admin", "adminpass")?;
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
     // Create products table
     client.execute(
@@ -62,32 +63,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             price FLOAT,
             stock INTEGER
         )"
-    )?;
+    ).await?;
 
     // Insert products
-    client.execute("INSERT INTO products VALUES (1, 'Laptop', 999.99, 10)")?;
-    client.execute("INSERT INTO products VALUES (2, 'Mouse', 29.99, 50)")?;
-    client.execute("INSERT INTO products VALUES (3, 'Keyboard', 79.99, 30)")?;
+    client.execute("INSERT INTO products VALUES (1, 'Laptop', 999.99, 10)").await?;
+    client.execute("INSERT INTO products VALUES (2, 'Mouse', 29.99, 50)").await?;
+    client.execute("INSERT INTO products VALUES (3, 'Keyboard', 79.99, 30)").await?;
 
     // Simple query
     println!("\n📊 All products:");
-    let result = client.query("SELECT * FROM products")?;
+    let result = client.query("SELECT * FROM products").await?;
     result.print();
 
     // Query with WHERE clause
     println!("\n📊 Products over $50:");
     let result = client.query(
         "SELECT name, price FROM products WHERE price > 50 ORDER BY price DESC"
-    )?;
+    ).await?;
     result.print();
 
     // Update operation
     println!("\n🔄 Applying 10% discount...");
-    let result = client.execute("UPDATE products SET price = price * 0.9")?;
+    let result = client.execute("UPDATE products SET price = price * 0.9").await?;
     println!("✅ Updated {} products", result.affected_rows().unwrap_or(0));
 
     println!("\n📊 Products after discount:");
-    let result = client.query("SELECT name, price FROM products ORDER BY price DESC")?;
+    let result = client.query("SELECT name, price FROM products ORDER BY price DESC").await?;
     result.print();
 
     // ============================================
@@ -104,27 +105,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             product_id INTEGER,
             quantity INTEGER
         )"
-    )?;
+    ).await?;
 
     // Get a connection for transaction
-    let mut conn = client.get_connection()?;
+    let mut conn = client.get_connection().await?;
 
     println!("\n🔄 Starting transaction...");
-    conn.begin()?;
+    conn.begin().await?;
 
     // Place an order (decrease stock and create order record)
-    conn.execute("INSERT INTO orders VALUES (1, 1, 2)")?;
-    conn.execute("UPDATE products SET stock = stock - 2 WHERE id = 1")?;
+    conn.execute("INSERT INTO orders VALUES (1, 1, 2)").await?;
+    conn.execute("UPDATE products SET stock = stock - 2 WHERE id = 1").await?;
 
     println!("📊 Changes within transaction:");
-    let result = conn.execute("SELECT * FROM products WHERE id = 1")?;
+    let result = conn.execute("SELECT * FROM products WHERE id = 1").await?;
     result.print();
 
     println!("\n✅ Committing transaction...");
-    conn.commit()?;
+    conn.commit().await?;
 
     println!("\n📊 Final stock after order:");
-    let result = client.query("SELECT name, stock FROM products WHERE id = 1")?;
+    let result = client.query("SELECT name, stock FROM products WHERE id = 1").await?;
     result.print();
 
     // ============================================

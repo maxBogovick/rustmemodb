@@ -21,8 +21,10 @@
 use super::{Change, Transaction, TransactionId, TransactionState};
 use crate::core::{DbError, Result};
 use crate::storage::memory::InMemoryStorage;
+use crate::facade::InMemoryDB;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Global transaction coordinator
 ///
@@ -54,35 +56,15 @@ impl TransactionManager {
     }
 
     /// Begin a new transaction
-    ///
-    /// Creates a new transaction with a snapshot of the current database state.
-    /// The transaction will see all committed changes up to this point but
-    /// none of the changes from concurrent transactions.
-    ///
-    /// # Returns
-    /// Returns the new transaction ID
-    ///
-    /// # Example
-    /// ```ignore
-    /// let txn_id = manager.begin()?;
-    /// // Execute operations...
-    /// manager.commit(txn_id, &mut storage)?;
-    /// ```
-    pub fn begin(&self) -> Result<TransactionId> {
+    pub async fn begin(&self) -> Result<TransactionId> {
         let txn_id = TransactionId::new();
 
         // Get current version for snapshot isolation
-        let read_version = *self
-            .global_version
-            .read()
-            .map_err(|_| DbError::LockError("Failed to acquire version read lock".into()))?;
+        let read_version = *self.global_version.read().await;
 
         let transaction = Transaction::new(txn_id, read_version);
 
-        let mut transactions = self
-            .transactions
-            .write()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions write lock".into()))?;
+        let mut transactions = self.transactions.write().await;
 
         transactions.insert(txn_id, transaction);
 
@@ -90,18 +72,8 @@ impl TransactionManager {
     }
 
     /// Record a change in a transaction
-    ///
-    /// Adds the change to the transaction's change log. Changes are not
-    /// applied to storage until commit.
-    ///
-    /// # Errors
-    /// - Transaction not found
-    /// - Transaction not active
-    pub fn record_change(&self, txn_id: TransactionId, change: Change) -> Result<()> {
-        let mut transactions = self
-            .transactions
-            .write()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions write lock".into()))?;
+    pub async fn record_change(&self, txn_id: TransactionId, change: Change) -> Result<()> {
+        let mut transactions = self.transactions.write().await;
 
         let transaction = transactions
             .get_mut(&txn_id)
@@ -123,11 +95,8 @@ impl TransactionManager {
     /// # Errors
     /// - Transaction not found
     /// - Transaction not active
-    pub fn commit(&self, txn_id: TransactionId, _storage: &mut InMemoryStorage) -> Result<()> {
-        let mut transactions = self
-            .transactions
-            .write()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions write lock".into()))?;
+    pub async fn commit(&self, txn_id: TransactionId) -> Result<()> {
+        let mut transactions = self.transactions.write().await;
 
         let transaction = transactions
             .get_mut(&txn_id)
@@ -147,39 +116,25 @@ impl TransactionManager {
         transaction.commit()?;
 
         // Increment global version to create new snapshot
-        let mut version = self
-            .global_version
-            .write()
-            .map_err(|_| DbError::LockError("Failed to acquire version write lock".into()))?;
+        let mut version = self.global_version.write().await;
         *version += 1;
 
         Ok(())
     }
 
-    /// Rollback a transaction
-    ///
-    /// Undoes all changes that were applied to storage and marks transaction as aborted.
-    /// This is safe to call multiple times and on already-aborted transactions.
-    ///
-    /// # Errors
-    /// - Transaction not found
-    /// - Storage errors during rollback
-    pub fn rollback_with_storage(&self, txn_id: TransactionId, storage: &mut InMemoryStorage) -> Result<()> {
-        let mut transactions = self
-            .transactions
-            .write()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions write lock".into()))?;
+    /// Rollback a transaction using a mutable storage reference (no database locking)
+    pub async fn rollback_with_storage(&self, txn_id: TransactionId, storage: &mut InMemoryStorage) -> Result<()> {
+        let mut transactions = self.transactions.write().await;
 
         let transaction = transactions
             .get_mut(&txn_id)
             .ok_or_else(|| DbError::ExecutionError(format!("Transaction {} not found", txn_id)))?;
 
-        // Rollback is idempotent - safe to call on non-active transactions
         if transaction.state() == TransactionState::Active {
-            // Undo changes in reverse order
             let changes: Vec<Change> = transaction.changes().iter().cloned().collect();
+            
             for change in changes.iter().rev() {
-                self.undo_change(change, storage)?;
+                self.undo_change(change, storage).await?;
             }
 
             transaction.rollback()?;
@@ -188,15 +143,16 @@ impl TransactionManager {
         Ok(())
     }
 
+    /// Rollback a transaction by acquiring a database lock (for background tasks/Drop)
+    pub async fn rollback_database(&self, txn_id: TransactionId, db: Arc<RwLock<InMemoryDB>>) -> Result<()> {
+        // We take the lock here and then call rollback_with_storage
+        let mut db_guard = db.write().await;
+        self.rollback_with_storage(txn_id, db_guard.storage_mut()).await
+    }
+
     /// Rollback a transaction (without storage - for backwards compatibility)
-    ///
-    /// Just marks the transaction as aborted without undoing changes.
-    /// Use rollback_with_storage for full rollback functionality.
-    pub fn rollback(&self, txn_id: TransactionId) -> Result<()> {
-        let mut transactions = self
-            .transactions
-            .write()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions write lock".into()))?;
+    pub async fn rollback(&self, txn_id: TransactionId) -> Result<()> {
+        let mut transactions = self.transactions.write().await;
 
         let transaction = transactions
             .get_mut(&txn_id)
@@ -210,13 +166,8 @@ impl TransactionManager {
     }
 
     /// Get transaction information
-    ///
-    /// Useful for debugging and monitoring.
-    pub fn get_transaction(&self, txn_id: TransactionId) -> Result<Option<TransactionInfo>> {
-        let transactions = self
-            .transactions
-            .read()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions read lock".into()))?;
+    pub async fn get_transaction(&self, txn_id: TransactionId) -> Result<Option<TransactionInfo>> {
+        let transactions = self.transactions.read().await;
 
         Ok(transactions.get(&txn_id).map(|txn| TransactionInfo {
             id: txn.id(),
@@ -228,22 +179,14 @@ impl TransactionManager {
     }
 
     /// Get the current global version
-    ///
-    /// Useful for debugging and testing.
-    pub fn current_version(&self) -> Result<u64> {
-        let version = self
-            .global_version
-            .read()
-            .map_err(|_| DbError::LockError("Failed to acquire version read lock".into()))?;
+    pub async fn current_version(&self) -> Result<u64> {
+        let version = self.global_version.read().await;
         Ok(*version)
     }
 
     /// Get count of active transactions
-    pub fn active_transaction_count(&self) -> Result<usize> {
-        let transactions = self
-            .transactions
-            .read()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions read lock".into()))?;
+    pub async fn active_transaction_count(&self) -> Result<usize> {
+        let transactions = self.transactions.read().await;
 
         Ok(transactions
             .values()
@@ -252,14 +195,8 @@ impl TransactionManager {
     }
 
     /// Cleanup completed transactions
-    ///
-    /// Removes committed and aborted transactions from the registry.
-    /// Should be called periodically to prevent memory leaks.
-    pub fn cleanup(&self) -> Result<usize> {
-        let mut transactions = self
-            .transactions
-            .write()
-            .map_err(|_| DbError::LockError("Failed to acquire transactions write lock".into()))?;
+    pub async fn cleanup(&self) -> Result<usize> {
+        let mut transactions = self.transactions.write().await;
 
         let before_count = transactions.len();
         transactions.retain(|_, txn| txn.state() == TransactionState::Active);
@@ -269,12 +206,10 @@ impl TransactionManager {
     }
 
     /// Apply a single change to storage
-    ///
-    /// Internal helper method for committing transactions.
-    fn apply_change(&self, change: &Change, storage: &mut InMemoryStorage) -> Result<()> {
+    async fn apply_change(&self, change: &Change, storage: &mut InMemoryStorage) -> Result<()> {
         match change {
             Change::InsertRow { table, row } => {
-                storage.insert_row(table, row.clone())?;
+                storage.insert_row(table, row.clone()).await?;
             }
             Change::UpdateRow {
                 table,
@@ -282,35 +217,33 @@ impl TransactionManager {
                 new_row,
                 ..
             } => {
-                storage.update_row_at_index(table, *row_index, new_row.clone())?;
+                storage.update_row_at_index(table, *row_index, new_row.clone()).await?;
             }
             Change::DeleteRow {
                 table, row_index, ..
             } => {
-                storage.delete_row_at_index(table, *row_index)?;
+                storage.delete_row_at_index(table, *row_index).await?;
             }
             Change::CreateTable { table_schema } => {
-                storage.create_table(table_schema.clone())?;
+                storage.create_table(table_schema.clone()).await?;
             }
             Change::DropTable { name, .. } => {
-                storage.drop_table(name)?;
+                storage.drop_table(name).await?;
             }
         }
         Ok(())
     }
 
     /// Undo a single change from storage (for rollback)
-    ///
-    /// Internal helper method for rolling back transactions.
-    fn undo_change(&self, change: &Change, storage: &mut InMemoryStorage) -> Result<()> {
+    async fn undo_change(&self, change: &Change, storage: &mut InMemoryStorage) -> Result<()> {
         match change {
             // Undo INSERT: remove the row
             // Note: We need to find and remove the exact row since indexes may have shifted
             Change::InsertRow { table, row } => {
                 // Find the row and remove it
-                let all_rows = storage.get_all_rows(table)?;
+                let all_rows = storage.get_all_rows(table).await?;
                 if let Some(index) = all_rows.iter().position(|r| r == row) {
-                    storage.delete_row_at_index(table, index)?;
+                    storage.delete_row_at_index(table, index).await?;
                 }
             }
             // Undo UPDATE: restore the old row
@@ -320,7 +253,7 @@ impl TransactionManager {
                 old_row,
                 ..
             } => {
-                storage.update_row_at_index(table, *row_index, old_row.clone())?;
+                storage.update_row_at_index(table, *row_index, old_row.clone()).await?;
             }
             // Undo DELETE: insert the row back
             Change::DeleteRow {
@@ -328,20 +261,19 @@ impl TransactionManager {
                 row_index,
                 old_row,
             } => {
-                storage.insert_row_at_index(table, *row_index, old_row.clone())?;
+                storage.insert_row_at_index(table, *row_index, old_row.clone()).await?;
             }
             // Undo CREATE TABLE: drop the table
             Change::CreateTable { table_schema } => {
-                storage.drop_table(table_schema.name())?;
+                storage.drop_table(table_schema.name()).await?;
             }
             // Undo DROP TABLE: recreate the table
-            // TODO: Restore with saved schema and rows
             Change::DropTable { name, schema, rows } => {
                 use crate::storage::TableSchema;
                 let table_schema = TableSchema::new(name, schema.columns().to_vec());
-                storage.create_table(table_schema)?;
+                storage.create_table(table_schema).await?;
                 for row in rows {
-                    storage.insert_row(name, row.clone())?;
+                    storage.insert_row(name, row.clone()).await?;
                 }
             }
         }
@@ -368,111 +300,111 @@ pub struct TransactionInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Column, DataType, Schema, Value};
+    use crate::core::{Value};
 
-    #[test]
-    fn test_begin_transaction() {
+    #[tokio::test]
+    async fn test_begin_transaction() {
         let manager = TransactionManager::new();
-        let txn_id = manager.begin().unwrap();
+        let txn_id = manager.begin().await.unwrap();
 
-        let info = manager.get_transaction(txn_id).unwrap().unwrap();
+        let info = manager.get_transaction(txn_id).await.unwrap().unwrap();
         assert_eq!(info.state, TransactionState::Active);
         assert_eq!(info.change_count, 0);
     }
 
-    #[test]
-    fn test_record_change() {
+    #[tokio::test]
+    async fn test_record_change() {
         let manager = TransactionManager::new();
-        let txn_id = manager.begin().unwrap();
+        let txn_id = manager.begin().await.unwrap();
 
         let change = Change::InsertRow {
             table: "test".to_string(),
             row: vec![Value::Integer(1)],
         };
 
-        manager.record_change(txn_id, change).unwrap();
+        manager.record_change(txn_id, change).await.unwrap();
 
-        let info = manager.get_transaction(txn_id).unwrap().unwrap();
+        let info = manager.get_transaction(txn_id).await.unwrap().unwrap();
         assert_eq!(info.change_count, 1);
     }
 
-    #[test]
-    fn test_commit_increments_version() {
+    #[tokio::test]
+    async fn test_commit_increments_version() {
         let manager = TransactionManager::new();
-        let mut storage = InMemoryStorage::new();
+        let _db = Arc::new(RwLock::new(InMemoryDB::new()));
 
-        let version_before = manager.current_version().unwrap();
+        let version_before = manager.current_version().await.unwrap();
 
-        let txn_id = manager.begin().unwrap();
-        manager.commit(txn_id, &mut storage).unwrap();
+        let txn_id = manager.begin().await.unwrap();
+        manager.commit(txn_id).await.unwrap();
 
-        let version_after = manager.current_version().unwrap();
+        let version_after = manager.current_version().await.unwrap();
         assert_eq!(version_after, version_before + 1);
     }
 
-    #[test]
-    fn test_rollback() {
+    #[tokio::test]
+    async fn test_rollback() {
         let manager = TransactionManager::new();
-        let txn_id = manager.begin().unwrap();
+        let txn_id = manager.begin().await.unwrap();
 
         let change = Change::InsertRow {
             table: "test".to_string(),
             row: vec![Value::Integer(1)],
         };
-        manager.record_change(txn_id, change).unwrap();
+        manager.record_change(txn_id, change).await.unwrap();
 
-        manager.rollback(txn_id).unwrap();
+        manager.rollback(txn_id).await.unwrap();
 
-        let info = manager.get_transaction(txn_id).unwrap().unwrap();
+        let info = manager.get_transaction(txn_id).await.unwrap().unwrap();
         assert_eq!(info.state, TransactionState::Aborted);
         assert_eq!(info.change_count, 0);
     }
 
-    #[test]
-    fn test_cannot_commit_twice() {
+    #[tokio::test]
+    async fn test_cannot_commit_twice() {
         let manager = TransactionManager::new();
-        let mut storage = InMemoryStorage::new();
+        let _db = Arc::new(RwLock::new(InMemoryDB::new()));
 
-        let txn_id = manager.begin().unwrap();
-        manager.commit(txn_id, &mut storage).unwrap();
+        let txn_id = manager.begin().await.unwrap();
+        manager.commit(txn_id).await.unwrap();
 
-        let result = manager.commit(txn_id, &mut storage);
+        let result = manager.commit(txn_id).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_cleanup_removes_completed_transactions() {
+    #[tokio::test]
+    async fn test_cleanup_removes_completed_transactions() {
         let manager = TransactionManager::new();
-        let mut storage = InMemoryStorage::new();
+        let _db = Arc::new(RwLock::new(InMemoryDB::new()));
 
-        let txn1 = manager.begin().unwrap();
-        let txn2 = manager.begin().unwrap();
-        let txn3 = manager.begin().unwrap();
+        let txn1 = manager.begin().await.unwrap();
+        let txn2 = manager.begin().await.unwrap();
+        let _txn3 = manager.begin().await.unwrap();
 
-        manager.commit(txn1, &mut storage).unwrap();
-        manager.rollback(txn2).unwrap();
+        manager.commit(txn1).await.unwrap();
+        manager.rollback(txn2).await.unwrap();
         // txn3 remains active
 
-        let removed = manager.cleanup().unwrap();
+        let removed = manager.cleanup().await.unwrap();
         assert_eq!(removed, 2);
 
-        let active_count = manager.active_transaction_count().unwrap();
+        let active_count = manager.active_transaction_count().await.unwrap();
         assert_eq!(active_count, 1);
     }
 
-    #[test]
-    fn test_snapshot_isolation_versions() {
+    #[tokio::test]
+    async fn test_snapshot_isolation_versions() {
         let manager = TransactionManager::new();
-        let mut storage = InMemoryStorage::new();
+        let _db = Arc::new(RwLock::new(InMemoryDB::new()));
 
-        let txn1 = manager.begin().unwrap();
-        let info1 = manager.get_transaction(txn1).unwrap().unwrap();
+        let txn1 = manager.begin().await.unwrap();
+        let info1 = manager.get_transaction(txn1).await.unwrap().unwrap();
         let version1 = info1.read_version;
 
-        manager.commit(txn1, &mut storage).unwrap();
+        manager.commit(txn1).await.unwrap();
 
-        let txn2 = manager.begin().unwrap();
-        let info2 = manager.get_transaction(txn2).unwrap().unwrap();
+        let txn2 = manager.begin().await.unwrap();
+        let info2 = manager.get_transaction(txn2).await.unwrap().unwrap();
         let version2 = info2.read_version;
 
         // Second transaction should see a newer version

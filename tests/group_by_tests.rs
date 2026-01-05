@@ -1,20 +1,20 @@
 use rustmemodb::InMemoryDB;
 use rustmemodb::core::Value;
 
-#[test]
-fn test_group_by_simple() {
+#[tokio::test]
+async fn test_group_by_simple() {
     let mut db = InMemoryDB::new();
-    db.execute("CREATE TABLE sales (region TEXT, amount INTEGER)").unwrap();
-    db.execute("INSERT INTO sales VALUES ('North', 100)").unwrap();
-    db.execute("INSERT INTO sales VALUES ('North', 200)").unwrap();
-    db.execute("INSERT INTO sales VALUES ('South', 50)").unwrap();
-    db.execute("INSERT INTO sales VALUES ('South', 150)").unwrap();
-    db.execute("INSERT INTO sales VALUES ('East', 300)").unwrap();
+    db.execute("CREATE TABLE sales (region TEXT, amount INTEGER)").await.unwrap();
+    db.execute("INSERT INTO sales VALUES ('North', 100)").await.unwrap();
+    db.execute("INSERT INTO sales VALUES ('North', 200)").await.unwrap();
+    db.execute("INSERT INTO sales VALUES ('South', 50)").await.unwrap();
+    db.execute("INSERT INTO sales VALUES ('South', 150)").await.unwrap();
+    db.execute("INSERT INTO sales VALUES ('East', 300)").await.unwrap();
 
     // SELECT region, SUM(amount) FROM sales GROUP BY region ORDER BY region
     let result = db.execute(
         "SELECT region, SUM(amount) FROM sales GROUP BY region ORDER BY region"
-    ).unwrap();
+    ).await.unwrap();
 
     assert_eq!(result.row_count(), 3);
     
@@ -32,18 +32,18 @@ fn test_group_by_simple() {
     assert_eq!(rows[2][1], Value::Integer(200));
 }
 
-#[test]
-fn test_group_by_count() {
+#[tokio::test]
+async fn test_group_by_count() {
     let mut db = InMemoryDB::new();
-    db.execute("CREATE TABLE logs (level TEXT, msg TEXT)").unwrap();
-    db.execute("INSERT INTO logs VALUES ('INFO', 'a')").unwrap();
-    db.execute("INSERT INTO logs VALUES ('INFO', 'b')").unwrap();
-    db.execute("INSERT INTO logs VALUES ('ERROR', 'c')").unwrap();
+    db.execute("CREATE TABLE logs (level TEXT, msg TEXT)").await.unwrap();
+    db.execute("INSERT INTO logs VALUES ('INFO', 'a')").await.unwrap();
+    db.execute("INSERT INTO logs VALUES ('INFO', 'b')").await.unwrap();
+    db.execute("INSERT INTO logs VALUES ('ERROR', 'c')").await.unwrap();
 
     // SELECT level, COUNT(*) FROM logs GROUP BY level
     let result = db.execute(
         "SELECT level, COUNT(*) FROM logs GROUP BY level ORDER BY level"
-    ).unwrap();
+    ).await.unwrap();
 
     assert_eq!(result.row_count(), 2);
     
@@ -57,22 +57,19 @@ fn test_group_by_count() {
     assert_eq!(rows[1][1], Value::Integer(2));
 }
 
-#[test]
-fn test_group_by_having() {
+#[tokio::test]
+async fn test_group_by_having() {
     let mut db = InMemoryDB::new();
-    db.execute("CREATE TABLE orders (user_id INTEGER, total INTEGER)").unwrap();
-    db.execute("INSERT INTO orders VALUES (1, 100)").unwrap();
-    db.execute("INSERT INTO orders VALUES (1, 200)").unwrap();
-    db.execute("INSERT INTO orders VALUES (2, 50)").unwrap();
-    db.execute("INSERT INTO orders VALUES (3, 500)").unwrap();
+    db.execute("CREATE TABLE orders (user_id INTEGER, total INTEGER)").await.unwrap();
+    db.execute("INSERT INTO orders VALUES (1, 100)").await.unwrap();
+    db.execute("INSERT INTO orders VALUES (1, 200)").await.unwrap();
+    db.execute("INSERT INTO orders VALUES (2, 50)").await.unwrap();
+    db.execute("INSERT INTO orders VALUES (3, 500)").await.unwrap();
 
     // SELECT user_id, SUM(total) FROM orders GROUP BY user_id HAVING SUM(total) > 250
-    // User 1: 300 -> Keep
-    // User 2: 50 -> Drop
-    // User 3: 500 -> Keep
     let result = db.execute(
         "SELECT user_id, SUM(total) FROM orders GROUP BY user_id HAVING SUM(total) > 250 ORDER BY user_id"
-    ).unwrap();
+    ).await.unwrap();
 
     assert_eq!(result.row_count(), 2);
     

@@ -6,9 +6,9 @@ use crate::core::{DbError, Result};
 use crate::facade::InMemoryDB;
 use crate::result::QueryResult;
 use crate::transaction::TransactionId;
-use std::sync::{Arc, RwLock};
-use auth::{AuthManager, User};
-use config::ConnectionConfig;
+use std::sync::{Arc};
+use tokio::sync::RwLock;
+use auth::{User};
 
 /// Database connection handle
 ///
@@ -57,16 +57,7 @@ impl Connection {
     }
 
     /// Execute a SQL query
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let result = conn.execute("SELECT * FROM users WHERE age > 25")?;
-    /// for row in result.rows() {
-    ///     println!("{:?}", row);
-    /// }
-    /// ```
-    pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
+    pub async fn execute(&mut self, sql: &str) -> Result<QueryResult> {
         if self.state == ConnectionState::Closed {
             return Err(DbError::ExecutionError("Connection is closed".into()));
         }
@@ -74,47 +65,39 @@ impl Connection {
         // Handle transaction control statements specially
         let trimmed = sql.trim().to_uppercase();
         if trimmed == "BEGIN" || trimmed == "BEGIN TRANSACTION" || trimmed == "START TRANSACTION" {
-            return self.begin().map(|_| QueryResult::empty_with_message("Transaction started".to_string()));
+            self.begin().await?;
+            return Ok(QueryResult::empty_with_message("Transaction started".to_string()));
         }
         if trimmed == "COMMIT" || trimmed == "COMMIT TRANSACTION" {
-            return self.commit().map(|_| QueryResult::empty_with_message("Transaction committed".to_string()));
+            self.commit().await?;
+            return Ok(QueryResult::empty_with_message("Transaction committed".to_string()));
         }
         if trimmed == "ROLLBACK" || trimmed == "ROLLBACK TRANSACTION" {
-            return self.rollback().map(|_| QueryResult::empty_with_message("Transaction rolled back".to_string()));
+            self.rollback().await?;
+            return Ok(QueryResult::empty_with_message("Transaction rolled back".to_string()));
         }
 
-        let mut db = self.db.write()
-            .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
-
-        db.execute_with_transaction(sql, self.transaction_id)
+        let mut db = self.db.write().await;
+        db.execute_with_transaction(sql, self.transaction_id).await
     }
 
     /// Execute a query and return the result
     ///
     /// Alias for execute() for compatibility with some SQL drivers
-    pub fn query(&mut self, sql: &str) -> Result<QueryResult> {
-        self.execute(sql)
+    pub async fn query(&mut self, sql: &str) -> Result<QueryResult> {
+        self.execute(sql).await
     }
 
     /// Execute a statement that doesn't return results (INSERT, UPDATE, DELETE, CREATE, etc.)
     ///
     /// Returns the number of affected rows (for DML) or Ok(()) for DDL
-    pub fn exec(&mut self, sql: &str) -> Result<u64> {
-        let result = self.execute(sql)?;
+    pub async fn exec(&mut self, sql: &str) -> Result<u64> {
+        let result = self.execute(sql).await?;
         Ok(result.row_count() as u64)
     }
 
     /// Begin a new transaction
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// conn.begin()?;
-    /// conn.execute("INSERT INTO users VALUES (1, 'Alice', 30)")?;
-    /// conn.execute("INSERT INTO users VALUES (2, 'Bob', 25)")?;
-    /// conn.commit()?;
-    /// ```
-    pub fn begin(&mut self) -> Result<()> {
+    pub async fn begin(&mut self) -> Result<()> {
         if self.state == ConnectionState::Closed {
             return Err(DbError::ExecutionError("Connection is closed".into()));
         }
@@ -125,9 +108,8 @@ impl Connection {
 
         // Begin transaction via TransactionManager
         let txn_id = {
-            let db = self.db.read()
-                .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
-            db.transaction_manager().begin()?
+            let db = self.db.read().await;
+            db.transaction_manager().begin().await?
         };
 
         self.state = ConnectionState::InTransaction;
@@ -137,7 +119,7 @@ impl Connection {
     }
 
     /// Commit the current transaction
-    pub fn commit(&mut self) -> Result<()> {
+    pub async fn commit(&mut self) -> Result<()> {
         if self.state != ConnectionState::InTransaction {
             return Err(DbError::ExecutionError("No active transaction".into()));
         }
@@ -146,13 +128,9 @@ impl Connection {
 
         // Commit transaction via TransactionManager
         {
-            let mut db = self.db.write()
-                .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
-
-            // Get transaction manager reference and storage, then commit
+            let db = self.db.write().await;
             let txn_mgr = Arc::clone(db.transaction_manager());
-            let storage = db.storage_mut();
-            txn_mgr.commit(txn_id, storage)?;
+            txn_mgr.commit(txn_id).await?;
         }
 
         self.state = ConnectionState::Active;
@@ -162,7 +140,7 @@ impl Connection {
     }
 
     /// Rollback the current transaction
-    pub fn rollback(&mut self) -> Result<()> {
+    pub async fn rollback(&mut self) -> Result<()> {
         if self.state != ConnectionState::InTransaction {
             // SQL standard: rollback without transaction is a no-op
             return Ok(());
@@ -172,12 +150,10 @@ impl Connection {
 
         // Rollback transaction via TransactionManager
         {
-            let mut db = self.db.write()
-                .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
-
+            let mut db = self.db.write().await;
             let txn_mgr = Arc::clone(db.transaction_manager());
             let storage = db.storage_mut();
-            txn_mgr.rollback_with_storage(txn_id, storage)?;
+            txn_mgr.rollback_with_storage(txn_id, storage).await?;
         }
 
         self.state = ConnectionState::Active;
@@ -197,9 +173,9 @@ impl Connection {
     }
 
     /// Close the connection
-    pub fn close(&mut self) -> Result<()> {
+    pub async fn close(&mut self) -> Result<()> {
         if self.state == ConnectionState::InTransaction {
-            self.rollback()?;
+            self.rollback().await?;
         }
 
         self.state = ConnectionState::Closed;
@@ -207,8 +183,6 @@ impl Connection {
     }
 
     /// Prepare a SQL statement (placeholder for future implementation)
-    ///
-    /// Currently returns a simple prepared statement wrapper
     pub fn prepare(&self, sql: &str) -> Result<PreparedStatement> {
         if self.state == ConnectionState::Closed {
             return Err(DbError::ExecutionError("Connection is closed".into()));
@@ -223,8 +197,21 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        // Ensure connection is closed and transaction rolled back
-        let _ = self.close();
+        if self.state == ConnectionState::InTransaction {
+            let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
+            let db_clone = Arc::clone(&self.db);
+            
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let txn_mgr = {
+                        let db = db_clone.read().await;
+                        Arc::clone(db.transaction_manager())
+                    };
+                    let _ = txn_mgr.rollback_database(txn_id, db_clone).await;
+                });
+            }
+        }
+        self.state = ConnectionState::Closed;
     }
 }
 
@@ -238,14 +225,9 @@ pub struct PreparedStatement {
 
 impl PreparedStatement {
     /// Execute prepared statement with parameters
-    ///
-    /// TODO: Implement parameter binding
-    pub fn execute(&self, _params: &[&dyn std::fmt::Display]) -> Result<QueryResult> {
-        let mut db = self.db.write()
-            .map_err(|_| DbError::LockError("Failed to acquire database lock".into()))?;
-
-        // For now, just execute the SQL as-is
-        db.execute(&self.sql)
+    pub async fn execute(&self, _params: &[&dyn std::fmt::Display]) -> Result<QueryResult> {
+        let mut db = self.db.write().await;
+        db.execute(&self.sql).await
     }
 
     /// Get the SQL text of this prepared statement
@@ -258,60 +240,61 @@ impl PreparedStatement {
 mod tests {
     use super::*;
 
-    fn create_test_connection() -> Connection {
+    async fn create_test_connection() -> Connection {
         let db = Arc::new(RwLock::new(InMemoryDB::new()));
-        let user = User::new("test_user".to_string(), "hash".to_string(),Vec::new());
+        let user = User::new("test_user".to_string(), "hash".to_string(), Vec::new());
         Connection::new(1, user, db)
     }
 
-    #[test]
-    fn test_connection_creation() {
-        let conn = create_test_connection();
+    #[tokio::test]
+    async fn test_connection_creation() {
+        let conn = create_test_connection().await;
         assert_eq!(conn.id(), 1);
         assert_eq!(conn.username(), "test_user");
         assert!(conn.is_active());
         assert!(!conn.is_in_transaction());
     }
 
-    #[test]
-    fn test_transaction_lifecycle() {
-        let mut conn = create_test_connection();
+    #[tokio::test]
+    async fn test_transaction_lifecycle() {
+        let mut conn = create_test_connection().await;
 
-        assert!(conn.begin().is_ok());
+        assert!(conn.begin().await.is_ok());
         assert!(conn.is_in_transaction());
 
-        assert!(conn.commit().is_ok());
+        assert!(conn.commit().await.is_ok());
         assert!(!conn.is_in_transaction());
     }
 
-    #[test]
-    fn test_transaction_rollback() {
-        let mut conn = create_test_connection();
+    #[tokio::test]
+    async fn test_transaction_rollback() {
+        let mut conn = create_test_connection().await;
 
-        assert!(conn.begin().is_ok());
+        assert!(conn.begin().await.is_ok());
         assert!(conn.is_in_transaction());
 
-        assert!(conn.rollback().is_ok());
+        assert!(conn.rollback().await.is_ok());
         assert!(!conn.is_in_transaction());
     }
 
-    #[test]
-    fn test_connection_close() {
-        let mut conn = create_test_connection();
+    #[tokio::test]
+    async fn test_connection_close() {
+        let mut conn = create_test_connection().await;
 
-        assert!(conn.close().is_ok());
+        assert!(conn.close().await.is_ok());
         assert!(!conn.is_active());
 
         // Should fail after close
-        assert!(conn.execute("SELECT 1").is_err());
+        assert!(conn.execute("SELECT 1").await.is_err());
     }
 
-    #[test]
-    fn test_auto_rollback_on_drop() {
-        let mut conn = create_test_connection();
-        conn.begin().unwrap();
+    #[tokio::test]
+    async fn test_auto_rollback_on_drop() {
+        let mut conn = create_test_connection().await;
+        conn.begin().await.unwrap();
 
         // Drop should auto-rollback
         drop(conn);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }

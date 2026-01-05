@@ -2,8 +2,11 @@ use super::super::{ExpressionEvaluator, EvaluationContext};
 use crate::parser::ast::{Expr, BinaryOp};
 use crate::core::{Result, Value, Row, Schema, DbError};
 
+use async_trait::async_trait;
+
 pub struct ArithmeticEvaluator;
 
+#[async_trait]
 impl ExpressionEvaluator for ArithmeticEvaluator {
     fn name(&self) -> &'static str {
         "ARITHMETIC"
@@ -21,13 +24,13 @@ impl ExpressionEvaluator for ArithmeticEvaluator {
         }
     }
 
-    fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext) -> Result<Value> {
+    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
         let Expr::BinaryOp { left, op, right } = expr else {
             unreachable!();
         };
 
-        let left_val = context.evaluate(left, row, schema)?;
-        let right_val = context.evaluate(right, row, schema)?;
+        let left_val = context.evaluate(left, row, schema).await?;
+        let right_val = context.evaluate(right, row, schema).await?;
 
         match (left_val, right_val) {
             (Value::Integer(a), Value::Integer(b)) => {

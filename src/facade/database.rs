@@ -12,7 +12,8 @@ use crate::executor::{BeginExecutor, CommitExecutor, RollbackExecutor};
 use crate::result::QueryResult;
 use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
 use crate::transaction::TransactionManager;
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc};
+use tokio::sync::{RwLock, Mutex};
 use std::path::Path;
 use lazy_static::lazy_static;
 
@@ -84,12 +85,12 @@ impl InMemoryDB {
         &mut self.storage
     }
 
-    pub fn execute(&mut self, sql: &str) -> Result<QueryResult> {
-        self.execute_with_transaction(sql, None)
+    pub async fn execute(&mut self, sql: &str) -> Result<QueryResult> {
+        self.execute_with_transaction(sql, None).await
     }
 
     /// Execute SQL with an optional transaction context
-    pub fn execute_with_transaction(
+    pub async fn execute_with_transaction(
         &mut self,
         sql: &str,
         transaction_id: Option<crate::transaction::TransactionId>,
@@ -103,10 +104,10 @@ impl InMemoryDB {
         // DDL operations (CREATE TABLE, DROP TABLE) обрабатываем отдельно
         match &statements[0] {
             Statement::CreateTable(create) => {
-                return self.execute_create_table(create);
+                return self.execute_create_table(create).await;
             }
             Statement::DropTable(drop) => {
-                return self.execute_drop_table(drop);
+                return self.execute_drop_table(drop).await;
             }
             _ => {}
         }
@@ -118,10 +119,10 @@ impl InMemoryDB {
         } else {
             ExecutionContext::new(&self.storage, &self.transaction_manager, persistence_ref)
         };
-        self.executor_pipeline.execute(&statements[0], &ctx)
+        self.executor_pipeline.execute(&statements[0], &ctx).await
     }
 
-    fn execute_create_table(&mut self, create: &CreateTableStmt) -> Result<QueryResult> {
+    async fn execute_create_table(&mut self, create: &CreateTableStmt) -> Result<QueryResult> {
         let columns: Vec<Column> = create
             .columns
             .iter()
@@ -138,8 +139,7 @@ impl InMemoryDB {
 
         // 1. Log to WAL BEFORE making changes
         if let Some(ref persistence) = self.persistence {
-            let mut persistence_guard = persistence.lock()
-                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            let mut persistence_guard = persistence.lock().await;
             persistence_guard.log(&WalEntry::CreateTable {
                 name: create.table_name.clone(),
                 schema: schema.clone(),
@@ -147,7 +147,7 @@ impl InMemoryDB {
         }
 
         // 2. Создаем таблицу в storage
-        self.storage.create_table(schema.clone())?;
+        self.storage.create_table(schema.clone()).await?;
 
         // 3. Обновляем catalog (Copy-on-Write)
         self.catalog = self.catalog.clone().with_table(schema)?;
@@ -170,12 +170,12 @@ impl InMemoryDB {
         self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
 
         // 5. Check if checkpoint is needed
-        self.maybe_checkpoint()?;
+        self.maybe_checkpoint().await?;
 
         Ok(QueryResult::empty())
     }
 
-    fn execute_drop_table(&mut self, drop: &DropTableStmt) -> Result<QueryResult> {
+    async fn execute_drop_table(&mut self, drop: &DropTableStmt) -> Result<QueryResult> {
         // Check if table exists
         if !self.catalog.table_exists(&drop.table_name) {
             if drop.if_exists {
@@ -186,7 +186,7 @@ impl InMemoryDB {
 
         // 1. Get table data before dropping (for WAL)
         let table = if self.persistence.is_some() {
-            let tables = self.storage.get_all_tables()?;
+            let tables = self.storage.get_all_tables().await?;
             tables.get(&drop.table_name).cloned()
         } else {
             None
@@ -195,8 +195,7 @@ impl InMemoryDB {
         // 2. Log to WAL BEFORE making changes
         if let Some(ref persistence) = self.persistence {
             if let Some(table) = table {
-                let mut persistence_guard = persistence.lock()
-                    .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+                let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::DropTable {
                     name: drop.table_name.clone(),
                     table,
@@ -205,7 +204,7 @@ impl InMemoryDB {
         }
 
         // 3. Drop table from storage
-        self.storage.drop_table(&drop.table_name)?;
+        self.storage.drop_table(&drop.table_name).await?;
 
         // 4. Update catalog (Copy-on-Write)
         self.catalog = self.catalog.clone().without_table(&drop.table_name)?;
@@ -226,7 +225,7 @@ impl InMemoryDB {
         self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
 
         // 6. Check if checkpoint is needed
-        self.maybe_checkpoint()?;
+        self.maybe_checkpoint().await?;
 
         Ok(QueryResult::empty())
     }
@@ -239,8 +238,8 @@ impl InMemoryDB {
         self.catalog.list_tables().into_iter().map(|s| s.to_string()).collect()
     }
 
-    pub fn table_stats(&self, name: &str) -> Result<TableStats> {
-        let row_count = self.storage.row_count(name)?;
+    pub async fn table_stats(&self, name: &str) -> Result<TableStats> {
+        let row_count = self.storage.row_count(name).await?;
         let schema = self.catalog.get_table(name)?;
 
         Ok(TableStats {
@@ -251,13 +250,13 @@ impl InMemoryDB {
     }
 
     /// Create an index on a table column
-    pub fn create_index(&mut self, table_name: &str, column_name: &str) -> Result<()> {
+    pub async fn create_index(&mut self, table_name: &str, column_name: &str) -> Result<()> {
         // 1. Create index in storage
-        self.storage.create_index(table_name, column_name)?;
+        self.storage.create_index(table_name, column_name).await?;
         
         // 2. Update catalog to reflect that column is indexed
         // We need to fetch the updated schema from storage because storage.create_index updates it
-        let updated_schema = self.storage.get_schema(table_name)?;
+        let updated_schema = self.storage.get_schema(table_name).await?;
         
         // 3. Update catalog
         self.catalog = self.catalog.clone().without_table(table_name)?.with_table(updated_schema)?;
@@ -295,10 +294,12 @@ impl InMemoryDB {
     /// ```no_run
     /// use rustmemodb::{InMemoryDB, DurabilityMode};
     ///
+    /// # tokio_test::block_on(async {
     /// let mut db = InMemoryDB::new();
-    /// db.enable_persistence("./data", DurabilityMode::Async).unwrap();
+    /// db.enable_persistence("./data", DurabilityMode::Async).await.unwrap();
+    /// # });
     /// ```
-    pub fn enable_persistence<P: AsRef<Path>>(
+    pub async fn enable_persistence<P: AsRef<Path>>(
         &mut self,
         data_dir: P,
         durability_mode: DurabilityMode,
@@ -313,7 +314,7 @@ impl InMemoryDB {
         self.persistence = Some(Arc::new(Mutex::new(persistence)));
 
         // Attempt recovery if snapshot/WAL files exist
-        self.recover_if_needed()?;
+        self.recover_if_needed().await?;
 
         Ok(())
     }
@@ -330,14 +331,15 @@ impl InMemoryDB {
     ///
     /// ```no_run
     /// # use rustmemodb::InMemoryDB;
+    /// # tokio_test::block_on(async {
     /// # let mut db = InMemoryDB::new();
-    /// db.checkpoint().unwrap();
+    /// db.checkpoint().await.unwrap();
+    /// # });
     /// ```
-    pub fn checkpoint(&mut self) -> Result<()> {
+    pub async fn checkpoint(&mut self) -> Result<()> {
         if let Some(ref persistence) = self.persistence {
-            let tables = self.storage.get_all_tables()?;
-            let mut persistence_guard = persistence.lock()
-                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            let tables = self.storage.get_all_tables().await?;
+            let mut persistence_guard = persistence.lock().await;
             persistence_guard.checkpoint(&tables)?;
         }
         Ok(())
@@ -351,15 +353,14 @@ impl InMemoryDB {
     /// Get durability mode (if persistence is enabled)
     pub fn durability_mode(&self) -> Option<DurabilityMode> {
         self.persistence.as_ref().and_then(|p| {
-            p.lock().ok().map(|guard| guard.durability_mode())
+            p.try_lock().ok().map(|guard| guard.durability_mode())
         })
     }
 
     /// Recover database state from snapshot + WAL (if available)
-    fn recover_if_needed(&mut self) -> Result<()> {
+    async fn recover_if_needed(&mut self) -> Result<()> {
         let tables = if let Some(ref persistence) = self.persistence {
-            let persistence_guard = persistence.lock()
-                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            let persistence_guard = persistence.lock().await;
             persistence_guard.recover()?
         } else {
             None
@@ -367,10 +368,10 @@ impl InMemoryDB {
 
         if let Some(tables) = tables {
             // Restore tables to storage
-            self.storage.restore_tables(tables)?;
+            self.storage.restore_tables(tables).await?;
 
             // Rebuild catalog from storage
-            self.rebuild_catalog()?;
+            self.rebuild_catalog().await?;
 
             println!("Database recovered from persistence");
         }
@@ -379,11 +380,11 @@ impl InMemoryDB {
     }
 
     /// Rebuild catalog from current storage state
-    fn rebuild_catalog(&mut self) -> Result<()> {
+    async fn rebuild_catalog(&mut self) -> Result<()> {
         let mut new_catalog = Catalog::new();
 
         for table_name in self.storage.list_tables() {
-            let schema = self.storage.get_schema(&table_name)?;
+            let schema = self.storage.get_schema(&table_name).await?;
             new_catalog = new_catalog.with_table(schema)?;
         }
 
@@ -409,12 +410,11 @@ impl InMemoryDB {
     }
 
     /// Check if automatic checkpoint is needed and perform it
-    fn maybe_checkpoint(&mut self) -> Result<()> {
+    async fn maybe_checkpoint(&mut self) -> Result<()> {
         if let Some(ref persistence) = self.persistence {
-            let mut persistence_guard = persistence.lock()
-                .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+            let mut persistence_guard = persistence.lock().await;
             if persistence_guard.needs_checkpoint() {
-                let tables = self.storage.get_all_tables()?;
+                let tables = self.storage.get_all_tables().await?;
                 persistence_guard.checkpoint(&tables)?;
             }
         }

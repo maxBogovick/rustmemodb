@@ -6,6 +6,8 @@ use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
 use crate::storage::WalEntry;
 use crate::transaction::Change;
 
+use async_trait::async_trait;
+
 pub struct DeleteExecutor {
     evaluator_registry: EvaluatorRegistry,
 }
@@ -18,6 +20,7 @@ impl DeleteExecutor {
     }
 }
 
+#[async_trait]
 impl Executor for DeleteExecutor {
     fn name(&self) -> &'static str {
         "DELETE"
@@ -27,25 +30,23 @@ impl Executor for DeleteExecutor {
         matches!(stmt, Statement::Delete(_))
     }
 
-    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         let Statement::Delete(delete) = stmt else {
             unreachable!();
         };
 
-        self.execute_delete(delete, ctx)
+        self.execute_delete(delete, ctx).await
     }
 }
 
 impl DeleteExecutor {
-    fn execute_delete(&self, delete: &DeleteStmt, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute_delete(&self, delete: &DeleteStmt, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         let table_handle = ctx.storage.get_table(&delete.table_name)?;
-        let schema = ctx.storage.get_schema(&delete.table_name)?;
+        let schema = ctx.storage.get_schema(&delete.table_name).await?;
 
         // Get all rows
         let rows: Vec<(usize, crate::core::Row)> = {
-            let table = table_handle
-                .read()
-                .map_err(|_| crate::core::DbError::ExecutionError("Table lock poisoned".into()))?;
+            let table = table_handle.read().await;
             table.rows_iter().map(|(id, row)| (*id, row.clone())).collect()
         };
 
@@ -56,7 +57,7 @@ impl DeleteExecutor {
         let mut rows_to_delete = Vec::new();
         for (id, row) in rows {
             let should_delete = if let Some(ref condition) = delete.selection {
-                match eval_ctx.evaluate(condition, &row, schema.schema()) {
+                match eval_ctx.evaluate(condition, &row, schema.schema()).await {
                     Ok(Value::Boolean(b)) => b,
                     Ok(Value::Null) => false,
                     Ok(_) => false,
@@ -78,15 +79,12 @@ impl DeleteExecutor {
             let indices_to_delete: Vec<usize> = rows_to_delete.iter().map(|(idx, _)| *idx).collect();
             let deleted_rows: Vec<_> = rows_to_delete.iter().map(|(_, row)| row.clone()).collect();
 
-            let mut table = table_handle
-                .write()
-                .map_err(|_| crate::core::DbError::ExecutionError("Table lock poisoned".into()))?;
+            let mut table = table_handle.write().await;
             table.delete_rows(indices_to_delete.clone())?;
 
             // Log to WAL if persistence is enabled
             if let Some(ref persistence) = ctx.persistence {
-                let mut persistence_guard = persistence.lock()
-                    .map_err(|e| crate::core::DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+                let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::Delete {
                     table: delete.table_name.clone(),
                     row_indices: indices_to_delete,
@@ -102,7 +100,7 @@ impl DeleteExecutor {
                         row_index,
                         old_row,
                     };
-                    ctx.transaction_manager.record_change(txn_id, change)?;
+                    ctx.transaction_manager.record_change(txn_id, change).await?;
                 }
             }
         }

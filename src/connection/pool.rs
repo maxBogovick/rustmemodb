@@ -1,7 +1,8 @@
 use super::{Connection, config::ConnectionConfig, auth::AuthManager};
 use crate::core::{DbError, Result};
 use crate::facade::InMemoryDB;
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc};
+use tokio::sync::{RwLock, Mutex};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -62,16 +63,7 @@ impl PooledConnection {
 
 impl ConnectionPool {
     /// Create a new connection pool
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let config = ConnectionConfig::new("admin", "password")
-    ///     .max_connections(10);
-    ///
-    /// let pool = ConnectionPool::new(config)?;
-    /// ```
-    pub fn new(config: ConnectionConfig) -> Result<Self> {
+    pub async fn new(config: ConnectionConfig) -> Result<Self> {
         config.validate()
             .map_err(|e| DbError::ExecutionError(e))?;
 
@@ -89,33 +81,28 @@ impl ConnectionPool {
         };
 
         // Pre-create minimum connections
-        pool.ensure_min_connections()?;
+        pool.ensure_min_connections().await?;
 
         Ok(pool)
     }
 
     /// Create a connection pool with custom authentication manager
-    ///
-    /// DEPRECATED: This method is deprecated as AuthManager is now a global singleton.
-    /// Use `ConnectionPool::new()` instead. The auth_manager parameter is ignored.
     #[deprecated(since = "0.1.0", note = "AuthManager is now a global singleton. Use ConnectionPool::new() instead.")]
-    pub fn with_auth_manager(
+    pub async fn with_auth_manager(
         config: ConnectionConfig,
         _auth_manager: AuthManager,
     ) -> Result<Self> {
         // Ignore the provided auth_manager and use the global singleton
-        Self::new(config)
+        Self::new(config).await
     }
 
     /// Get a connection from the pool
-    ///
-    /// Blocks until a connection is available or timeout is reached.
-    pub fn get_connection(&self) -> Result<PoolGuard> {
+    pub async fn get_connection(&self) -> Result<PoolGuard> {
         let start = Instant::now();
 
         loop {
             // Try to get an available connection
-            if let Some(mut pooled) = self.try_get_available()? {
+            if let Some(mut pooled) = self.try_get_available().await? {
                 pooled.refresh_last_used();
                 return Ok(PoolGuard {
                     connection: Some(pooled.connection),
@@ -124,7 +111,7 @@ impl ConnectionPool {
             }
 
             // Try to create a new connection if under limit
-            if let Some(conn) = self.try_create_connection()? {
+            if let Some(conn) = self.try_create_connection().await? {
                 return Ok(PoolGuard {
                     connection: Some(conn),
                     pool: self.available.clone(),
@@ -139,14 +126,13 @@ impl ConnectionPool {
             }
 
             // Wait a bit before retrying
-            std::thread::sleep(Duration::from_millis(10));
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 
     /// Try to get an available connection from the pool
-    fn try_get_available(&self) -> Result<Option<PooledConnection>> {
-        let mut available = self.available.lock()
-            .map_err(|_| DbError::LockError("Failed to acquire pool lock".into()))?;
+    async fn try_get_available(&self) -> Result<Option<PooledConnection>> {
+        let mut available = self.available.lock().await;
 
         // Remove expired/idle connections
         available.retain(|pooled| {
@@ -158,9 +144,8 @@ impl ConnectionPool {
     }
 
     /// Try to create a new connection if under limit
-    fn try_create_connection(&self) -> Result<Option<Connection>> {
-        let mut total = self.total_connections.lock()
-            .map_err(|_| DbError::LockError("Failed to acquire connection counter lock".into()))?;
+    async fn try_create_connection(&self) -> Result<Option<Connection>> {
+        let mut total = self.total_connections.lock().await;
 
         if *total >= self.config.max_connections {
             return Ok(None);
@@ -170,11 +155,10 @@ impl ConnectionPool {
         let user = AuthManager::global().authenticate(
             &self.config.username,
             &self.config.password,
-        )?;
+        ).await?;
 
         // Get next connection ID
-        let mut next_id = self.next_id.lock()
-            .map_err(|_| DbError::LockError("Failed to acquire ID lock".into()))?;
+        let mut next_id = self.next_id.lock().await;
         let id = *next_id;
         *next_id += 1;
 
@@ -187,22 +171,18 @@ impl ConnectionPool {
     }
 
     /// Ensure minimum number of connections
-    fn ensure_min_connections(&self) -> Result<()> {
-        let mut total = self.total_connections.lock()
-            .map_err(|_| DbError::LockError("Failed to acquire connection counter lock".into()))?;
-
-        let mut available = self.available.lock()
-            .map_err(|_| DbError::LockError("Failed to acquire pool lock".into()))?;
+    async fn ensure_min_connections(&self) -> Result<()> {
+        let mut total = self.total_connections.lock().await;
+        let mut available = self.available.lock().await;
 
         while *total < self.config.min_connections {
             // Authenticate user
             let user = AuthManager::global().authenticate(
                 &self.config.username,
                 &self.config.password,
-            )?;
+            ).await?;
 
-            let mut next_id = self.next_id.lock()
-                .map_err(|_| DbError::LockError("Failed to acquire ID lock".into()))?;
+            let mut next_id = self.next_id.lock().await;
             let id = *next_id;
             *next_id += 1;
 
@@ -216,9 +196,9 @@ impl ConnectionPool {
     }
 
     /// Get pool statistics
-    pub fn stats(&self) -> PoolStats {
-        let total = self.total_connections.lock().unwrap();
-        let available = self.available.lock().unwrap();
+    pub async fn stats(&self) -> PoolStats {
+        let total = self.total_connections.lock().await;
+        let available = self.available.lock().await;
 
         PoolStats {
             total_connections: *total,
@@ -271,36 +251,46 @@ impl PoolGuard {
     }
 
     /// Execute a query (convenience method)
-    pub fn execute(&mut self, sql: &str) -> Result<crate::result::QueryResult> {
-        self.connection().execute(sql)
+    pub async fn execute(&mut self, sql: &str) -> Result<crate::result::QueryResult> {
+        self.connection().execute(sql).await
     }
 
     /// Begin a transaction (convenience method)
-    pub fn begin(&mut self) -> Result<()> {
-        self.connection().begin()
+    pub async fn begin(&mut self) -> Result<()> {
+        self.connection().begin().await
     }
 
     /// Commit a transaction (convenience method)
-    pub fn commit(&mut self) -> Result<()> {
-        self.connection().commit()
+    pub async fn commit(&mut self) -> Result<()> {
+        self.connection().commit().await
     }
 
     /// Rollback a transaction (convenience method)
-    pub fn rollback(&mut self) -> Result<()> {
-        self.connection().rollback()
+    pub async fn rollback(&mut self) -> Result<()> {
+        self.connection().rollback().await
     }
 }
 
 impl Drop for PoolGuard {
     fn drop(&mut self) {
         if let Some(mut connection) = self.connection.take() {
-            // Auto-rollback if connection has active transaction
+            let pool_clone = self.pool.clone();
+            
+            // If connection has active transaction, rollback asynchronously
             if connection.is_in_transaction() {
-                let _ = connection.rollback();
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let _ = connection.rollback().await;
+                        // Return to pool after rollback
+                        let mut pool = pool_clone.lock().await;
+                        pool.push_back(PooledConnection::new(connection));
+                    });
+                    return;
+                }
             }
 
-            // Return connection to pool
-            if let Ok(mut pool) = self.pool.lock() {
+            // Return to pool immediately if no transaction or no runtime
+            if let Ok(mut pool) = pool_clone.try_lock() {
                 pool.push_back(PooledConnection::new(connection));
             }
         }
@@ -311,76 +301,76 @@ impl Drop for PoolGuard {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_pool_creation() {
+    #[tokio::test]
+    async fn test_pool_creation() {
         let config = ConnectionConfig::new("admin", "adminpass")
             .min_connections(2)
             .max_connections(5);
 
-        let pool = ConnectionPool::new(config).unwrap();
-        let stats = pool.stats();
+        let pool = ConnectionPool::new(config).await.unwrap();
+        let stats = pool.stats().await;
 
         assert_eq!(stats.total_connections, 2); // min_connections
         assert_eq!(stats.available_connections, 2);
     }
 
-    #[test]
-    fn test_get_connection() {
+    #[tokio::test]
+    async fn test_get_connection() {
         let config = ConnectionConfig::new("admin", "adminpass")
             .max_connections(5);
 
-        let pool = ConnectionPool::new(config).unwrap();
-        let mut conn = pool.get_connection().unwrap();
+        let pool = ConnectionPool::new(config).await.unwrap();
+        let mut conn = pool.get_connection().await.unwrap();
 
         assert!(conn.connection().is_active());
     }
 
-    #[test]
-    fn test_connection_return_to_pool() {
+    #[tokio::test]
+    async fn test_connection_return_to_pool() {
         let config = ConnectionConfig::new("admin", "adminpass")
             .min_connections(1)
             .max_connections(5);
 
-        let pool = ConnectionPool::new(config).unwrap();
+        let pool = ConnectionPool::new(config).await.unwrap();
 
         {
-            let _conn = pool.get_connection().unwrap();
-            let stats = pool.stats();
+            let _conn = pool.get_connection().await.unwrap();
+            let stats = pool.stats().await;
             assert_eq!(stats.active_connections, 1);
             assert_eq!(stats.available_connections, 0);
         } // Connection returned here
 
         // Wait a bit for the connection to be returned
-        std::thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let stats = pool.stats();
+        let stats = pool.stats().await;
         assert_eq!(stats.available_connections, 1);
     }
 
-    #[test]
-    fn test_max_connections_limit() {
+    #[tokio::test]
+    async fn test_max_connections_limit() {
         let config = ConnectionConfig::new("admin", "adminpass")
             .max_connections(2)
             .connect_timeout(Duration::from_millis(100));
 
-        let pool = ConnectionPool::new(config).unwrap();
+        let pool = ConnectionPool::new(config).await.unwrap();
 
-        let _conn1 = pool.get_connection().unwrap();
-        let _conn2 = pool.get_connection().unwrap();
+        let _conn1 = pool.get_connection().await.unwrap();
+        let _conn2 = pool.get_connection().await.unwrap();
 
         // Third connection should timeout
-        let result = pool.get_connection();
+        let result = pool.get_connection().await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_pool_stats() {
+    #[tokio::test]
+    async fn test_pool_stats() {
         let config = ConnectionConfig::new("admin", "adminpass")
             .min_connections(2)
             .max_connections(10);
 
-        let pool = ConnectionPool::new(config).unwrap();
-        let stats = pool.stats();
+        let pool = ConnectionPool::new(config).await.unwrap();
+        let stats = pool.stats().await;
 
         assert_eq!(stats.max_connections, 10);
         assert_eq!(stats.total_connections, 2);

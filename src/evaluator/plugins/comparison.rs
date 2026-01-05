@@ -2,8 +2,11 @@ use super::super::{EvaluationContext, ExpressionEvaluator};
 use crate::core::{DbError, Result, Row, Schema, Value};
 use crate::parser::ast::{BinaryOp, Expr};
 
+use async_trait::async_trait;
+
 pub struct ComparisonEvaluator;
 
+#[async_trait]
 impl ExpressionEvaluator for ComparisonEvaluator {
     fn name(&self) -> &'static str {
         "COMPARISON"
@@ -25,19 +28,19 @@ impl ExpressionEvaluator for ComparisonEvaluator {
         }
     }
 
-    fn evaluate(
+    async fn evaluate(
         &self,
         expr: &Expr,
         row: &Row,
         schema: &Schema,
-        context: &EvaluationContext,
+        context: &EvaluationContext<'_>,
     ) -> Result<Value> {
         let Expr::BinaryOp { left, op, right } = expr else {
             unreachable!();
         };
 
-        let left_val = context.evaluate(left, row, schema)?;
-        let right_val = context.evaluate(right, row, schema)?;
+        let left_val = context.evaluate(left, row, schema).await?;
+        let right_val = context.evaluate(right, row, schema).await?;
 
         let result = self.compare(&left_val, &right_val, op)?;
         Ok(Value::Boolean(result))

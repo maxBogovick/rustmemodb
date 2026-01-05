@@ -1,7 +1,8 @@
 use crate::core::{DbError, Result, Row};
 use crate::storage::InMemoryStorage;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsolationLevel {
@@ -87,21 +88,21 @@ impl TransactionManager {
     }
 
     /// Начать новую транзакцию
-    pub fn begin_transaction(&self, isolation_level: IsolationLevel) -> Result<u64> {
-        let mut next_id = self.next_transaction_id.write()?;
+    pub async fn begin_transaction(&self, isolation_level: IsolationLevel) -> Result<u64> {
+        let mut next_id = self.next_transaction_id.write().await;
         let tx_id = *next_id;
         *next_id += 1;
 
         let transaction = Transaction::new(tx_id, isolation_level);
-        let mut active = self.active_transactions.write()?;
+        let mut active = self.active_transactions.write().await;
         active.insert(tx_id, transaction);
 
         Ok(tx_id)
     }
 
     /// Зафиксировать транзакцию
-    pub fn commit_transaction(&self, tx_id: u64, storage: &InMemoryStorage) -> Result<()> {
-        let mut active = self.active_transactions.write()?;
+    pub async fn commit_transaction(&self, tx_id: u64, storage: &InMemoryStorage) -> Result<()> {
+        let mut active = self.active_transactions.write().await;
         let transaction = active
             .get_mut(&tx_id)
             .ok_or_else(|| DbError::ExecutionError("Transaction not found".into()))?;
@@ -110,26 +111,10 @@ impl TransactionManager {
             return Err(DbError::ExecutionError("Transaction is not active".into()));
         }
 
-        // Применяем все pending операции к storage
-        // 1. Удаления (в обратном порядке индексов)
-        /*for (table, mut indices) in transaction.pending_deletes.drain() {
-            indices.sort_by(|a, b| b.cmp(a)); // Сортируем в обратном порядке
-            for idx in indices {
-                storage.delete_row(&table, idx)?;
-            }
-        }
-
-        // 2. Обновления
-        for (table, updates) in transaction.pending_updates.drain() {
-            for (idx, row) in updates {
-                storage.update_row(&table, idx, row)?;
-            }
-        }
-*/
         // 3. Вставки
         for (table, rows) in transaction.pending_inserts.drain() {
             for row in rows {
-                storage.insert_row(&table, row)?;
+                storage.insert_row(&table, row).await?;
             }
         }
 
@@ -140,8 +125,8 @@ impl TransactionManager {
     }
 
     /// Откатить транзакцию
-    pub fn rollback_transaction(&self, tx_id: u64) -> Result<()> {
-        let mut active = self.active_transactions.write()?;
+    pub async fn rollback_transaction(&self, tx_id: u64) -> Result<()> {
+        let mut active = self.active_transactions.write().await;
         let transaction = active
             .get_mut(&tx_id)
             .ok_or_else(|| DbError::ExecutionError("Transaction not found".into()))?;
@@ -157,8 +142,8 @@ impl TransactionManager {
     }
 
     /// Получить транзакцию
-    pub fn get_transaction(&self, tx_id: u64) -> Result<Transaction> {
-        let active = self.active_transactions.read()?;
+    pub async fn get_transaction(&self, tx_id: u64) -> Result<Transaction> {
+        let active = self.active_transactions.read().await;
         active
             .get(&tx_id)
             .cloned()
@@ -166,14 +151,14 @@ impl TransactionManager {
     }
 
     /// Проверить, есть ли активная транзакция
-    pub fn has_active_transaction(&self, tx_id: u64) -> Result<bool> {
-        let active = self.active_transactions.read()?;
+    pub async fn has_active_transaction(&self, tx_id: u64) -> Result<bool> {
+        let active = self.active_transactions.read().await;
         Ok(active.contains_key(&tx_id))
     }
 
     /// Записать операцию в транзакцию (для отложенного применения)
-    pub fn record_insert(&self, tx_id: u64, table: String, row: Row) -> Result<()> {
-        let mut active = self.active_transactions.write()?;
+    pub async fn record_insert(&self, tx_id: u64, table: String, row: Row) -> Result<()> {
+        let mut active = self.active_transactions.write().await;
         let transaction = active
             .get_mut(&tx_id)
             .ok_or_else(|| DbError::ExecutionError("Transaction not found".into()))?;
@@ -186,8 +171,8 @@ impl TransactionManager {
         Ok(())
     }
 
-    pub fn record_update(&self, tx_id: u64, table: String, index: usize, row: Row) -> Result<()> {
-        let mut active = self.active_transactions.write()?;
+    pub async fn record_update(&self, tx_id: u64, table: String, index: usize, row: Row) -> Result<()> {
+        let mut active = self.active_transactions.write().await;
         let transaction = active
             .get_mut(&tx_id)
             .ok_or_else(|| DbError::ExecutionError("Transaction not found".into()))?;
@@ -200,8 +185,8 @@ impl TransactionManager {
         Ok(())
     }
 
-    pub fn record_delete(&self, tx_id: u64, table: String, index: usize) -> Result<()> {
-        let mut active = self.active_transactions.write()?;
+    pub async fn record_delete(&self, tx_id: u64, table: String, index: usize) -> Result<()> {
+        let mut active = self.active_transactions.write().await;
         let transaction = active
             .get_mut(&tx_id)
             .ok_or_else(|| DbError::ExecutionError("Transaction not found".into()))?;
@@ -225,30 +210,30 @@ impl Default for TransactionManager {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_begin_transaction() {
+    #[tokio::test]
+    async fn test_begin_transaction() {
         let tm = TransactionManager::new();
-        let tx_id = tm.begin_transaction(IsolationLevel::ReadCommitted).unwrap();
-        assert!(tm.has_active_transaction(tx_id).unwrap());
+        let tx_id = tm.begin_transaction(IsolationLevel::ReadCommitted).await.unwrap();
+        assert!(tm.has_active_transaction(tx_id).await.unwrap());
     }
 
-    #[test]
-    fn test_rollback() {
+    #[tokio::test]
+    async fn test_rollback() {
         let tm = TransactionManager::new();
-        let tx_id = tm.begin_transaction(IsolationLevel::ReadCommitted).unwrap();
+        let tx_id = tm.begin_transaction(IsolationLevel::ReadCommitted).await.unwrap();
 
-        tm.rollback_transaction(tx_id).unwrap();
-        assert!(!tm.has_active_transaction(tx_id).unwrap());
+        tm.rollback_transaction(tx_id).await.unwrap();
+        assert!(!tm.has_active_transaction(tx_id).await.unwrap());
     }
 
-    #[test]
-    fn test_multiple_transactions() {
+    #[tokio::test]
+    async fn test_multiple_transactions() {
         let tm = TransactionManager::new();
-        let tx1 = tm.begin_transaction(IsolationLevel::ReadCommitted).unwrap();
-        let tx2 = tm.begin_transaction(IsolationLevel::Serializable).unwrap();
+        let tx1 = tm.begin_transaction(IsolationLevel::ReadCommitted).await.unwrap();
+        let tx2 = tm.begin_transaction(IsolationLevel::Serializable).await.unwrap();
 
-        assert!(tm.has_active_transaction(tx1).unwrap());
-        assert!(tm.has_active_transaction(tx2).unwrap());
+        assert!(tm.has_active_transaction(tx1).await.unwrap());
+        assert!(tm.has_active_transaction(tx2).await.unwrap());
         assert_ne!(tx1, tx2);
     }
 }

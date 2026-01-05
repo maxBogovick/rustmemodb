@@ -6,12 +6,13 @@
 
 use rustmemodb::Client;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎯 RustMemDB Transaction Example\n");
     println!("{}", "=".repeat(60));
 
     // Connect to the database
-    let client = Client::connect("admin", "adminpass")?;
+    let client = Client::connect("admin", "adminpass").await?;
 
     // Create accounts table
     println!("\n📝 Creating accounts table...");
@@ -21,16 +22,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             name TEXT,
             balance FLOAT
         )"
-    )?;
+    ).await?;
 
     // Insert initial data
     println!("💰 Adding initial accounts...");
-    client.execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)")?;
-    client.execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)")?;
-    client.execute("INSERT INTO accounts VALUES (3, 'Charlie', 750.0)")?;
+    client.execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)").await?;
+    client.execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)").await?;
+    client.execute("INSERT INTO accounts VALUES (3, 'Charlie', 750.0)").await?;
 
     println!("\n📊 Initial balances:");
-    let result = client.query("SELECT * FROM accounts ORDER BY id")?;
+    let result = client.query("SELECT * FROM accounts ORDER BY id").await?;
     result.print();
 
     // ============================================
@@ -41,25 +42,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     {
-        let mut conn = client.get_connection()?;
+        let mut conn = client.get_connection().await?;
 
         println!("\n🔄 Starting transaction...");
-        conn.begin()?;
+        conn.begin().await?;
 
         println!("💸 Transferring $200 from Alice to Bob...");
-        conn.execute("UPDATE accounts SET balance = balance - 200.0 WHERE name = 'Alice'")?;
-        conn.execute("UPDATE accounts SET balance = balance + 200.0 WHERE name = 'Bob'")?;
+        conn.execute("UPDATE accounts SET balance = balance - 200.0 WHERE name = 'Alice'").await?;
+        conn.execute("UPDATE accounts SET balance = balance + 200.0 WHERE name = 'Bob'").await?;
 
         println!("\n📊 Balances within transaction:");
-        let result = conn.execute("SELECT * FROM accounts ORDER BY id")?;
+        let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
         result.print();
 
         println!("\n✅ Committing transaction...");
-        conn.commit()?;
+        conn.commit().await?;
     }
 
     println!("\n📊 Balances after COMMIT:");
-    let result = client.query("SELECT * FROM accounts ORDER BY id")?;
+    let result = client.query("SELECT * FROM accounts ORDER BY id").await?;
     result.print();
 
     // ============================================
@@ -70,25 +71,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     {
-        let mut conn = client.get_connection()?;
+        let mut conn = client.get_connection().await?;
 
         println!("\n🔄 Starting transaction...");
-        conn.begin()?;
+        conn.begin().await?;
 
         println!("💸 Attempting to transfer $1500 from Bob to Charlie...");
-        conn.execute("UPDATE accounts SET balance = balance - 1500.0 WHERE name = 'Bob'")?;
-        conn.execute("UPDATE accounts SET balance = balance + 1500.0 WHERE name = 'Charlie'")?;
+        conn.execute("UPDATE accounts SET balance = balance - 1500.0 WHERE name = 'Bob'").await?;
+        conn.execute("UPDATE accounts SET balance = balance + 1500.0 WHERE name = 'Charlie'").await?;
 
         println!("\n📊 Balances within transaction (Bob would have negative balance!):");
-        let result = conn.execute("SELECT * FROM accounts ORDER BY id")?;
+        let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
         result.print();
 
         println!("\n❌ Oops! Bob would have negative balance. Rolling back...");
-        conn.rollback()?;
+        conn.rollback().await?;
     }
 
     println!("\n📊 Balances after ROLLBACK (unchanged):");
-    let result = client.query("SELECT * FROM accounts ORDER BY id")?;
+    let result = client.query("SELECT * FROM accounts ORDER BY id").await?;
     result.print();
 
     // ============================================
@@ -99,17 +100,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     {
-        let mut conn = client.get_connection()?;
+        let mut conn = client.get_connection().await?;
 
         println!("\n🔄 Starting transaction...");
-        conn.begin()?;
+        conn.begin().await?;
 
         println!("💸 Transferring $100 from Charlie to Alice...");
-        conn.execute("UPDATE accounts SET balance = balance - 100.0 WHERE name = 'Charlie'")?;
-        conn.execute("UPDATE accounts SET balance = balance + 100.0 WHERE name = 'Alice'")?;
+        conn.execute("UPDATE accounts SET balance = balance - 100.0 WHERE name = 'Charlie'").await?;
+        conn.execute("UPDATE accounts SET balance = balance + 100.0 WHERE name = 'Alice'").await?;
 
         println!("\n📊 Balances within transaction:");
-        let result = conn.execute("SELECT * FROM accounts ORDER BY id")?;
+        let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
         result.print();
 
         println!("\n⚠️  Dropping connection without commit...");
@@ -117,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n📊 Balances after auto-rollback (unchanged):");
-    let result = client.query("SELECT * FROM accounts ORDER BY id")?;
+    let result = client.query("SELECT * FROM accounts ORDER BY id").await?;
     result.print();
 
     // ============================================
@@ -128,32 +129,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     {
-        let mut conn = client.get_connection()?;
+        let mut conn = client.get_connection().await?;
 
         println!("\n🔄 Starting transaction...");
-        conn.begin()?;
+        conn.begin().await?;
 
         println!("📝 Performing multiple operations:");
         println!("  1. Insert new account (David)");
-        conn.execute("INSERT INTO accounts VALUES (4, 'David', 0.0)")?;
+        conn.execute("INSERT INTO accounts VALUES (4, 'David', 0.0)").await?;
 
         println!("  2. Transfer $50 from each person to David");
-        conn.execute("UPDATE accounts SET balance = balance - 50.0 WHERE name != 'David'")?;
-        conn.execute("UPDATE accounts SET balance = balance + 150.0 WHERE name = 'David'")?;
+        conn.execute("UPDATE accounts SET balance = balance - 50.0 WHERE name != 'David'").await?;
+        conn.execute("UPDATE accounts SET balance = balance + 150.0 WHERE name = 'David'").await?;
 
         println!("  3. Delete accounts with balance < 100");
-        conn.execute("DELETE FROM accounts WHERE balance < 100")?;
+        conn.execute("DELETE FROM accounts WHERE balance < 100").await?;
 
         println!("\n📊 Result within transaction:");
-        let result = conn.execute("SELECT * FROM accounts ORDER BY id")?;
+        let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
         result.print();
 
         println!("\n✅ Committing transaction...");
-        conn.commit()?;
+        conn.commit().await?;
     }
 
     println!("\n📊 Final state after complex transaction:");
-    let result = client.query("SELECT * FROM accounts ORDER BY balance DESC")?;
+    let result = client.query("SELECT * FROM accounts ORDER BY balance DESC").await?;
     result.print();
 
     // Summary

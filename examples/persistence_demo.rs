@@ -15,14 +15,14 @@ use rustmemodb::DurabilityMode::Async;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut db = InMemoryDB::new();
     let data_dir = "./demo_data";
-    db.enable_persistence(data_dir, Async)?;
+    db.enable_persistence(data_dir, Async);
     assert!(db.table_exists("users"));
     assert!(db.table_exists("products"));
     println!("✓ Tables recovered: {:?}", db.list_tables());
     Ok(())
 }
 
-fn main2() -> Result<(), Box<dyn std::error::Error>> {
+async fn main2() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== RustMemDB Persistence Demo ===\n");
 
     let data_dir = "./demo_data";
@@ -38,35 +38,35 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
         let mut db = InMemoryDB::new();
 
         // Enable persistence with ASYNC mode (fast, background sync)
-        db.enable_persistence(data_dir, DurabilityMode::Async)?;
+        db.enable_persistence(data_dir, DurabilityMode::Async).await;
 
         println!("✓ Persistence enabled (mode: {:?})", db.durability_mode());
 
         // Create tables
-        db.execute("CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)")?;
-        db.execute("CREATE TABLE products (id INTEGER, name TEXT, price FLOAT)")?;
+        db.execute("CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)").await;
+        db.execute("CREATE TABLE products (id INTEGER, name TEXT, price FLOAT)").await;
 
         println!("✓ Created 2 tables");
 
         // Insert some data
-        db.execute("INSERT INTO users VALUES (1, 'Alice', 30)")?;
-        db.execute("INSERT INTO users VALUES (2, 'Bob', 25)")?;
-        db.execute("INSERT INTO users VALUES (3, 'Charlie', 35)")?;
+        db.execute("INSERT INTO users VALUES (1, 'Alice', 30)").await;
+        db.execute("INSERT INTO users VALUES (2, 'Bob', 25)").await;
+        db.execute("INSERT INTO users VALUES (3, 'Charlie', 35)").await;
 
-        db.execute("INSERT INTO products VALUES (1, 'Laptop', 999.99)")?;
-        db.execute("INSERT INTO products VALUES (2, 'Mouse', 29.99)")?;
+        db.execute("INSERT INTO products VALUES (1, 'Laptop', 999.99)").await;
+        db.execute("INSERT INTO products VALUES (2, 'Mouse', 29.99)").await;
 
         println!("✓ Inserted data into tables");
 
         // Query data
-        let result = db.execute("SELECT * FROM users WHERE age > 25")?;
+        let result = db.execute("SELECT * FROM users WHERE age > 25").await;
         println!("\nUsers with age > 25:");
-        for row in result.rows() {
+        for row in result?.rows() {
             println!("  {:?}", row);
         }
 
         // Create a checkpoint (snapshot)
-        db.checkpoint()?;
+        db.checkpoint().await;
         println!("\n✓ Checkpoint created");
 
         // Database will be dropped here, simulating a "crash"
@@ -82,7 +82,7 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
         let mut db = InMemoryDB::new();
 
         // Enable persistence - this will automatically recover data
-        db.enable_persistence(data_dir, DurabilityMode::Async)?;
+        db.enable_persistence(data_dir, DurabilityMode::Async).await;
 
         println!("✓ Database recovered from persistence");
 
@@ -92,24 +92,24 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
         println!("✓ Tables recovered: {:?}", db.list_tables());
 
         // Verify data was recovered
-        let result = db.execute("SELECT * FROM users")?;
+        let result = db.execute("SELECT * FROM users").await?;
         println!("\nRecovered users ({} rows):", result.row_count());
         for row in result.rows() {
             println!("  {:?}", row);
         }
 
-        let result = db.execute("SELECT * FROM products")?;
+        let result = db.execute("SELECT * FROM products").await?;
         println!("\nRecovered products ({} rows):", result.row_count());
         for row in result.rows() {
             println!("  {:?}", row);
         }
 
         // Add more data after recovery
-        db.execute("INSERT INTO users VALUES (4, 'David', 28)")?;
+        db.execute("INSERT INTO users VALUES (4, 'David', 28)").await;
         println!("\n✓ Added new user after recovery");
 
         // Final checkpoint
-        db.checkpoint()?;
+        db.checkpoint().await;
         println!("✓ Final checkpoint created");
     }
 
@@ -121,7 +121,7 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
     // SYNC mode - fsync after each operation (slow but durable)
     {
         let mut db = InMemoryDB::new();
-        db.enable_persistence("./demo_sync", DurabilityMode::Sync)?;
+        db.enable_persistence("./demo_sync", DurabilityMode::Sync).await;
         println!("✓ SYNC mode: Every operation is immediately synced to disk");
         let _ = fs::remove_dir_all("./demo_sync");
     }
@@ -129,7 +129,7 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
     // ASYNC mode - background fsync (fast, some risk on crash)
     {
         let mut db = InMemoryDB::new();
-        db.enable_persistence("./demo_async", DurabilityMode::Async)?;
+        db.enable_persistence("./demo_async", DurabilityMode::Async).await;
         println!("✓ ASYNC mode: Operations buffered, synced in background");
         let _ = fs::remove_dir_all("./demo_async");
     }
@@ -137,7 +137,7 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
     // NONE mode - no persistence (in-memory only)
     {
         let mut db = InMemoryDB::new();
-        db.enable_persistence("./demo_none", DurabilityMode::None)?;
+        db.enable_persistence("./demo_none", DurabilityMode::None).await;
         println!("✓ NONE mode: In-memory only, no files written");
         // No files created, nothing to clean up
     }
@@ -148,17 +148,17 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n\nPart 4: Manual Checkpoint Management\n");
     {
         let mut db = InMemoryDB::new();
-        db.enable_persistence("./demo_checkpoint", DurabilityMode::Async)?;
+        db.enable_persistence("./demo_checkpoint", DurabilityMode::Async).await;
 
         // Create lots of tables (normally would trigger auto-checkpoint at 1000 ops)
         for i in 0..10 {
-            db.execute(&format!("CREATE TABLE t{} (id INTEGER)", i))?;
+            db.execute(&format!("CREATE TABLE t{} (id INTEGER)", i)).await;
         }
 
         println!("✓ Created 10 tables");
 
         // Manual checkpoint to consolidate WAL
-        db.checkpoint()?;
+        db.checkpoint().await;
         println!("✓ Manual checkpoint created");
         println!("  - Snapshot written to disk");
         println!("  - WAL cleared and ready for new entries");
@@ -176,34 +176,34 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         let mut db = InMemoryDB::new();
-        db.enable_persistence(dml_data_dir, DurabilityMode::Sync)?;
+        db.enable_persistence(dml_data_dir, DurabilityMode::Sync).await;
 
         // Create table and insert data
-        db.execute("CREATE TABLE transactions (id INTEGER, amount FLOAT, status TEXT)")?;
-        db.execute("INSERT INTO transactions VALUES (1, 100.0, 'pending')")?;
-        db.execute("INSERT INTO transactions VALUES (2, 250.0, 'pending')")?;
-        db.execute("INSERT INTO transactions VALUES (3, 75.0, 'pending')")?;
+        db.execute("CREATE TABLE transactions (id INTEGER, amount FLOAT, status TEXT)").await;
+        db.execute("INSERT INTO transactions VALUES (1, 100.0, 'pending')").await;
+        db.execute("INSERT INTO transactions VALUES (2, 250.0, 'pending')").await;
+        db.execute("INSERT INTO transactions VALUES (3, 75.0, 'pending')").await;
 
         println!("✓ Created table and inserted 3 transactions");
 
         // Update some transactions
-        db.execute("UPDATE transactions SET status = 'completed' WHERE id = 1")?;
-        db.execute("UPDATE transactions SET amount = 300.0 WHERE id = 2")?;
+        db.execute("UPDATE transactions SET status = 'completed' WHERE id = 1").await;
+        db.execute("UPDATE transactions SET amount = 300.0 WHERE id = 2").await;
 
         println!("✓ Updated transaction statuses and amounts");
 
         // Delete a transaction
-        db.execute("DELETE FROM transactions WHERE id = 3")?;
+        db.execute("DELETE FROM transactions WHERE id = 3").await;
 
         println!("✓ Deleted transaction 3");
 
         // Add new transaction
-        db.execute("INSERT INTO transactions VALUES (4, 500.0, 'completed')")?;
+        db.execute("INSERT INTO transactions VALUES (4, 500.0, 'completed')").await;
 
         println!("✓ Added new transaction 4");
 
         // Show current state
-        let result = db.execute("SELECT * FROM transactions")?;
+        let result = db.execute("SELECT * FROM transactions").await?;
         println!("\nCurrent state ({} rows):", result.row_count());
         for row in result.rows() {
             println!("  {:?}", row);
@@ -217,12 +217,12 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
     // Recover and verify
     {
         let mut db = InMemoryDB::new();
-        db.enable_persistence(dml_data_dir, DurabilityMode::Sync)?;
+        db.enable_persistence(dml_data_dir, DurabilityMode::Sync).await;
 
         println!("\n✓ Database recovered from WAL");
 
         // Verify all DML operations were recovered
-        let result = db.execute("SELECT * FROM transactions")?;
+        let result = db.execute("SELECT * FROM transactions").await?;
         println!("\nRecovered state ({} rows):", result.row_count());
         for row in result.rows() {
             println!("  {:?}", row);
@@ -231,16 +231,16 @@ fn main2() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(result.row_count(), 3);
 
         // Verify specific changes
-        let tx1 = db.execute("SELECT * FROM transactions WHERE id = 1")?;
+        let tx1 = db.execute("SELECT * FROM transactions WHERE id = 1").await?;
         assert_eq!(tx1.rows()[0][2].to_string(), "completed");
 
-        let tx2 = db.execute("SELECT * FROM transactions WHERE id = 2")?;
+        let tx2 = db.execute("SELECT * FROM transactions WHERE id = 2").await?;
         assert_eq!(tx2.rows()[0][1].to_string(), "300");
 
-        let tx3 = db.execute("SELECT * FROM transactions WHERE id = 3")?;
+        let tx3 = db.execute("SELECT * FROM transactions WHERE id = 3").await?;
         assert_eq!(tx3.row_count(), 0); // Should be deleted
 
-        let tx4 = db.execute("SELECT * FROM transactions WHERE id = 4")?;
+        let tx4 = db.execute("SELECT * FROM transactions WHERE id = 4").await?;
         assert_eq!(tx4.rows()[0][1].to_string(), "500");
 
         println!("\n✓ All DML operations successfully recovered!");

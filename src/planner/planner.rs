@@ -187,7 +187,7 @@ impl QueryPlanner {
         (has_aggr, aggrs)
     }
 
-    fn build_aggregate_schema(&self, input_schema: &Schema, group_by: &[Expr], aggrs: &[Expr]) -> Schema {
+    fn build_aggregate_schema(&self, _input_schema: &Schema, group_by: &[Expr], aggrs: &[Expr]) -> Schema {
         let mut columns = Vec::new();
         
         // Group columns

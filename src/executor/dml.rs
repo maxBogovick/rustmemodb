@@ -5,8 +5,11 @@ use crate::result::QueryResult;
 use crate::storage::WalEntry;
 use crate::transaction::Change;
 
+use async_trait::async_trait;
+
 pub struct InsertExecutor;
 
+#[async_trait]
 impl Executor for InsertExecutor {
     fn name(&self) -> &'static str {
         "INSERT"
@@ -15,19 +18,19 @@ impl Executor for InsertExecutor {
         matches!(stmt, Statement::Insert(_))
     }
 
-    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         let Statement::Insert(insert) = stmt else {
             unreachable!();
         };
 
-        self.execute_insert(insert, ctx)
+        self.execute_insert(insert, ctx).await
     }
 }
 
 impl InsertExecutor {
-    fn execute_insert(&self, insert: &InsertStmt, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute_insert(&self, insert: &InsertStmt, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         // Получаем схему (read lock на одну таблицу)
-        let schema = ctx.storage.get_schema(&insert.table_name)?;
+        let schema = ctx.storage.get_schema(&insert.table_name).await?;
 
         // Вычисляем строки
         let rows: Vec<Row> = insert
@@ -38,12 +41,11 @@ impl InsertExecutor {
 
         // Insert rows into storage (both in transaction and auto-commit mode)
         for row in rows {
-            ctx.storage.insert_row(&insert.table_name, row.clone())?;
+            ctx.storage.insert_row(&insert.table_name, row.clone()).await?;
 
             // Log to WAL if persistence is enabled
             if let Some(ref persistence) = ctx.persistence {
-                let mut persistence_guard = persistence.lock()
-                    .map_err(|e| DbError::ExecutionError(format!("Persistence lock poisoned: {}", e)))?;
+                let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::Insert {
                     table: insert.table_name.clone(),
                     row: row.clone(),
@@ -56,7 +58,7 @@ impl InsertExecutor {
                     table: insert.table_name.clone(),
                     row,
                 };
-                ctx.transaction_manager.record_change(txn_id, change)?;
+                ctx.transaction_manager.record_change(txn_id, change).await?;
             }
         }
 

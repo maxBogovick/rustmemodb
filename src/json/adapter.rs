@@ -14,7 +14,8 @@ use super::error::{JsonError, JsonResult};
 use super::schema_inference::{SchemaInferenceEngine, SchemaInferenceStrategy};
 use super::validator::{QueryValidator, validate_collection_name};
 use serde_json::Value as JsonValue;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
+use tokio::sync::RwLock;
 
 /// Configuration for JsonStorageAdapter
 #[derive(Debug, Clone)]
@@ -80,19 +81,7 @@ impl JsonStorageAdapter {
     }
 
     /// Create or insert documents into a collection
-    ///
-    /// # Arguments
-    /// * `collection_name` - Name of the collection (table)
-    /// * `document` - JSON string containing array of objects
-    ///
-    /// # Example
-    /// ```ignore
-    /// adapter.create("users", r#"[
-    ///     {"id": "1", "name": "Alice", "age": 30},
-    ///     {"id": "2", "name": "Bob", "age": 25}
-    /// ]"#)?;
-    /// ```
-    pub fn create(&self, collection_name: &str, document: &str) -> JsonResult<()> {
+    pub async fn create(&self, collection_name: &str, document: &str) -> JsonResult<()> {
         // Validate collection name
         validate_collection_name(collection_name)?;
 
@@ -109,7 +98,7 @@ impl JsonStorageAdapter {
 
         // Check if table exists
         let table_exists = {
-            let db = self.db.read().unwrap();
+            let db = self.db.read().await;
             db.table_exists(collection_name)
         };
 
@@ -121,26 +110,17 @@ impl JsonStorageAdapter {
                 ));
             }
 
-            self.create_table_from_documents(collection_name, documents)?;
+            self.create_table_from_documents(collection_name, documents).await?;
         }
 
         // Insert documents
-        self.insert_documents(collection_name, documents)?;
+        self.insert_documents(collection_name, documents).await?;
 
         Ok(())
     }
 
     /// Read documents from a collection using SQL query
-    ///
-    /// # Arguments
-    /// * `collection_name` - Name of the collection (table)
-    /// * `query` - SQL SELECT query
-    ///
-    /// # Example
-    /// ```ignore
-    /// let results = adapter.read("users", "SELECT * FROM users WHERE age > 25")?;
-    /// ```
-    pub fn read(&self, collection_name: &str, query: &str) -> JsonResult<String> {
+    pub async fn read(&self, collection_name: &str, query: &str) -> JsonResult<String> {
         // Validate collection name
         validate_collection_name(collection_name)?;
 
@@ -151,8 +131,8 @@ impl JsonStorageAdapter {
 
         // Execute query
         let result = {
-            let mut db = self.db.write().unwrap();
-            db.execute(query)?
+            let mut db = self.db.write().await;
+            db.execute(query).await?
         };
 
         // Convert result to JSON
@@ -160,22 +140,7 @@ impl JsonStorageAdapter {
     }
 
     /// Update documents in a collection
-    ///
-    /// # Arguments
-    /// * `collection_name` - Name of the collection (table)
-    /// * `document` - JSON string containing array of objects with updates
-    ///
-    /// # Example
-    /// ```ignore
-    /// adapter.update("users", r#"[
-    ///     {"id": "1", "name": "Alice Smith", "age": 31}
-    /// ]"#)?;
-    /// ```
-    ///
-    /// # Note
-    /// This method requires an "id" field in each document to identify
-    /// which rows to update.
-    pub fn update(&self, collection_name: &str, document: &str) -> JsonResult<()> {
+    pub async fn update(&self, collection_name: &str, document: &str) -> JsonResult<()> {
         // Validate collection name
         validate_collection_name(collection_name)?;
 
@@ -192,7 +157,7 @@ impl JsonStorageAdapter {
 
         // Check table exists
         {
-            let db = self.db.read().unwrap();
+            let db = self.db.read().await;
             if !db.table_exists(collection_name) {
                 return Err(JsonError::ValidationError(
                     format!("Collection '{}' does not exist", collection_name)
@@ -244,30 +209,21 @@ impl JsonStorageAdapter {
             let sql = builder.build();
 
             // Execute UPDATE
-            let mut db = self.db.write().unwrap();
-            db.execute(&sql)?;
+            let mut db = self.db.write().await;
+            db.execute(&sql).await?;
         }
 
         Ok(())
     }
 
     /// Delete documents from a collection by ID
-    ///
-    /// # Arguments
-    /// * `collection_name` - Name of the collection (table)
-    /// * `id` - ID of the document to delete
-    ///
-    /// # Example
-    /// ```ignore
-    /// adapter.delete("users", "123")?;
-    /// ```
-    pub fn delete(&self, collection_name: &str, id: &str) -> JsonResult<()> {
+    pub async fn delete(&self, collection_name: &str, id: &str) -> JsonResult<()> {
         // Validate collection name
         validate_collection_name(collection_name)?;
 
         // Check table exists
         {
-            let db = self.db.read().unwrap();
+            let db = self.db.read().await;
             if !db.table_exists(collection_name) {
                 return Err(JsonError::ValidationError(
                     format!("Collection '{}' does not exist", collection_name)
@@ -281,47 +237,39 @@ impl JsonStorageAdapter {
             .build();
 
         // Execute DELETE
-        let mut db = self.db.write().unwrap();
-        db.execute(&sql)?;
+        let mut db = self.db.write().await;
+        db.execute(&sql).await?;
 
         Ok(())
     }
 
     /// Drop an entire collection (table)
-    ///
-    /// # Arguments
-    /// * `collection_name` - Name of the collection to drop
-    ///
-    /// # Example
-    /// ```ignore
-    /// adapter.drop_collection("users")?;
-    /// ```
-    pub fn drop_collection(&self, collection_name: &str) -> JsonResult<()> {
+    pub async fn drop_collection(&self, collection_name: &str) -> JsonResult<()> {
         validate_collection_name(collection_name)?;
 
-        let mut db = self.db.write().unwrap();
+        let mut db = self.db.write().await;
         let sql = format!("DROP TABLE IF EXISTS {}", collection_name);
-        db.execute(&sql)?;
+        db.execute(&sql).await?;
 
         Ok(())
     }
 
     /// List all collections (tables)
-    pub fn list_collections(&self) -> Vec<String> {
-        let db = self.db.read().unwrap();
+    pub async fn list_collections(&self) -> Vec<String> {
+        let db = self.db.read().await;
         db.list_tables()
     }
 
     /// Check if a collection exists
-    pub fn collection_exists(&self, collection_name: &str) -> bool {
-        let db = self.db.read().unwrap();
+    pub async fn collection_exists(&self, collection_name: &str) -> bool {
+        let db = self.db.read().await;
         db.table_exists(collection_name)
     }
 
     // ==================== Private Helper Methods ====================
 
     /// Create table from JSON documents
-    fn create_table_from_documents(
+    async fn create_table_from_documents(
         &self,
         collection_name: &str,
         documents: &[JsonValue],
@@ -333,21 +281,21 @@ impl JsonStorageAdapter {
         let sql = CreateTableBuilder::from_schema(&schema).build();
 
         // Execute CREATE TABLE
-        let mut db = self.db.write().unwrap();
-        db.execute(&sql)?;
+        let mut db = self.db.write().await;
+        db.execute(&sql).await?;
 
         Ok(())
     }
 
     /// Insert documents into existing table
-    fn insert_documents(
+    async fn insert_documents(
         &self,
         collection_name: &str,
         documents: &[JsonValue],
     ) -> JsonResult<()> {
         // Get table schema
         let schema = {
-            let db = self.db.read().unwrap();
+            let db = self.db.read().await;
             db.table_exists(collection_name)
                 .then(|| ())
                 .ok_or_else(|| JsonError::ValidationError(
@@ -378,9 +326,9 @@ impl JsonStorageAdapter {
             .build_batched(self.config.insert_batch_size);
 
         // Execute all INSERT statements
-        let mut db = self.db.write().unwrap();
+        let mut db = self.db.write().await;
         for sql in sql_statements {
-            db.execute(&sql)?;
+            db.execute(&sql).await?;
         }
 
         Ok(())
@@ -430,8 +378,8 @@ mod tests {
         JsonStorageAdapter::new(db)
     }
 
-    #[test]
-    fn test_create_collection() {
+    #[tokio::test]
+    async fn test_create_collection() {
         let adapter = create_test_adapter();
 
         let doc = r#"[
@@ -439,14 +387,14 @@ mod tests {
             {"id": "2", "name": "Bob", "age": 25}
         ]"#;
 
-        let result = adapter.create("users", doc);
+        let result = adapter.create("users", doc).await;
         assert!(result.is_ok());
 
-        assert!(adapter.collection_exists("users"));
+        assert!(adapter.collection_exists("users").await);
     }
 
-    #[test]
-    fn test_read_collection() {
+    #[tokio::test]
+    async fn test_read_collection() {
         let adapter = create_test_adapter();
 
         let doc = r#"[
@@ -454,36 +402,36 @@ mod tests {
             {"id": "2", "name": "Bob", "age": 24.9}
         ]"#;
 
-        adapter.create("users", doc).unwrap();
+        adapter.create("users", doc).await.unwrap();
 
-        let result = adapter.read("users", "SELECT * FROM users WHERE age > 24");
+        let result = adapter.read("users", "SELECT * FROM users WHERE age > 24").await;
         assert!(result.is_ok());
 
         let json = result.unwrap();
         assert!(json.contains("Alice"));
     }
 
-    #[test]
-    fn test_delete_document() {
+    #[tokio::test]
+    async fn test_delete_document() {
         let adapter = create_test_adapter();
 
         let doc = r#"[
             {"id": "1", "name": "Alice", "age": 30}
         ]"#;
 
-        adapter.create("users", doc).unwrap();
-        let result = adapter.delete("users", "1");
+        adapter.create("users", doc).await.unwrap();
+        let result = adapter.delete("users", "1").await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_invalid_collection_name() {
+    #[tokio::test]
+    async fn test_invalid_collection_name() {
         let adapter = create_test_adapter();
 
         let doc = r#"[{"id": "1"}]"#;
 
-        assert!(adapter.create("DROP", doc).is_err());
-        assert!(adapter.create("user-profile", doc).is_err());
-        assert!(adapter.create("123users", doc).is_err());
+        assert!(adapter.create("DROP", doc).await.is_err());
+        assert!(adapter.create("user-profile", doc).await.is_err());
+        assert!(adapter.create("123users", doc).await.is_err());
     }
 }

@@ -14,7 +14,8 @@ mod expression;
 mod plugins;
 mod evaluator;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("🚀 RustMemDB - Phase 2 Complete!");
     println!("   ✨ Parser → Planner → Executor Pipeline");
     println!("{}", "=".repeat(70));
@@ -30,42 +31,42 @@ fn main() -> Result<()> {
             age INTEGER,
             active BOOLEAN
         )",
-    )?;
+    ).await?;
     println!("✅ Table created");
 
     // Insert data
     println!("\n📥 Inserting data...");
-    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)")?;
-    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)")?;
-    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)")?;
+    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)").await?;
+    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)").await?;
+    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)").await?;
     println!("✅ 3 rows inserted");
 
     // Query 1: SELECT *
     println!("\n{}", "=".repeat(70));
     println!("📊 Query: SELECT * FROM users");
     println!("{}", "=".repeat(70));
-    let result = db.execute("SELECT * FROM users")?;
+    let result = db.execute("SELECT * FROM users").await?;
     result.print();
 
     // Query 2: WHERE clause
     println!("\n{}", "=".repeat(70));
     println!("📊 Query: SELECT * FROM users WHERE age > 26");
     println!("{}", "=".repeat(70));
-    let result = db.execute("SELECT * FROM users WHERE age > 26")?;
+    let result = db.execute("SELECT * FROM users WHERE age > 26").await?;
     result.print();
 
     // Query 3: Complex WHERE
     println!("\n{}", "=".repeat(70));
     println!("📊 Query: SELECT * FROM users WHERE active = true AND age < 32");
     println!("{}", "=".repeat(70));
-    let result = db.execute("SELECT * FROM users WHERE active = true AND age < 32")?;
+    let result = db.execute("SELECT * FROM users WHERE active = true AND age < 32").await?;
     result.print();
 
     // Query 4: LIKE pattern
     println!("\n{}", "=".repeat(70));
     println!("📊 Query: SELECT * FROM users WHERE name LIKE 'A%'");
     println!("{}", "=".repeat(70));
-    let result = db.execute("SELECT * FROM users WHERE name LIKE 'A%'")?;
+    let result = db.execute("SELECT * FROM users WHERE name LIKE 'A%'").await?;
     result.print();
 
     // Statistics
@@ -73,7 +74,7 @@ fn main() -> Result<()> {
     println!("📈 Database Statistics");
     println!("{}", "=".repeat(70));
     println!("Tables: {:?}", db.list_tables());
-    if let Ok(stats) = db.table_stats("users") {
+    if let Ok(stats) = db.table_stats("users").await {
         println!("{}", stats);
     }
 
@@ -91,22 +92,22 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod benchmarks {
-    use std::sync::{Arc, RwLock};
+    use std::sync::{Arc};
+    use tokio::sync::RwLock;
     use super::*;
-    use std::thread;
     use std::time::Instant;
 
-    #[test]
-    fn bench_concurrent_reads_different_tables() {
+    #[tokio::test]
+    async fn bench_concurrent_reads_different_tables() {
         let mut db = InMemoryDB::new();
 
         // Setup
-        db.execute("CREATE TABLE users (id INTEGER, name TEXT)").unwrap();
-        db.execute("CREATE TABLE products (id INTEGER, name TEXT)").unwrap();
+        db.execute("CREATE TABLE users (id INTEGER, name TEXT)").await.unwrap();
+        db.execute("CREATE TABLE products (id INTEGER, name TEXT)").await.unwrap();
 
         for i in 0..1000 {
-            db.execute(&format!("INSERT INTO users VALUES ({}, 'user_{}')", i, i)).unwrap();
-            db.execute(&format!("INSERT INTO products VALUES ({}, 'prod_{}')", i, i)).unwrap();
+            db.execute(&format!("INSERT INTO users VALUES ({}, 'user_{}')", i, i)).await.unwrap();
+            db.execute(&format!("INSERT INTO products VALUES ({}, 'prod_{}')", i, i)).await.unwrap();
         }
 
         // Benchmark: параллельные SELECT на разные таблицы
@@ -118,10 +119,10 @@ mod benchmarks {
         // 4 потока читают users
         for _ in 0..4 {
             let db_clone = Arc::clone(&db);
-            handles.push(thread::spawn(move || {
-                let mut db = db_clone.write().unwrap();
+            handles.push(tokio::spawn(async move {
                 for _ in 0..100 {
-                    let _ = db.execute("SELECT * FROM users WHERE id > 500");
+                    let mut db = db_clone.write().await;
+                    let _ = db.execute("SELECT * FROM users WHERE id > 500").await;
                 }
             }));
         }
@@ -129,17 +130,17 @@ mod benchmarks {
         // 4 потока читают products
         for _ in 0..4 {
             let db_clone = Arc::clone(&db);
-            handles.push(thread::spawn(move || {
-                let mut db = db_clone.write().unwrap();
+            handles.push(tokio::spawn(async move {
                 for _ in 0..100 {
-                    let res = db.execute("SELECT * FROM products WHERE id < 500 and name like 'prod_%' and id between 10 and 100");
+                    let mut db = db_clone.write().await;
+                    let res = db.execute("SELECT * FROM products WHERE id < 500 and name like 'prod_%' and id between 10 and 100").await;
                     println!("{:?}", res.unwrap().row_count());
                 }
             }));
         }
 
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
 
         let duration = start.elapsed();
@@ -148,13 +149,13 @@ mod benchmarks {
         println!("Throughput: {:.2} ops/sec", 800.0 / duration.as_secs_f64());
     }
 
-    #[test]
-    fn bench_read_write_different_tables() {
+    #[tokio::test]
+    async fn bench_read_write_different_tables() {
         let mut db = InMemoryDB::new();
 
         // Setup
-        db.execute("CREATE TABLE users (id INTEGER)").unwrap();
-        db.execute("CREATE TABLE logs (id INTEGER)").unwrap();
+        db.execute("CREATE TABLE users (id INTEGER)").await.unwrap();
+        db.execute("CREATE TABLE logs (id INTEGER)").await.unwrap();
 
         let db = Arc::new(RwLock::new(db));
         let start = Instant::now();
@@ -164,10 +165,10 @@ mod benchmarks {
         // 4 потока читают users
         for _ in 0..4 {
             let db_clone = Arc::clone(&db);
-            handles.push(thread::spawn(move || {
-                let mut db = db_clone.write().unwrap();
+            handles.push(tokio::spawn(async move {
                 for _ in 0..100 {
-                    let _ = db.execute("SELECT * FROM users");
+                    let mut db = db_clone.write().await;
+                    let _ = db.execute("SELECT * FROM users").await;
                 }
             }));
         }
@@ -175,16 +176,16 @@ mod benchmarks {
         // 2 потока пишут в logs (не блокируют чтение users!)
         for i in 0..2 {
             let db_clone = Arc::clone(&db);
-            handles.push(thread::spawn(move || {
-                let mut db = db_clone.write().unwrap();
+            handles.push(tokio::spawn(async move {
                 for j in 0..50 {
-                    let _ = db.execute(&format!("INSERT INTO logs VALUES ({})", i * 50 + j));
+                    let mut db = db_clone.write().await;
+                    let _ = db.execute(&format!("INSERT INTO logs VALUES ({})", i * 50 + j)).await;
                 }
             }));
         }
 
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
 
         let duration = start.elapsed();

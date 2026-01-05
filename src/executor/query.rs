@@ -4,13 +4,16 @@
 
 use crate::parser::ast::{Statement, Expr, OrderByExpr};
 use crate::planner::{LogicalPlan, QueryPlanner};
-use crate::planner::logical_plan::{SortNode, JoinType, TableScanNode};
+use crate::planner::logical_plan::{SortNode};
 use crate::storage::Catalog;
 use crate::core::{Result, DbError, Row, Value, Schema};
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
 use crate::result::QueryResult;
 use super::{Executor, ExecutionContext};
 use std::cmp::Ordering;
+
+use async_trait::async_trait;
+use async_recursion::async_recursion;
 
 // ============================================================================
 // QUERY EXECUTOR - Main structure
@@ -47,20 +50,21 @@ impl QueryExecutor {
     }
 
     /// Execute logical plan - main entry point
-    pub fn execute_plan(&self, plan: &LogicalPlan, ctx: &ExecutionContext) -> Result<Vec<Row>> {
+    #[async_recursion]
+    pub async fn execute_plan(&self, plan: &LogicalPlan, ctx: &ExecutionContext<'_>) -> Result<Vec<Row>> {
         match plan {
-            LogicalPlan::TableScan(scan) => self.execute_scan(scan, ctx),
-            LogicalPlan::Filter(filter) => self.execute_filter(filter, ctx),
-            LogicalPlan::Projection(proj) => self.execute_projection(proj, ctx),
-            LogicalPlan::Sort(sort) => self.execute_sort(sort, ctx),
-            LogicalPlan::Limit(limit) => self.execute_limit(limit, ctx),
-            LogicalPlan::Join(join) => self.execute_join(join, ctx),
-            LogicalPlan::Aggregate(aggr) => self.execute_aggregate(aggr, ctx),
+            LogicalPlan::TableScan(scan) => self.execute_scan(scan, ctx).await,
+            LogicalPlan::Filter(filter) => self.execute_filter(filter, ctx).await,
+            LogicalPlan::Projection(proj) => self.execute_projection(proj, ctx).await,
+            LogicalPlan::Sort(sort) => self.execute_sort(sort, ctx).await,
+            LogicalPlan::Limit(limit) => self.execute_limit(limit, ctx).await,
+            LogicalPlan::Join(join) => self.execute_join(join, ctx).await,
+            LogicalPlan::Aggregate(aggr) => self.execute_aggregate(aggr, ctx).await,
         }
     }
 
     /// Get output column names from plan
-    fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext) -> Result<Vec<String>> {
+    fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext<'_>) -> Result<Vec<String>> {
         let schema = plan.schema();
         Ok(schema.columns().iter().map(|c| c.name.clone()).collect())
     }
@@ -72,12 +76,12 @@ impl QueryExecutor {
 
 impl QueryExecutor {
     /// Execute aggregation
-    fn execute_aggregate(
+    async fn execute_aggregate(
         &self,
         aggr: &crate::planner::logical_plan::AggregateNode,
-        ctx: &ExecutionContext,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let input_rows = self.execute_plan(&aggr.input, ctx)?;
+        let input_rows = self.execute_plan(&aggr.input, ctx).await?;
         let input_schema = aggr.input.schema();
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
 
@@ -92,7 +96,7 @@ impl QueryExecutor {
             for row in input_rows {
                 let mut key = Vec::new();
                 for expr in &aggr.group_exprs {
-                    key.push(eval_ctx.evaluate(expr, &row, input_schema)?);
+                    key.push(eval_ctx.evaluate(expr, &row, input_schema).await?);
                 }
                 groups.entry(key).or_insert_with(Vec::new).push(row);
             }
@@ -110,7 +114,7 @@ impl QueryExecutor {
             // Append aggregate results
             for expr in &aggr.aggr_exprs {
                 if let Expr::Function { name, args } = expr {
-                    let val = self.evaluate_aggregate(name, args, &group_rows, input_schema, &eval_ctx)?;
+                    let val = self.evaluate_aggregate(name, args, &group_rows, input_schema, &eval_ctx).await?;
                     row.push(val);
                 } else {
                     return Err(DbError::ExecutionError("Non-aggregate expression in aggregate list".into()));
@@ -124,13 +128,13 @@ impl QueryExecutor {
     }
 
     /// Execute join operation (Nested Loop Join)
-    fn execute_join(
+    async fn execute_join(
         &self,
         join: &crate::planner::logical_plan::JoinNode,
-        ctx: &ExecutionContext,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let left_rows = self.execute_plan(&join.left, ctx)?;
-        let right_rows = self.execute_plan(&join.right, ctx)?;
+        let left_rows = self.execute_plan(&join.left, ctx).await?;
+        let right_rows = self.execute_plan(&join.right, ctx).await?;
         let schema = &join.schema; // Schema of the join result
 
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
@@ -146,17 +150,13 @@ impl QueryExecutor {
                         let mut combined_row = left_row.clone();
                         combined_row.extend(right_row.clone());
 
-                        if join.join_type == JoinType::Cross || self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema) {
+                        if join.join_type == JoinType::Cross || self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
                             result.push(combined_row);
                         }
                     }
                 }
             }
             JoinType::Left => {
-                let right_width = right_rows.first().map(|r| r.len()).unwrap_or(0); // This might be wrong if right is empty
-                // Need to get right width from schema?
-                // Actually, execute_plan returns rows, so if empty, we can't know width easily without schema.
-                // But join.right.schema() has it!
                 let right_width = join.right.schema().column_count();
 
                 for left_row in &left_rows {
@@ -165,7 +165,7 @@ impl QueryExecutor {
                         let mut combined_row = left_row.clone();
                         combined_row.extend(right_row.clone());
 
-                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema) {
+                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
                             result.push(combined_row);
                             matched = true;
                         }
@@ -187,7 +187,7 @@ impl QueryExecutor {
                         let mut combined_row = left_row.clone();
                         combined_row.extend(right_row.clone());
 
-                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema) {
+                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
                             result.push(combined_row);
                             matched = true;
                         }
@@ -211,68 +211,72 @@ impl QueryExecutor {
     }
 
     /// Execute table scan
-    fn execute_scan(
+    async fn execute_scan(
         &self,
         scan: &crate::planner::logical_plan::TableScanNode,
-        ctx: &ExecutionContext,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         if let Some(ref idx) = scan.index_scan {
             // Try to use index
-            if let Some(rows) = ctx.storage.scan_index(&scan.table_name, &idx.column, &idx.value)? {
+            if let Some(rows) = ctx.storage.scan_index(&scan.table_name, &idx.column, &idx.value).await? {
                 return Ok(rows);
             }
             // If index scan returned None (e.g. index dropped concurrently?), fallback to full scan
         }
         
-        ctx.storage.scan_table(&scan.table_name)
+        ctx.storage.scan_table(&scan.table_name).await
     }
 
     /// Execute filter operation
-    fn execute_filter(
+    async fn execute_filter(
         &self,
         filter: &crate::planner::logical_plan::FilterNode,
-        ctx: &ExecutionContext,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let input_rows = self.execute_plan(&filter.input, ctx)?;
+        let input_rows = self.execute_plan(&filter.input, ctx).await?;
         let schema = &filter.schema;
 
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
 
-        Ok(input_rows
-            .into_iter()
-            .filter(|row| self.evaluate_predicate(&eval_ctx, &filter.predicate, row, schema))
-            .collect())
+        let mut filtered_rows = Vec::new();
+        for row in input_rows {
+            if self.evaluate_predicate(&eval_ctx, &filter.predicate, &row, schema).await {
+                filtered_rows.push(row);
+            }
+        }
+        Ok(filtered_rows)
     }
 
     /// Execute projection operation
-    fn execute_projection(
+    async fn execute_projection(
         &self,
         proj: &crate::planner::logical_plan::ProjectionNode,
-        ctx: &ExecutionContext,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let input_rows = self.execute_plan(&proj.input, ctx)?;
+        let input_rows = self.execute_plan(&proj.input, ctx).await?;
         let input_schema = proj.input.schema(); // Projection needs input schema to evaluate expressions
 
         // Check for aggregate functions
         if self.has_aggregate_functions(&proj.expressions) {
-            return self.execute_aggregation(&proj.expressions, &input_rows, input_schema);
+            return self.execute_aggregation(&proj.expressions, &input_rows, input_schema).await;
         }
 
         // Regular projection
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
-        input_rows
-            .into_iter()
-            .map(|row| self.project_row(&proj.expressions, &row, input_schema, &eval_ctx))
-            .collect()
+        let mut projected_rows = Vec::new();
+        for row in input_rows {
+            projected_rows.push(self.project_row(&proj.expressions, &row, input_schema, &eval_ctx).await?);
+        }
+        Ok(projected_rows)
     }
 
     /// Execute sort operation
-    fn execute_sort(
+    async fn execute_sort(
         &self,
         sort: &SortNode,
-        ctx: &ExecutionContext,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let mut rows = self.execute_plan(&sort.input, ctx)?;
+        let mut rows = self.execute_plan(&sort.input, ctx).await?;
 
         if sort.order_by.is_empty() {
             return Ok(rows);
@@ -282,17 +286,17 @@ impl QueryExecutor {
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
 
         // Sort with error handling
-        let sort_result = self.sort_rows(&mut rows, &sort.order_by, schema, &eval_ctx);
-        sort_result.map(|_| rows)
+        self.sort_rows(&mut rows, &sort.order_by, schema, &eval_ctx).await?;
+        Ok(rows)
     }
 
     /// Execute limit operation
-    fn execute_limit(
+    async fn execute_limit(
         &self,
         limit: &crate::planner::logical_plan::LimitNode,
-        ctx: &ExecutionContext,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let mut rows = self.execute_plan(&limit.input, ctx)?;
+        let mut rows = self.execute_plan(&limit.input, ctx).await?;
         rows.truncate(limit.limit);
         Ok(rows)
     }
@@ -304,31 +308,33 @@ impl QueryExecutor {
 
 impl QueryExecutor {
     /// Evaluate predicate for filtering
-    fn evaluate_predicate(
+    async fn evaluate_predicate(
         &self,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
         predicate: &Expr,
         row: &Row,
         schema: &Schema,
     ) -> bool {
         eval_ctx
             .evaluate(predicate, row, schema)
+            .await
             .map(|v| v.as_bool())
             .unwrap_or(false)
     }
 
     /// Project a single row
-    fn project_row(
+    async fn project_row(
         &self,
         expressions: &[Expr],
         row: &Row,
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Row> {
-        expressions
-            .iter()
-            .map(|expr| eval_ctx.evaluate(expr, row, schema))
-            .collect()
+        let mut result = Vec::with_capacity(expressions.len());
+        for expr in expressions {
+            result.push(eval_ctx.evaluate(expr, row, schema).await?);
+        }
+        Ok(result)
     }
 
     /// Check if expressions contain aggregate functions
@@ -356,7 +362,7 @@ impl QueryExecutor {
 
 impl QueryExecutor {
     /// Execute aggregation functions
-    fn execute_aggregation(
+    async fn execute_aggregation(
         &self,
         expressions: &[Expr],
         rows: &[Row],
@@ -368,12 +374,12 @@ impl QueryExecutor {
         for expr in expressions {
             let value = match expr {
                 Expr::Function { name, args } => {
-                    self.evaluate_aggregate(name, args, rows, schema, &eval_ctx)?
+                    self.evaluate_aggregate(name, args, rows, schema, &eval_ctx).await?
                 }
                 _ => {
                     // Non-aggregate expressions evaluated on first row
                     if !rows.is_empty() {
-                        eval_ctx.evaluate(expr, &rows[0], schema)?
+                        eval_ctx.evaluate(expr, &rows[0], schema).await?
                     } else {
                         Value::Null
                     }
@@ -386,20 +392,20 @@ impl QueryExecutor {
     }
 
     /// Evaluate aggregate function
-    fn evaluate_aggregate(
+    async fn evaluate_aggregate(
         &self,
         name: &str,
         args: &[Expr],
         rows: &[Row],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         match name.to_uppercase().as_str() {
-            "COUNT" => self.aggregate_count(args, rows, schema, eval_ctx),
-            "SUM" => self.aggregate_sum(args, rows, schema, eval_ctx),
-            "AVG" => self.aggregate_avg(args, rows, schema, eval_ctx),
-            "MIN" => self.aggregate_min(args, rows, schema, eval_ctx),
-            "MAX" => self.aggregate_max(args, rows, schema, eval_ctx),
+            "COUNT" => self.aggregate_count(args, rows, schema, eval_ctx).await,
+            "SUM" => self.aggregate_sum(args, rows, schema, eval_ctx).await,
+            "AVG" => self.aggregate_avg(args, rows, schema, eval_ctx).await,
+            "MIN" => self.aggregate_min(args, rows, schema, eval_ctx).await,
+            "MAX" => self.aggregate_max(args, rows, schema, eval_ctx).await,
             _ => Err(DbError::UnsupportedOperation(format!(
                 "Unknown aggregate function: {}",
                 name
@@ -407,31 +413,34 @@ impl QueryExecutor {
         }
     }
 
-    fn aggregate_count(
+    async fn aggregate_count(
         &self,
         args: &[Expr],
         rows: &[Row],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         if args.is_empty() || matches!(args[0], Expr::Literal(Value::Text(ref s)) if s == "*") {
             return Ok(Value::Integer(rows.len() as i64));
         }
 
-        let count = rows.iter().fold(0i64, |acc, row| {
-            let val = eval_ctx.evaluate(&args[0], row, schema).unwrap();
-            if matches!(val, Value::Null) { acc } else { acc + 1 }
-        });
+        let mut count = 0i64;
+        for row in rows {
+            let val = eval_ctx.evaluate(&args[0], row, schema).await.unwrap();
+            if !matches!(val, Value::Null) {
+                count += 1;
+            }
+        }
 
         Ok(Value::Integer(count))
     }
 
-    fn aggregate_sum(
+    async fn aggregate_sum(
         &self,
         args: &[Expr],
         rows: &[Row],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         if args.is_empty() {
             return Err(DbError::ExecutionError("SUM requires an argument".into()));
@@ -442,7 +451,7 @@ impl QueryExecutor {
         let mut is_integer = true;
 
         for row in rows {
-            let val = eval_ctx.evaluate(&args[0], row, schema)?;
+            let val = eval_ctx.evaluate(&args[0], row, schema).await?;
             match val {
                 Value::Integer(i) => {
                     if is_integer {
@@ -471,26 +480,35 @@ impl QueryExecutor {
         })
     }
 
-    fn aggregate_avg(
+    async fn aggregate_avg(
         &self,
         args: &[Expr],
         rows: &[Row],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         if args.is_empty() {
             return Err(DbError::ExecutionError("AVG requires an argument".into()));
         }
 
-        let (sum, count) = rows.iter().try_fold((0.0f64, 0usize), |(sum, count), row| {
-            let val = eval_ctx.evaluate(&args[0], row, schema)?;
+        let mut sum = 0.0f64;
+        let mut count = 0usize;
+
+        for row in rows {
+            let val = eval_ctx.evaluate(&args[0], row, schema).await?;
             match val {
-                Value::Integer(i) => Ok((sum + i as f64, count + 1)),
-                Value::Float(f) => Ok((sum + f, count + 1)),
-                Value::Null => Ok((sum, count)),
-                _ => Err(DbError::TypeMismatch("AVG requires numeric values".into())),
+                Value::Integer(i) => {
+                    sum += i as f64;
+                    count += 1;
+                }
+                Value::Float(f) => {
+                    sum += f;
+                    count += 1;
+                }
+                Value::Null => {}
+                _ => return Err(DbError::TypeMismatch("AVG requires numeric values".into())),
             }
-        })?;
+        }
 
         Ok(if count == 0 {
             Value::Null
@@ -499,68 +517,70 @@ impl QueryExecutor {
         })
     }
 
-    fn aggregate_min(
+    async fn aggregate_min(
         &self,
         args: &[Expr],
         rows: &[Row],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         if args.is_empty() {
             return Err(DbError::ExecutionError("MIN requires an argument".into()));
         }
 
-        rows.iter()
-            .try_fold(None, |min_val: Option<Value>, row| {
-                let val = eval_ctx.evaluate(&args[0], row, schema)?;
-                if matches!(val, Value::Null) {
-                    return Ok(min_val);
-                }
+        let mut min_val: Option<Value> = None;
+        for row in rows {
+            let val = eval_ctx.evaluate(&args[0], row, schema).await?;
+            if matches!(val, Value::Null) {
+                continue;
+            }
 
-                Ok(Some(match min_val {
-                    None => val,
-                    Some(current) => {
-                        if val.compare(&current)? == Ordering::Less {
-                            val
-                        } else {
-                            current
-                        }
+            min_val = Some(match min_val {
+                None => val,
+                Some(current) => {
+                    if val.compare(&current)? == Ordering::Less {
+                        val
+                    } else {
+                        current
                     }
-                }))
-            })
-            .map(|opt| opt.unwrap_or(Value::Null))
+                }
+            });
+        }
+
+        Ok(min_val.unwrap_or(Value::Null))
     }
 
-    fn aggregate_max(
+    async fn aggregate_max(
         &self,
         args: &[Expr],
         rows: &[Row],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         if args.is_empty() {
             return Err(DbError::ExecutionError("MAX requires an argument".into()));
         }
 
-        rows.iter()
-            .try_fold(None, |max_val: Option<Value>, row| {
-                let val = eval_ctx.evaluate(&args[0], row, schema)?;
-                if matches!(val, Value::Null) {
-                    return Ok(max_val);
-                }
+        let mut max_val: Option<Value> = None;
+        for row in rows {
+            let val = eval_ctx.evaluate(&args[0], row, schema).await?;
+            if matches!(val, Value::Null) {
+                continue;
+            }
 
-                Ok(Some(match max_val {
-                    None => val,
-                    Some(current) => {
-                        if val.compare(&current)? == Ordering::Greater {
-                            val
-                        } else {
-                            current
-                        }
+            max_val = Some(match max_val {
+                None => val,
+                Some(current) => {
+                    if val.compare(&current)? == Ordering::Greater {
+                        val
+                    } else {
+                        current
                     }
-                }))
-            })
-            .map(|opt| opt.unwrap_or(Value::Null))
+                }
+            });
+        }
+
+        Ok(max_val.unwrap_or(Value::Null))
     }
 }
 
@@ -570,37 +590,52 @@ impl QueryExecutor {
 
 impl QueryExecutor {
     /// Sort rows with proper error handling
-    fn sort_rows(
+    async fn sort_rows(
         &self,
-        rows: &mut [Row],
+        rows: &mut Vec<Row>,
         order_by: &[OrderByExpr],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<()> {
-        let mut sort_error: Option<DbError> = None;
+        if rows.is_empty() || order_by.is_empty() {
+            return Ok(());
+        }
 
-        rows.sort_by(|row_a, row_b| {
+        // Pre-evaluate sorting keys to avoid async in sort_by
+        let mut rows_with_keys = Vec::with_capacity(rows.len());
+        let original_rows = std::mem::take(rows);
+        for row in original_rows {
+            let mut keys = Vec::with_capacity(order_by.len());
+            for order_expr in order_by {
+                keys.push(eval_ctx.evaluate(&order_expr.expr, &row, schema).await?);
+            }
+            rows_with_keys.push((row, keys));
+        }
+
+        let mut sort_error: Option<DbError> = None;
+        rows_with_keys.sort_by(|(_, keys_a), (_, keys_b)| {
             if sort_error.is_some() {
                 return Ordering::Equal;
             }
 
-            for order_expr in order_by {
-                let cmp = self.compare_rows_by_expr(
-                    row_a,
-                    row_b,
-                    &order_expr.expr,
-                    order_expr.descending,
-                    schema,
-                    eval_ctx,
-                );
+            for (i, order_expr) in order_by.iter().enumerate() {
+                let val_a = &keys_a[i];
+                let val_b = &keys_b[i];
 
-                match cmp {
-                    Ok(Ordering::Equal) => continue,
-                    Ok(ordering) => return ordering,
+                let mut cmp = match val_a.compare(val_b) {
+                    Ok(c) => c,
                     Err(e) => {
                         sort_error = Some(e);
                         return Ordering::Equal;
                     }
+                };
+
+                if order_expr.descending {
+                    cmp = cmp.reverse();
+                }
+
+                if cmp != Ordering::Equal {
+                    return cmp;
                 }
             }
 
@@ -608,32 +643,14 @@ impl QueryExecutor {
         });
 
         if let Some(err) = sort_error {
-            Err(err)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Compare two rows by expression
-    fn compare_rows_by_expr(
-        &self,
-        row_a: &Row,
-        row_b: &Row,
-        expr: &Expr,
-        descending: bool,
-        schema: &Schema,
-        eval_ctx: &EvaluationContext,
-    ) -> Result<Ordering> {
-        let val_a = eval_ctx.evaluate(expr, row_a, schema)?;
-        let val_b = eval_ctx.evaluate(expr, row_b, schema)?;
-
-        let mut cmp = val_a.compare(&val_b)?;
-
-        if descending {
-            cmp = cmp.reverse();
+            return Err(err);
         }
 
-        Ok(cmp)
+        for (row, _) in rows_with_keys {
+            rows.push(row);
+        }
+
+        Ok(())
     }
 }
 
@@ -641,6 +658,7 @@ impl QueryExecutor {
 // EXECUTOR TRAIT IMPLEMENTATION
 // ============================================================================
 
+#[async_trait]
 impl Executor for QueryExecutor {
     fn name(&self) -> &'static str {
         "SELECT"
@@ -650,7 +668,7 @@ impl Executor for QueryExecutor {
         matches!(stmt, Statement::Query(_))
     }
 
-    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         let Statement::Query(query) = stmt else {
             return Err(DbError::ExecutionError(
                 "QueryExecutor called with non-query statement".into()
@@ -661,7 +679,7 @@ impl Executor for QueryExecutor {
         let plan = self.planner.plan(&Statement::Query(query.clone()), &self.catalog)?;
 
         // Execute plan
-        let rows = self.execute_plan(&plan, ctx)?;
+        let rows = self.execute_plan(&plan, ctx).await?;
 
         // Get column names
         let columns = self.get_output_columns(&plan, ctx)?;
@@ -682,7 +700,7 @@ mod tests {
     use crate::parser::ast::BinaryOp;
     use crate::planner::logical_plan::{FilterNode, TableScanNode, ProjectionNode, LimitNode, SortNode};
 
-    fn setup_test_storage() -> (InMemoryStorage, Catalog) {
+    async fn setup_test_storage() -> (InMemoryStorage, Catalog) {
         let mut storage = InMemoryStorage::new();
         let mut catalog = Catalog::new();
 
@@ -694,7 +712,7 @@ mod tests {
         ];
         let schema = TableSchema::new("users", columns);
 
-        storage.create_table(schema.clone()).unwrap();
+        storage.create_table(schema.clone()).await.unwrap();
         catalog = catalog.with_table(schema).unwrap();
 
         // Insert test data
@@ -702,25 +720,25 @@ mod tests {
             Value::Integer(1),
             Value::Text("Alice".into()),
             Value::Integer(30),
-        ]).unwrap();
+        ]).await.unwrap();
 
         storage.insert_row("users", vec![
             Value::Integer(2),
             Value::Text("Bob".into()),
             Value::Integer(25),
-        ]).unwrap();
+        ]).await.unwrap();
 
         storage.insert_row("users", vec![
             Value::Integer(3),
             Value::Text("Charlie".into()),
             Value::Integer(35),
-        ]).unwrap();
+        ]).await.unwrap();
 
         storage.insert_row("users", vec![
             Value::Integer(4),
             Value::Text("Diana".into()),
             Value::Integer(25),
-        ]).unwrap();
+        ]).await.unwrap();
 
         (storage, catalog)
     }
@@ -733,9 +751,9 @@ mod tests {
         ])
     }
 
-    #[test]
-    fn test_simple_scan() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_simple_scan() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -747,13 +765,13 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&plan, &ctx).unwrap();
+        let rows = executor.execute_plan(&plan, &ctx).await.unwrap();
         assert_eq!(rows.len(), 4);
     }
 
-    #[test]
-    fn test_filter_execution() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_filter_execution() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -775,13 +793,13 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
         assert_eq!(rows.len(), 2); // Alice (30) and Charlie (35)
     }
 
-    #[test]
-    fn test_projection_execution() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_projection_execution() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -799,14 +817,14 @@ mod tests {
             schema: Schema::new(vec![Column::new("name", DataType::Text)]),
         });
 
-        let rows = executor.execute_plan(&projection, &ctx).unwrap();
+        let rows = executor.execute_plan(&projection, &ctx).await.unwrap();
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].len(), 1); // Only one column
     }
 
-    #[test]
-    fn test_limit_execution() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_limit_execution() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -824,7 +842,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&limit, &ctx).unwrap();
+        let rows = executor.execute_plan(&limit, &ctx).await.unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -832,9 +850,9 @@ mod tests {
     // ✅ ORDER BY TESTS
     // ========================================================================
 
-    #[test]
-    fn test_order_by_asc() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_order_by_asc() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -856,7 +874,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
 
         // Expected order by age ASC: 25, 25, 30, 35
         assert_eq!(rows[0][2], Value::Integer(25));
@@ -865,9 +883,9 @@ mod tests {
         assert_eq!(rows[3][2], Value::Integer(35));
     }
 
-    #[test]
-    fn test_order_by_desc() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_order_by_desc() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -889,7 +907,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
 
         // Expected order by age DESC: 35, 30, 25, 25
         assert_eq!(rows[0][2], Value::Integer(35));
@@ -898,9 +916,9 @@ mod tests {
         assert_eq!(rows[3][2], Value::Integer(25));
     }
 
-    #[test]
-    fn test_order_by_multiple_columns() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_order_by_multiple_columns() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -928,7 +946,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
 
         // Expected: age 25 (Bob, Diana alphabetically), age 30 (Alice), age 35 (Charlie)
         assert_eq!(rows[0][1], Value::Text("Bob".into()));    // age 25, name Bob
@@ -937,9 +955,9 @@ mod tests {
         assert_eq!(rows[3][1], Value::Text("Charlie".into())); // age 35
     }
 
-    #[test]
-    fn test_order_by_with_filter() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_order_by_with_filter() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -971,7 +989,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
 
         // All 4 users have age > 24, sorted by name DESC: Diana, Charlie, Bob, Alice
         assert_eq!(rows.len(), 4);
@@ -981,9 +999,9 @@ mod tests {
         assert_eq!(rows[3][1], Value::Text("Alice".into()));
     }
 
-    #[test]
-    fn test_order_by_with_limit() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_order_by_with_limit() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1011,7 +1029,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&limit, &ctx).unwrap();
+        let rows = executor.execute_plan(&limit, &ctx).await.unwrap();
 
         // Top 2 oldest: Charlie (35), Alice (30)
         assert_eq!(rows.len(), 2);
@@ -1019,8 +1037,8 @@ mod tests {
         assert_eq!(rows[1][2], Value::Integer(30)); // Alice
     }
 
-    #[test]
-    fn test_order_by_with_nulls() {
+    #[tokio::test]
+    async fn test_order_by_with_nulls() {
         let mut storage = InMemoryStorage::new();
         let mut catalog = Catalog::new();
 
@@ -1032,14 +1050,14 @@ mod tests {
         let schema = TableSchema::new("test", columns.clone());
         let test_schema = Schema::new(columns);
 
-        storage.create_table(schema.clone()).unwrap();
+        storage.create_table(schema.clone()).await.unwrap();
         catalog = catalog.with_table(schema).unwrap();
 
         // Insert data with NULLs
-        storage.insert_row("test", vec![Value::Integer(1), Value::Integer(10)]).unwrap();
-        storage.insert_row("test", vec![Value::Integer(2), Value::Null]).unwrap();
-        storage.insert_row("test", vec![Value::Integer(3), Value::Integer(5)]).unwrap();
-        storage.insert_row("test", vec![Value::Integer(4), Value::Null]).unwrap();
+        storage.insert_row("test", vec![Value::Integer(1), Value::Integer(10)]).await.unwrap();
+        storage.insert_row("test", vec![Value::Integer(2), Value::Null]).await.unwrap();
+        storage.insert_row("test", vec![Value::Integer(3), Value::Integer(5)]).await.unwrap();
+        storage.insert_row("test", vec![Value::Integer(4), Value::Null]).await.unwrap();
 
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
@@ -1062,7 +1080,7 @@ mod tests {
             schema: test_schema,
         });
 
-        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
 
         // NULL LAST by default: 5, 10, NULL, NULL
         assert_eq!(rows[0][1], Value::Integer(5));
@@ -1071,9 +1089,9 @@ mod tests {
         assert_eq!(rows[3][1], Value::Null);
     }
 
-    #[test]
-    fn test_order_by_expression() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_order_by_expression() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1099,7 +1117,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
 
         // ORDER BY age * -1 ASC = ORDER BY age DESC
         // -35 < -30 < -25 < -25
@@ -1108,9 +1126,9 @@ mod tests {
         // age 25 rows at the end
     }
 
-    #[test]
-    fn test_complex_query() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_complex_query() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1145,14 +1163,14 @@ mod tests {
             schema: Schema::new(vec![Column::new("name", DataType::Text)]),
         });
 
-        let rows = executor.execute_plan(&limit, &ctx).unwrap();
+        let rows = executor.execute_plan(&limit, &ctx).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].len(), 1);
     }
 
-    #[test]
-    fn test_like_evaluation() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_like_evaluation() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1176,13 +1194,13 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
         assert_eq!(rows.len(), 1); // Only Alice
     }
 
-    #[test]
-    fn test_between_evaluation() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_between_evaluation() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1206,12 +1224,12 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
         assert_eq!(rows.len(), 3); // Alice (30), Bob (25), Diana (25)
     }
 
-    #[test]
-    fn test_is_null_evaluation() {
+    #[tokio::test]
+    async fn test_is_null_evaluation() {
         let mut storage = InMemoryStorage::new();
         let mut catalog = Catalog::new();
 
@@ -1223,19 +1241,19 @@ mod tests {
         let schema = TableSchema::new("test", columns.clone());
         let test_schema = Schema::new(columns);
 
-        storage.create_table(schema.clone()).unwrap();
+        storage.create_table(schema.clone()).await.unwrap();
         catalog = catalog.with_table(schema).unwrap();
 
         // Insert data with NULL
         storage.insert_row("test", vec![
             Value::Integer(1),
             Value::Text("Alice".into()),
-        ]).unwrap();
+        ]).await.unwrap();
 
         storage.insert_row("test", vec![
             Value::Integer(2),
             Value::Null,
-        ]).unwrap();
+        ]).await.unwrap();
 
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
@@ -1258,13 +1276,13 @@ mod tests {
             schema: test_schema,
         });
 
-        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
         assert_eq!(rows.len(), 1); // Only row with NULL
     }
 
-    #[test]
-    fn test_logical_and() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_logical_and() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1295,13 +1313,13 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&filter, &ctx).unwrap();
+        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
         assert_eq!(rows.len(), 1); // Only Alice (30)
     }
 
-    #[test]
-    fn test_get_output_columns() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_get_output_columns() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1318,9 +1336,9 @@ mod tests {
         assert_eq!(columns, vec!["id", "name", "age"]);
     }
 
-    #[test]
-    fn test_order_by_with_value_compare() {
-        let (storage, catalog) = setup_test_storage();
+    #[tokio::test]
+    async fn test_order_by_with_value_compare() {
+        let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
@@ -1341,7 +1359,7 @@ mod tests {
             schema: create_test_schema(),
         });
 
-        let rows = executor.execute_plan(&sort, &ctx).unwrap();
+        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
 
         // Should be sorted by age ASC
         assert_eq!(rows[0][2], Value::Integer(25)); // Bob

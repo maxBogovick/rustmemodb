@@ -1,7 +1,8 @@
 use super::{Table, TableSchema};
 use crate::core::{DbError, Result, Row};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub struct InMemoryStorage {
     /// Таблицы с индивидуальными блокировками
@@ -19,7 +20,7 @@ impl InMemoryStorage {
     }
 
     /// Создать таблицу
-    pub fn create_table(&mut self, schema: TableSchema) -> Result<()> {
+    pub async fn create_table(&mut self, schema: TableSchema) -> Result<()> {
         let name = schema.name().to_string();
 
         if self.tables.contains_key(&name) {
@@ -32,7 +33,7 @@ impl InMemoryStorage {
     }
 
     /// Удалить таблицу
-    pub fn drop_table(&mut self, table_name: &str) -> Result<()> {
+    pub async fn drop_table(&mut self, table_name: &str) -> Result<()> {
         if self.tables.remove(table_name).is_none() {
             return Err(DbError::TableNotFound(table_name.to_string()));
         }
@@ -48,46 +49,38 @@ impl InMemoryStorage {
     }
 
     /// Вставить строку - блокируется только одна таблица
-    pub fn insert_row(&self, table_name: &str, row: Row) -> Result<()> {
+    pub async fn insert_row(&self, table_name: &str, row: Row) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
 
-        let mut table = table_handle
-            .write()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let mut table = table_handle.write().await;
 
         table.insert(row)?;
         Ok(())
     }
 
     /// Сканировать таблицу - read lock только на одну таблицу
-    pub fn scan_table(&self, table_name: &str) -> Result<Vec<Row>> {
+    pub async fn scan_table(&self, table_name: &str) -> Result<Vec<Row>> {
         let table_handle = self.get_table(table_name)?;
 
-        let table = table_handle
-            .read()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let table = table_handle.read().await;
 
         Ok(table.rows_iter().map(|(_, r)| r.clone()).collect())
     }
 
     /// Insert a row at a specific index (for transaction rollback)
-    pub fn insert_row_at_index(&self, table_name: &str, index: usize, row: Row) -> Result<()> {
+    pub async fn insert_row_at_index(&self, table_name: &str, index: usize, row: Row) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
 
-        let mut table = table_handle
-            .write()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let mut table = table_handle.write().await;
 
         table.insert_at_id(index, row)
     }
 
     /// Получить схему таблицы
-    pub fn get_schema(&self, table_name: &str) -> Result<TableSchema> {
+    pub async fn get_schema(&self, table_name: &str) -> Result<TableSchema> {
         let table_handle = self.get_table(table_name)?;
 
-        let table = table_handle
-            .read()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let table = table_handle.read().await;
 
         Ok(table.schema().clone())
     }
@@ -103,60 +96,50 @@ impl InMemoryStorage {
     }
 
     /// Количество строк
-    pub fn row_count(&self, table_name: &str) -> Result<usize> {
+    pub async fn row_count(&self, table_name: &str) -> Result<usize> {
         let table_handle = self.get_table(table_name)?;
 
-        let table = table_handle
-            .read()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let table = table_handle.read().await;
 
         Ok(table.row_count())
     }
 
     /// Update a row at a specific index (for transaction support)
-    pub fn update_row_at_index(&self, table_name: &str, index: usize, new_row: Row) -> Result<()> {
+    pub async fn update_row_at_index(&self, table_name: &str, index: usize, new_row: Row) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
 
-        let mut table = table_handle
-            .write()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let mut table = table_handle.write().await;
 
         table.update_row(index, new_row)
     }
 
     /// Delete a row at a specific index (for transaction support)
-    pub fn delete_row_at_index(&self, table_name: &str, index: usize) -> Result<()> {
+    pub async fn delete_row_at_index(&self, table_name: &str, index: usize) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
 
-        let mut table = table_handle
-            .write()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let mut table = table_handle.write().await;
 
         table.delete_rows(vec![index])?;
         Ok(())
     }
 
     /// Get all rows from a table (for transaction snapshotting)
-    pub fn get_all_rows(&self, table_name: &str) -> Result<Vec<Row>> {
-        self.scan_table(table_name)
+    pub async fn get_all_rows(&self, table_name: &str) -> Result<Vec<Row>> {
+        self.scan_table(table_name).await
     }
 
     /// Create an index on a column
-    pub fn create_index(&self, table_name: &str, column_name: &str) -> Result<()> {
+    pub async fn create_index(&self, table_name: &str, column_name: &str) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
-        let mut table = table_handle
-            .write()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let mut table = table_handle.write().await;
         
         table.create_index(column_name)
     }
 
     /// Scan a table using an index (exact match)
-    pub fn scan_index(&self, table_name: &str, column_name: &str, value: &crate::core::Value) -> Result<Option<Vec<Row>>> {
+    pub async fn scan_index(&self, table_name: &str, column_name: &str, value: &crate::core::Value) -> Result<Option<Vec<Row>>> {
         let table_handle = self.get_table(table_name)?;
-        let table = table_handle
-            .read()
-            .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+        let table = table_handle.read().await;
 
         if let Some(index) = table.get_index(column_name) {
             if let Some(ids) = index.get(value) {
@@ -176,13 +159,11 @@ impl InMemoryStorage {
     }
 
     /// Get all tables (for persistence snapshots)
-    pub fn get_all_tables(&self) -> Result<std::collections::HashMap<String, Table>> {
+    pub async fn get_all_tables(&self) -> Result<std::collections::HashMap<String, Table>> {
         let mut tables = std::collections::HashMap::new();
 
         for (name, table_handle) in &self.tables {
-            let table = table_handle
-                .read()
-                .map_err(|_| DbError::ExecutionError("Table lock poisoned".into()))?;
+            let table = table_handle.read().await;
 
             tables.insert(name.clone(), table.clone());
         }
@@ -191,7 +172,7 @@ impl InMemoryStorage {
     }
 
     /// Restore tables from a snapshot (for crash recovery)
-    pub fn restore_tables(&mut self, tables: std::collections::HashMap<String, Table>) -> Result<()> {
+    pub async fn restore_tables(&mut self, tables: std::collections::HashMap<String, Table>) -> Result<()> {
         // Clear existing tables
         self.tables.clear();
 

@@ -38,11 +38,11 @@ impl ExecutorRegistry {
     }
 
     /// Выполнить statement через подходящий executor
-    pub fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    pub async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         for executor in &self.executors {
             if executor.can_handle(stmt) {
                 println!("🚀 Executing with: {}", executor.name());
-                return executor.execute(stmt, ctx);
+                return executor.execute(stmt, ctx).await;
             }
         }
 

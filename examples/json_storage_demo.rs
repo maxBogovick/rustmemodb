@@ -6,9 +6,11 @@
 //! Run with: cargo run --example json_storage_demo
 
 use rustmemodb::{InMemoryDB, JsonStorageAdapter, JsonResult};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
+use tokio::sync::RwLock;
 
-fn main() -> JsonResult<()> {
+#[tokio::main]
+async fn main() -> JsonResult<()> {
     println!("=== RustMemDB JSON Storage Demo ===\n");
 
     // Initialize database
@@ -41,12 +43,12 @@ fn main() -> JsonResult<()> {
         }
     ]"#;
 
-    adapter.create("users", users_doc)?;
+    adapter.create("users", users_doc).await?;
     println!("✓ Collection 'users' created with 3 documents\n");
 
     // Demo 2: Read all documents
     println!("2. Reading all users...");
-    let all_users = adapter.read("users", "SELECT * FROM users")?;
+    let all_users = adapter.read("users", "SELECT * FROM users").await?;
     println!("Results:\n{}\n", all_users);
 
     // Demo 3: Query with filter
@@ -54,7 +56,7 @@ fn main() -> JsonResult<()> {
     let active_users = adapter.read(
         "users",
         "SELECT name, email FROM users WHERE active = true"
-    )?;
+    ).await?;
     println!("Active users:\n{}\n", active_users);
 
     // Demo 4: Query with age filter
@@ -62,7 +64,7 @@ fn main() -> JsonResult<()> {
     let older_users = adapter.read(
         "users",
         "SELECT name, age FROM users WHERE age > 25 ORDER BY age"
-    )?;
+    ).await?;
     println!("Results:\n{}\n", older_users);
 
     // Demo 5: Update document
@@ -76,22 +78,22 @@ fn main() -> JsonResult<()> {
             "active": true
         }
     ]"#;
-    adapter.update("users", update_doc)?;
+    adapter.update("users", update_doc).await?;
     println!("✓ User updated\n");
 
     // Verify update
     println!("6. Verifying update...");
-    let updated_user = adapter.read("users", "SELECT * FROM users WHERE id = '1'")?;
+    let updated_user = adapter.read("users", "SELECT * FROM users WHERE id = '1'").await?;
     println!("Updated user:\n{}\n", updated_user);
 
     // Demo 7: Delete document
     println!("7. Deleting user with id=3...");
-    adapter.delete("users", "3")?;
+    adapter.delete("users", "3").await?;
     println!("✓ User deleted\n");
 
     // Verify deletion
     println!("8. Remaining users...");
-    let remaining = adapter.read("users", "SELECT id, name FROM users ORDER BY id")?;
+    let remaining = adapter.read("users", "SELECT id, name FROM users ORDER BY id").await?;
     println!("Results:\n{}\n", remaining);
 
     // Demo 9: Create another collection (products)
@@ -120,7 +122,7 @@ fn main() -> JsonResult<()> {
         }
     ]"#;
 
-    adapter.create("products", products_doc)?;
+    adapter.create("products", products_doc).await?;
     println!("✓ Collection 'products' created\n");
 
     // Demo 10: Query products
@@ -128,20 +130,20 @@ fn main() -> JsonResult<()> {
     let affordable_products = adapter.read(
         "products",
         "SELECT name, price, quantity FROM products WHERE in_stock = true AND price < 100"
-    )?;
+    ).await?;
     println!("Results:\n{}\n", affordable_products);
 
     // Demo 11: List all collections
     println!("11. Listing all collections...");
     let collections = adapter.list_collections();
-    println!("Collections: {:?}\n", collections);
+    println!("Collections: {:?}\n", collections.await);
 
     // Demo 12: Complex query with aggregation-like operations
     println!("12. Getting product statistics...");
     let all_products = adapter.read(
         "products",
         "SELECT name, price FROM products ORDER BY price DESC"
-    )?;
+    ).await?;
     println!("Products by price:\n{}\n", all_products);
 
     // Demo 13: Test schema inference with mixed types
@@ -159,8 +161,8 @@ fn main() -> JsonResult<()> {
         }
     ]"#;
 
-    adapter.create("grades", mixed_doc)?;
-    let grades = adapter.read("grades", "SELECT * FROM grades")?;
+    adapter.create("grades", mixed_doc).await?;
+    let grades = adapter.read("grades", "SELECT * FROM grades").await?;
     println!("Grades:\n{}\n", grades);
 
     // Demo 14: Security validation
@@ -172,7 +174,7 @@ fn main() -> JsonResult<()> {
         "SELECT * FROM users; DROP TABLE users;"
     );
 
-    match injection_result {
+    match injection_result.await {
         Ok(_) => println!("✗ Security validation failed!"),
         Err(e) => println!("✓ Security validation passed: {}\n", e),
     }
@@ -181,19 +183,19 @@ fn main() -> JsonResult<()> {
     println!("15. Testing invalid collection name (should fail):");
     let invalid_result = adapter.create("DROP", r#"[{"id": "1"}]"#);
 
-    match invalid_result {
+    match invalid_result.await {
         Ok(_) => println!("✗ Validation failed!"),
         Err(e) => println!("✓ Validation passed: {}\n", e),
     }
 
     // Demo 16: Drop collection
     println!("16. Dropping 'grades' collection...");
-    adapter.drop_collection("grades")?;
+    adapter.drop_collection("grades").await?;
     println!("✓ Collection dropped\n");
 
     println!("17. Final collection list:");
     let final_collections = adapter.list_collections();
-    println!("Collections: {:?}\n", final_collections);
+    println!("Collections: {:?}\n", final_collections.await);
 
     // Summary
     println!("=== Demo Complete ===");

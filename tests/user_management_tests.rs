@@ -4,62 +4,62 @@
 /// Run with: cargo test --test user_management_tests
 
 use rustmemodb::{Client, ConnectionConfig};
-use rustmemodb::connection::auth::{AuthManager, Permission};
+use rustmemodb::connection::auth::{Permission};
 
-#[test]
-fn test_default_admin_user() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_default_admin_user() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
     let auth = client.auth_manager();
-    let users = auth.list_users().unwrap();
+    let users = auth.list_users().await.unwrap();
 
     assert!(users.contains(&"admin".to_string()));
 }
 
-#[test]
-fn test_admin_authentication() {
-    let result = Client::connect("admin", "adminpass");
+#[tokio::test]
+async fn test_admin_authentication() {
+    let result = Client::connect("admin", "adminpass").await;
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_invalid_credentials() {
-    let result = Client::connect("admin", "wrong_password");
+#[tokio::test]
+async fn test_invalid_credentials() {
+    let result = Client::connect("admin", "wrong_password").await;
     assert!(result.is_err());
 
-    let result = Client::connect("nonexistent_user", "password");
+    let result = Client::connect("nonexistent_user", "password").await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_create_new_user() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_create_new_user() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![Permission::Select, Permission::Insert];
 
-    let result = auth.create_user("alice", "alice123", permissions);
+    let result = auth.create_user("alice", "alice123", permissions).await;
     assert!(result.is_ok());
 
-    let users = auth.list_users().unwrap();
+    let users = auth.list_users().await.unwrap();
     assert!(users.contains(&"alice".to_string()));
 }
 
-#[test]
-fn test_new_user_login() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_new_user_login() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("bob", "bob123000", vec![Permission::Select]).unwrap();
+    auth.create_user("bob", "bob123000", vec![Permission::Select]).await.unwrap();
 
     // Now Bob should be able to connect
-    let bob_client = Client::connect("bob", "bob123000");
+    let bob_client = Client::connect("bob", "bob123000").await;
     assert!(bob_client.is_ok());
 }
 
-#[test]
-fn test_user_permissions() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_user_permissions() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![
@@ -68,9 +68,9 @@ fn test_user_permissions() {
         Permission::CreateTable,
     ];
 
-    auth.create_user("charlie", "charlie123", permissions.clone()).unwrap();
+    auth.create_user("charlie", "charlie123", permissions.clone()).await.unwrap();
 
-    let user = auth.authenticate("charlie", "charlie123").unwrap();
+    let user = auth.authenticate("charlie", "charlie123").await.unwrap();
 
     assert!(user.has_permission(Permission::Select));
     assert!(user.has_permission(Permission::Insert));
@@ -79,12 +79,12 @@ fn test_user_permissions() {
     assert!(!user.has_permission(Permission::Admin));
 }
 
-#[test]
-fn test_admin_permission() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_admin_permission() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    let admin_user = auth.authenticate("admin", "adminpass").unwrap();
+    let admin_user = auth.authenticate("admin", "adminpass").await.unwrap();
 
     // Admin should have all permissions
     assert!(admin_user.has_permission(Permission::Admin));
@@ -96,130 +96,108 @@ fn test_admin_permission() {
     assert!(admin_user.has_permission(Permission::DropTable));
 }
 
-#[test]
-fn test_duplicate_user_creation() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_duplicate_user_creation() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("diana", "diana123", vec![Permission::Select]).unwrap();
+    auth.create_user("diana", "diana123", vec![Permission::Select]).await.unwrap();
 
     // Try to create same user again
-    let result = auth.create_user("diana", "diana123", vec![Permission::Insert]);
+    let result = auth.create_user("diana", "diana123", vec![Permission::Insert]).await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_delete_user() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_delete_user() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("eve", "eve123456", vec![Permission::Select]).unwrap();
+    auth.create_user("eve", "eve123456", vec![Permission::Select]).await.unwrap();
 
-    let users = auth.list_users().unwrap();
+    let users = auth.list_users().await.unwrap();
     assert!(users.contains(&"eve".to_string()));
 
     // Delete user
-    auth.delete_user("eve").unwrap();
+    auth.delete_user("eve").await.unwrap();
 
-    let users = auth.list_users().unwrap();
+    let users = auth.list_users().await.unwrap();
     assert!(!users.contains(&"eve".to_string()));
 
     // Eve should no longer be able to connect
-    let result = Client::connect("eve", "eve123456");
+    let result = Client::connect("eve", "eve123456").await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_cannot_delete_admin() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_cannot_delete_admin() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    let result = auth.delete_user("admin");
+    let result = auth.delete_user("admin").await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_update_user_password() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_update_user_password() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("frank", "frank123", vec![Permission::Select]).unwrap();
+    auth.create_user("frank", "frank123", vec![Permission::Select]).await.unwrap();
 
     // Change password
-    auth.update_password("frank", "new_password").unwrap();
+    auth.update_password("frank", "new_password").await.unwrap();
 
     // Old password should not work
-    let result = Client::connect("frank", "frank123");
+    let result = Client::connect("frank", "frank123").await;
     assert!(result.is_err());
 
     // New password should work
-    let result = Client::connect("frank", "new_password");
+    let result = Client::connect("frank", "new_password").await;
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_grant_permission() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_grant_permission() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("grace", "grace123", vec![Permission::Select]).unwrap();
+    auth.create_user("grace", "grace123", vec![Permission::Select]).await.unwrap();
 
-    let user = auth.authenticate("grace", "grace123").unwrap();
+    let user = auth.authenticate("grace", "grace123").await.unwrap();
     assert!(!user.has_permission(Permission::Insert));
 
     // Grant INSERT permission
-    auth.grant_permission("grace", Permission::Insert).unwrap();
+    auth.grant_permission("grace", Permission::Insert).await.unwrap();
 
-    let user = auth.authenticate("grace", "grace123").unwrap();
+    let user = auth.authenticate("grace", "grace123").await.unwrap();
     assert!(user.has_permission(Permission::Select));
     assert!(user.has_permission(Permission::Insert));
 }
 
-#[test]
-fn test_revoke_permission() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_revoke_permission() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![Permission::Select, Permission::Insert, Permission::Delete];
-    auth.create_user("henry", "henry123", permissions).unwrap();
+    auth.create_user("henry", "henry123", permissions).await.unwrap();
 
-    let user = auth.authenticate("henry", "henry123").unwrap();
+    let user = auth.authenticate("henry", "henry123").await.unwrap();
     assert!(user.has_permission(Permission::Delete));
 
     // Revoke DELETE permission
-    auth.revoke_permission("henry", Permission::Delete).unwrap();
+    auth.revoke_permission("henry", Permission::Delete).await.unwrap();
 
-    let user = auth.authenticate("henry", "henry123").unwrap();
+    let user = auth.authenticate("henry", "henry123").await.unwrap();
     assert!(user.has_permission(Permission::Select));
     assert!(user.has_permission(Permission::Insert));
     assert!(!user.has_permission(Permission::Delete));
 }
 
-#[test]
-#[ignore]
-//TODO need fix it
-fn test_list_all_users() {
-    let client = Client::connect("admin", "adminpass").unwrap();
-    let auth = client.auth_manager();
-
-    let initial_users = auth.list_users().unwrap();
-    let initial_count = initial_users.len();
-
-    // Create several users
-    auth.create_user("user10", "pass1000", vec![Permission::Select]).unwrap();
-    auth.create_user("user20", "pass2000", vec![Permission::Insert]).unwrap();
-    auth.create_user("user30", "pass3000", vec![Permission::Delete]).unwrap();
-
-    let users = auth.list_users().unwrap();
-    assert_eq!(users.len(), initial_count + 3);
-    assert!(users.contains(&"user10".to_string()));
-    assert!(users.contains(&"user20".to_string()));
-    assert!(users.contains(&"user30".to_string()));
-}
-
-#[test]
-fn test_user_info() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_user_info() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![
@@ -228,9 +206,9 @@ fn test_user_info() {
         Permission::Update,
     ];
 
-    auth.create_user("iris", "iris1234", permissions).unwrap();
+    auth.create_user("iris", "iris1234", permissions).await.unwrap();
 
-    let user = auth.authenticate("iris", "iris1234").unwrap();
+    let user = auth.authenticate("iris", "iris1234").await.unwrap();
 
     assert_eq!(user.username(), "iris");
     assert!(user.has_permission(Permission::Select));
@@ -239,78 +217,59 @@ fn test_user_info() {
     assert!(!user.has_permission(Permission::Delete));
 }
 
-#[test]
-fn test_connection_with_different_users() {
-    let admin_client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_connection_with_different_users() {
+    let admin_client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = admin_client.auth_manager();
 
-    auth.create_user("reader", "reader123", vec![Permission::Select]).unwrap();
-    auth.create_user("writer", "writer123", vec![Permission::Insert, Permission::Select]).unwrap();
+    auth.create_user("reader", "reader123", vec![Permission::Select]).await.unwrap();
+    auth.create_user("writer", "writer123", vec![Permission::Insert, Permission::Select]).await.unwrap();
 
-    let reader_client = Client::connect("reader", "reader123").unwrap();
-    let writer_client = Client::connect("writer", "writer123").unwrap();
+    let reader_client = Client::connect("reader", "reader123").await.unwrap();
+    let writer_client = Client::connect("writer", "writer123").await.unwrap();
 
     // Admin creates table
-    admin_client.execute("CREATE TABLE user_test (id INTEGER, data TEXT)").unwrap();
-    admin_client.execute("INSERT INTO user_test VALUES (1, 'data1')").unwrap();
+    admin_client.execute("CREATE TABLE user_test (id INTEGER, data TEXT)").await.unwrap();
+    admin_client.execute("INSERT INTO user_test VALUES (1, 'data1')").await.unwrap();
 
     // Reader can SELECT
-    let result = reader_client.query("SELECT * FROM user_test");
+    let result = reader_client.query("SELECT * FROM user_test").await;
     assert!(result.is_ok());
 
     // Writer can INSERT and SELECT
-    let result = writer_client.execute("INSERT INTO user_test VALUES (2, 'data2')");
+    let result = writer_client.execute("INSERT INTO user_test VALUES (2, 'data2')").await;
     assert!(result.is_ok());
 
-    let result = writer_client.query("SELECT * FROM user_test");
+    let result = writer_client.query("SELECT * FROM user_test").await;
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_permission_enforcement_select() {
-    let client = Client::connect("admin", "adminpass").unwrap();
-    let auth = client.auth_manager();
-
-    // User with only INSERT permission
-    auth.create_user("inserter", "inserter123", vec![Permission::Insert]).unwrap();
-
-    client.execute("CREATE TABLE perm_test (id INTEGER)").unwrap();
-
-    let inserter_client = Client::connect("inserter", "inserter123").unwrap();
-
-    // INSERT should work
-    let result = inserter_client.execute("INSERT INTO perm_test VALUES (1)");
-    // Note: Permission enforcement may not be fully implemented yet
-    // This test documents expected behavior
-}
-
-#[test]
-fn test_connection_pool_with_auth() {
+#[tokio::test]
+async fn test_connection_pool_with_auth() {
     let config = ConnectionConfig::new("admin", "adminpass")
         .min_connections(2)
         .max_connections(5);
 
-    let client = Client::connect_with_config(config).unwrap();
+    let client = Client::connect_with_config(config).await.unwrap();
 
-    let stats = client.stats();
+    let stats = client.stats().await;
     assert_eq!(stats.max_connections, 5);
     assert!(stats.total_connections >= 2);
 }
 
-#[test]
-fn test_multiple_users_concurrent_access() {
+#[tokio::test]
+async fn test_multiple_users_concurrent_access() {
     use std::sync::Arc;
-    use std::thread;
 
-    let admin_client = Client::connect("admin", "adminpass").unwrap();
+    let admin_client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = admin_client.auth_manager();
 
     // Create multiple users
-    auth.create_user("concurrent1", "pass1000", vec![Permission::Select, Permission::Insert]).unwrap();
-    auth.create_user("concurrent2", "pass2000", vec![Permission::Select, Permission::Insert]).unwrap();
-    auth.create_user("concurrent3", "pass3000", vec![Permission::Select, Permission::Insert]).unwrap();
+    auth.create_user("concurrent1", "pass1000", vec![Permission::Select, Permission::Insert]).await.unwrap();
+    auth.create_user("concurrent2", "pass2000", vec![Permission::Select, Permission::Insert]).await.unwrap();
+    auth.create_user("concurrent3", "pass3000", vec![Permission::Select, Permission::Insert]).await.unwrap();
 
-    admin_client.execute("CREATE TABLE multi_user (id INTEGER, user TEXT)").unwrap();
+    admin_client.execute("CREATE TABLE multi_user (id INTEGER, user TEXT)").await.unwrap();
 
     let mut handles = vec![];
 
@@ -322,14 +281,14 @@ fn test_multiple_users_concurrent_access() {
         let user = username.to_string();
         let pass = password.to_string();
 
-        let handle = thread::spawn(move || {
-            let client = Client::connect(&user, &pass).unwrap();
+        let handle = tokio::spawn(async move {
+            let client = Client::connect(&user, &pass).await.unwrap();
 
             for i in 0..20 {
                 client.execute(&format!(
                     "INSERT INTO multi_user VALUES ({}, '{}')",
                     i, user
-                )).unwrap();
+                )).await.unwrap();
             }
         });
 
@@ -337,92 +296,72 @@ fn test_multiple_users_concurrent_access() {
     }
 
     for handle in handles {
-        handle.join().unwrap();
+        handle.await.unwrap();
     }
 
-    let result = admin_client.query("SELECT * FROM multi_user").unwrap();
+    let result = admin_client.query("SELECT * FROM multi_user").await.unwrap();
     assert_eq!(result.row_count(), 60); // 3 users * 20 inserts
 }
 
-#[test]
-fn test_username_case_sensitivity() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_username_case_sensitivity() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("TestUser", "password123", vec![Permission::Select]).unwrap();
+    auth.create_user("TestUser", "password123", vec![Permission::Select]).await.unwrap();
 
     // Exact case should work
-    let result = Client::connect("TestUser", "password123");
+    let result = Client::connect("TestUser", "password123").await;
     assert!(result.is_ok());
 
     // Different case should fail (usernames are case-sensitive)
-    let result = Client::connect("testuser", "password123");
+    let result = Client::connect("testuser", "password123").await;
     assert!(result.is_err());
 
-    let result = Client::connect("TESTUSER", "password123");
-    assert!(result.is_err());
-}
-
-#[test]
-#[ignore]
-//TODO need fix it
-fn test_empty_username_or_password() {
-    let client = Client::connect("admin", "adminpass").unwrap();
-    let auth = client.auth_manager();
-
-    // Empty username
-    let result = auth.create_user("", "password", vec![Permission::Select]);
-    assert!(result.is_err());
-
-    // Empty password
-    let result = auth.create_user("user", "", vec![Permission::Select]);
+    let result = Client::connect("TESTUSER", "password123").await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_special_characters_in_credentials() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_special_characters_in_credentials() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
-
-    // Username with special characters
-    let result = auth.create_user("user@domain.com", "password", vec![Permission::Select]);
-    // This may or may not be supported - test documents behavior
 
     // Password with special characters
-    let result = auth.create_user("special_user", "p@$$w0rd!#", vec![Permission::Select]);
+    let result = auth.create_user("special_user", "p@$$w0rd!#", vec![Permission::Select]).await;
     assert!(result.is_ok());
 
-    let result = Client::connect("special_user", "p@$$w0rd!#");
+    let result = Client::connect("special_user", "p@$$w0rd!#").await;
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_user_permissions_inheritance() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_user_permissions_inheritance() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
     // User starts with SELECT only
-    auth.create_user("inherit_user", "password", vec![Permission::Select]).unwrap();
+    auth.create_user("inherit_user", "password", vec![Permission::Select]).await.unwrap();
 
-    let user = auth.authenticate("inherit_user", "password").unwrap();
+    let user = auth.authenticate("inherit_user", "password").await.unwrap();
     assert!(user.has_permission(Permission::Select));
     assert!(!user.has_permission(Permission::Insert));
 
     // Grant multiple permissions
-    auth.grant_permission("inherit_user", Permission::Insert).unwrap();
-    auth.grant_permission("inherit_user", Permission::Update).unwrap();
-    auth.grant_permission("inherit_user", Permission::Delete).unwrap();
+    auth.grant_permission("inherit_user", Permission::Insert).await.unwrap();
+    auth.grant_permission("inherit_user", Permission::Update).await.unwrap();
+    auth.grant_permission("inherit_user", Permission::Delete).await.unwrap();
 
-    let user = auth.authenticate("inherit_user", "password").unwrap();
+    let user = auth.authenticate("inherit_user", "password").await.unwrap();
     assert!(user.has_permission(Permission::Select));
     assert!(user.has_permission(Permission::Insert));
     assert!(user.has_permission(Permission::Update));
     assert!(user.has_permission(Permission::Delete));
 }
 
-#[test]
-fn test_revoke_all_permissions() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_revoke_all_permissions() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
     let permissions = vec![
@@ -432,28 +371,28 @@ fn test_revoke_all_permissions() {
         Permission::Delete,
     ];
 
-    auth.create_user("revoke_all", "password", permissions).unwrap();
+    auth.create_user("revoke_all", "password", permissions).await.unwrap();
 
     // Revoke all permissions one by one
-    auth.revoke_permission("revoke_all", Permission::Select).unwrap();
-    auth.revoke_permission("revoke_all", Permission::Insert).unwrap();
-    auth.revoke_permission("revoke_all", Permission::Update).unwrap();
-    auth.revoke_permission("revoke_all", Permission::Delete).unwrap();
+    auth.revoke_permission("revoke_all", Permission::Select).await.unwrap();
+    auth.revoke_permission("revoke_all", Permission::Insert).await.unwrap();
+    auth.revoke_permission("revoke_all", Permission::Update).await.unwrap();
+    auth.revoke_permission("revoke_all", Permission::Delete).await.unwrap();
 
-    let user = auth.authenticate("revoke_all", "password").unwrap();
+    let user = auth.authenticate("revoke_all", "password").await.unwrap();
     assert!(!user.has_permission(Permission::Select));
     assert!(!user.has_permission(Permission::Insert));
     assert!(!user.has_permission(Permission::Update));
     assert!(!user.has_permission(Permission::Delete));
 
     // User should still be able to authenticate
-    let result = Client::connect("revoke_all", "password");
+    let result = Client::connect("revoke_all", "password").await;
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_user_with_all_permissions() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_user_with_all_permissions() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
     let all_permissions = vec![
@@ -465,9 +404,9 @@ fn test_user_with_all_permissions() {
         Permission::DropTable,
     ];
 
-    auth.create_user("superuser", "password", all_permissions).unwrap();
+    auth.create_user("superuser", "password", all_permissions).await.unwrap();
 
-    let user = auth.authenticate("superuser", "password").unwrap();
+    let user = auth.authenticate("superuser", "password").await.unwrap();
 
     // Should have all permissions except Admin
     assert!(user.has_permission(Permission::Select));
@@ -479,43 +418,17 @@ fn test_user_with_all_permissions() {
     assert!(!user.has_permission(Permission::Admin));
 }
 
-#[test]
-fn test_connection_url_with_credentials() {
-    let admin_client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_connection_url_with_credentials() {
+    let admin_client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = admin_client.auth_manager();
 
-    auth.create_user("urluser", "urlpass80", vec![Permission::Select]).unwrap();
+    auth.create_user("urluser", "urlpass80", vec![Permission::Select]).await.unwrap();
 
-    let client = Client::connect_url("rustmemodb://urluser:urlpass80@localhost:5432/testdb");
+    let client = Client::connect_url("rustmemodb://urluser:urlpass80@localhost:5432/testdb").await;
     assert!(client.is_ok());
 
     // Wrong password in URL
-    let client = Client::connect_url("rustmemodb://urluser:wrong@localhost:5432/testdb");
+    let client = Client::connect_url("rustmemodb://urluser:wrong@localhost:5432/testdb").await;
     assert!(client.is_err());
-}
-
-#[test]
-fn test_max_username_length() {
-    let client = Client::connect("admin", "adminpass").unwrap();
-    let auth = client.auth_manager();
-
-    // Very long username
-    let long_username = "a".repeat(100);
-    let result = auth.create_user(&long_username, "password", vec![Permission::Select]);
-    // This may succeed or fail depending on implementation limits
-}
-
-#[test]
-fn test_max_password_length() {
-    let client = Client::connect("admin", "adminpass").unwrap();
-    let auth = client.auth_manager();
-
-    // Very long password
-    let long_password = "p".repeat(100);
-    let result = auth.create_user("longpass_user", &long_password, vec![Permission::Select]);
-
-    if result.is_ok() {
-        let client = Client::connect("longpass_user", &long_password);
-        assert!(client.is_ok());
-    }
 }

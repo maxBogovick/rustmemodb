@@ -5,281 +5,286 @@
 
 use rustmemodb::Client;
 
-#[test]
-fn test_transaction_begin_commit() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_begin_commit() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_tx (id INTEGER, data TEXT)").unwrap();
+    client.execute("CREATE TABLE test_tx (id INTEGER, data TEXT)").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
     // Begin transaction
-    assert!(conn.begin().is_ok());
+    assert!(conn.begin().await.is_ok());
     assert!(conn.connection().is_in_transaction());
 
     // Execute operations
-    conn.execute("INSERT INTO test_tx VALUES (1, 'data1')").unwrap();
-    conn.execute("INSERT INTO test_tx VALUES (2, 'data2')").unwrap();
+    conn.execute("INSERT INTO test_tx VALUES (1, 'data1')").await.unwrap();
+    conn.execute("INSERT INTO test_tx VALUES (2, 'data2')").await.unwrap();
 
     // Commit
-    assert!(conn.commit().is_ok());
+    assert!(conn.commit().await.is_ok());
     assert!(!conn.connection().is_in_transaction());
 
     // Verify data was committed
-    let result = client.query("SELECT * FROM test_tx").unwrap();
+    let result = client.query("SELECT * FROM test_tx").await.unwrap();
     assert_eq!(result.row_count(), 2);
 }
 
-#[test]
-fn test_transaction_begin_rollback() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_begin_rollback() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_rollback (id INTEGER)").unwrap();
+    client.execute("CREATE TABLE test_rollback (id INTEGER)").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
-    conn.begin().unwrap();
-    conn.execute("INSERT INTO test_rollback VALUES (1)").unwrap();
+    conn.begin().await.unwrap();
+    conn.execute("INSERT INTO test_rollback VALUES (1)").await.unwrap();
 
     // Rollback instead of commit
-    assert!(conn.rollback().is_ok());
+    assert!(conn.rollback().await.is_ok());
     assert!(!conn.connection().is_in_transaction());
 
-    // Verify data was NOT committed (when transactions are implemented)
-    // Currently inserts happen immediately
-    let result = client.query("SELECT * FROM test_rollback").unwrap();
-    // Note: Will be 0 when transactions are fully implemented
-    println!("Rows after rollback: {}", result.row_count());
+    // Verify data was NOT committed
+    let result = client.query("SELECT * FROM test_rollback").await.unwrap();
+    assert_eq!(result.row_count(), 0);
 }
 
-#[test]
-fn test_transaction_auto_rollback_on_drop() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_auto_rollback_on_drop() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_auto_rollback (id INTEGER)").unwrap();
+    client.execute("CREATE TABLE test_auto_rollback (id INTEGER)").await.unwrap();
 
     {
-        let mut conn = client.get_connection().unwrap();
-        conn.begin().unwrap();
-        conn.execute("INSERT INTO test_auto_rollback VALUES (1)").unwrap();
+        let mut conn = client.get_connection().await.unwrap();
+        conn.begin().await.unwrap();
+        conn.execute("INSERT INTO test_auto_rollback VALUES (1)").await.unwrap();
 
         // Connection dropped here without commit - should auto-rollback
     }
 
-    // Verify data was rolled back (when transactions are implemented)
-    let result = client.query("SELECT * FROM test_auto_rollback").unwrap();
-    println!("Rows after auto-rollback: {}", result.row_count());
+    // Verify data was rolled back
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let result = client.query("SELECT * FROM test_auto_rollback").await.unwrap();
+    assert_eq!(result.row_count(), 0);
 }
 
-#[test]
-fn test_transaction_multiple_operations() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_multiple_operations() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE accounts (id INTEGER, balance FLOAT)").unwrap();
-    client.execute("INSERT INTO accounts VALUES (1, 1000.0)").unwrap();
-    client.execute("INSERT INTO accounts VALUES (2, 500.0)").unwrap();
+    client.execute("CREATE TABLE accounts (id INTEGER, balance FLOAT)").await.unwrap();
+    client.execute("INSERT INTO accounts VALUES (1, 1000.0)").await.unwrap();
+    client.execute("INSERT INTO accounts VALUES (2, 500.0)").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
-    conn.begin().unwrap();
+    conn.begin().await.unwrap();
 
     // Perform multiple operations in transaction
-    // Note: UPDATE not implemented yet, using INSERT for demo
-    conn.execute("INSERT INTO accounts VALUES (3, 750.0)").unwrap();
-    conn.execute("INSERT INTO accounts VALUES (4, 250.0)").unwrap();
+    conn.execute("INSERT INTO accounts VALUES (3, 750.0)").await.unwrap();
+    conn.execute("INSERT INTO accounts VALUES (4, 250.0)").await.unwrap();
 
-    conn.commit().unwrap();
+    conn.commit().await.unwrap();
 
-    let result = client.query("SELECT * FROM accounts").unwrap();
+    let result = client.query("SELECT * FROM accounts").await.unwrap();
     assert_eq!(result.row_count(), 4);
 }
 
-#[test]
-fn test_transaction_error_no_transaction() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_error_no_transaction() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
     // Try to commit without begin - should fail
-    let result = conn.commit();
+    let result = conn.commit().await;
     assert!(result.is_err());
 
     // Try to rollback without begin - SQL standard: no-op, not error
-    let result = conn.rollback();
+    let result = conn.rollback().await;
     assert!(result.is_ok(), "ROLLBACK without transaction should be no-op");
 }
 
-#[test]
-fn test_transaction_error_double_begin() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_error_double_begin() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
-    conn.begin().unwrap();
+    conn.begin().await.unwrap();
 
     // Try to begin again
-    let result = conn.begin();
+    let result = conn.begin().await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_transaction_nested_not_supported() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_nested_not_supported() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
-    conn.begin().unwrap();
+    conn.begin().await.unwrap();
 
     // Nested transaction not supported
-    let result = conn.begin();
+    let result = conn.begin().await;
     assert!(result.is_err());
 
-    conn.rollback().unwrap();
+    conn.rollback().await.unwrap();
 }
 
-#[test]
-fn test_transaction_isolation_between_connections() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+#[ignore] // Isolation not yet fully implemented in storage layer
+async fn test_transaction_isolation_between_connections() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_isolation (id INTEGER)").unwrap();
+    client.execute("CREATE TABLE test_isolation (id INTEGER)").await.unwrap();
 
     // Connection 1 starts transaction
-    let mut conn1 = client.get_connection().unwrap();
-    conn1.begin().unwrap();
-    conn1.execute("INSERT INTO test_isolation VALUES (1)").unwrap();
+    let mut conn1 = client.get_connection().await.unwrap();
+    conn1.begin().await.unwrap();
+    conn1.execute("INSERT INTO test_isolation VALUES (1)").await.unwrap();
 
     // Connection 2 can still query (reads committed data)
-    let mut conn2 = client.get_connection().unwrap();
-    let result = conn2.execute("SELECT * FROM test_isolation").unwrap();
+    let mut conn2 = client.get_connection().await.unwrap();
+    let result = conn2.execute("SELECT * FROM test_isolation").await.unwrap();
 
-    // Currently shows uncommitted data (isolation not implemented)
-    println!("Visible rows: {}", result.row_count());
+    // Should NOT see uncommitted data from conn1
+    assert_eq!(result.row_count(), 0);
 
-    conn1.commit().unwrap();
-}
-
-#[test]
-fn test_transaction_rollback_preserves_previous_state() {
-    let client = Client::connect("admin", "adminpass").unwrap();
-
-    client.execute("CREATE TABLE test_preserve (id INTEGER, value INTEGER)").unwrap();
-    client.execute("INSERT INTO test_preserve VALUES (1, 100)").unwrap();
-
-    let mut conn = client.get_connection().unwrap();
-
-    // Start transaction and modify data
-    conn.begin().unwrap();
-    // Note: UPDATE not implemented
-    conn.execute("INSERT INTO test_preserve VALUES (2, 200)").unwrap();
-    conn.rollback().unwrap();
-
-    // Original data should be preserved
-    let result = client.query("SELECT * FROM test_preserve WHERE id = 1").unwrap();
+    conn1.commit().await.unwrap();
+    
+    // Now it should be visible
+    let result = conn2.execute("SELECT * FROM test_isolation").await.unwrap();
     assert_eq!(result.row_count(), 1);
 }
 
-#[test]
-fn test_transaction_commit_after_rollback_fails() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_rollback_preserves_previous_state() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    client.execute("CREATE TABLE test_preserve (id INTEGER, value INTEGER)").await.unwrap();
+    client.execute("INSERT INTO test_preserve VALUES (1, 100)").await.unwrap();
 
-    conn.begin().unwrap();
-    conn.rollback().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
+
+    // Start transaction and modify data
+    conn.begin().await.unwrap();
+    conn.execute("INSERT INTO test_preserve VALUES (2, 200)").await.unwrap();
+    conn.rollback().await.unwrap();
+
+    // Original data should be preserved
+    let result = client.query("SELECT * FROM test_preserve WHERE id = 1").await.unwrap();
+    assert_eq!(result.row_count(), 1);
+    
+    let result = client.query("SELECT * FROM test_preserve WHERE id = 2").await.unwrap();
+    assert_eq!(result.row_count(), 0);
+}
+
+#[tokio::test]
+async fn test_transaction_commit_after_rollback_fails() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
+
+    let mut conn = client.get_connection().await.unwrap();
+
+    conn.begin().await.unwrap();
+    conn.rollback().await.unwrap();
 
     // Transaction is no longer active
-    let result = conn.commit();
+    let result = conn.commit().await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_transaction_multiple_sequential() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_multiple_sequential() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_sequential (id INTEGER)").unwrap();
+    client.execute("CREATE TABLE test_sequential (id INTEGER)").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
     // First transaction
-    conn.begin().unwrap();
-    conn.execute("INSERT INTO test_sequential VALUES (1)").unwrap();
-    conn.commit().unwrap();
+    conn.begin().await.unwrap();
+    conn.execute("INSERT INTO test_sequential VALUES (1)").await.unwrap();
+    conn.commit().await.unwrap();
 
     // Second transaction
-    conn.begin().unwrap();
-    conn.execute("INSERT INTO test_sequential VALUES (2)").unwrap();
-    conn.commit().unwrap();
+    conn.begin().await.unwrap();
+    conn.execute("INSERT INTO test_sequential VALUES (2)").await.unwrap();
+    conn.commit().await.unwrap();
 
-    let result = client.query("SELECT * FROM test_sequential").unwrap();
+    let result = client.query("SELECT * FROM test_sequential").await.unwrap();
     assert_eq!(result.row_count(), 2);
 }
 
-#[test]
-fn test_transaction_state_tracking() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_state_tracking() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
     // Initially not in transaction
     assert!(!conn.connection().is_in_transaction());
 
     // After begin
-    conn.begin().unwrap();
+    conn.begin().await.unwrap();
     assert!(conn.connection().is_in_transaction());
 
     // After commit
-    conn.commit().unwrap();
+    conn.commit().await.unwrap();
     assert!(!conn.connection().is_in_transaction());
 
     // After begin again
-    conn.begin().unwrap();
+    conn.begin().await.unwrap();
     assert!(conn.connection().is_in_transaction());
 
     // After rollback
-    conn.rollback().unwrap();
+    conn.rollback().await.unwrap();
     assert!(!conn.connection().is_in_transaction());
 }
 
-#[test]
-fn test_transaction_with_query_in_middle() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_with_query_in_middle() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_query_tx (id INTEGER)").unwrap();
+    client.execute("CREATE TABLE test_query_tx (id INTEGER)").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
-    conn.begin().unwrap();
+    conn.begin().await.unwrap();
 
-    conn.execute("INSERT INTO test_query_tx VALUES (1)").unwrap();
+    conn.execute("INSERT INTO test_query_tx VALUES (1)").await.unwrap();
 
     // Query within transaction
-    let result = conn.execute("SELECT * FROM test_query_tx").unwrap();
+    let result = conn.execute("SELECT * FROM test_query_tx").await.unwrap();
     assert!(result.row_count() >= 1);
 
-    conn.execute("INSERT INTO test_query_tx VALUES (2)").unwrap();
+    conn.execute("INSERT INTO test_query_tx VALUES (2)").await.unwrap();
 
-    conn.commit().unwrap();
+    conn.commit().await.unwrap();
 }
 
-#[test]
-fn test_transaction_error_handling() {
-    let client = Client::connect("admin", "adminpass").unwrap();
+#[tokio::test]
+async fn test_transaction_error_handling() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_error_tx (id INTEGER)").unwrap();
+    client.execute("CREATE TABLE test_error_tx (id INTEGER)").await.unwrap();
 
-    let mut conn = client.get_connection().unwrap();
+    let mut conn = client.get_connection().await.unwrap();
 
-    conn.begin().unwrap();
+    conn.begin().await.unwrap();
 
-    conn.execute("INSERT INTO test_error_tx VALUES (1)").unwrap();
+    conn.execute("INSERT INTO test_error_tx VALUES (1)").await.unwrap();
 
     // Attempt invalid operation
-    let invalid_result = conn.execute("INSERT INTO nonexistent VALUES (1)");
+    let invalid_result = conn.execute("INSERT INTO nonexistent VALUES (1)").await;
     assert!(invalid_result.is_err());
 
     // Transaction should still be active
     assert!(conn.connection().is_in_transaction());
 
     // Can still rollback
-    assert!(conn.rollback().is_ok());
+    assert!(conn.rollback().await.is_ok());
 }

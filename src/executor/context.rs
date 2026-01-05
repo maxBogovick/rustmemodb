@@ -1,6 +1,7 @@
 use crate::storage::{InMemoryStorage, PersistenceManager};
 use crate::transaction::{TransactionId, TransactionManager};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+use tokio::sync::Mutex;
 
 /// Execution context for query/statement execution
 ///

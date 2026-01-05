@@ -4,12 +4,15 @@ use crate::storage::Catalog;
 use crate::core::Result;
 use super::ExecutionContext;
 
+use async_trait::async_trait;
+
+#[async_trait]
 pub trait Executor: Send + Sync {
     /// Имя executor'а для отладки
     fn name(&self) -> &'static str;
 
     fn can_handle(&self, stmt: &Statement) -> bool;
-    fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult>;
+    async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult>;
 }
 
 pub struct ExecutorPipeline {
@@ -27,10 +30,10 @@ impl ExecutorPipeline {
         self.executors.push(executor);
     }
 
-    pub fn execute(&self, stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    pub async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         for executor in &self.executors {
             if executor.can_handle(stmt) {
-                return executor.execute(stmt, ctx);
+                return executor.execute(stmt, ctx).await;
             }
         }
 
@@ -40,8 +43,8 @@ impl ExecutorPipeline {
     }
 
     /// Обновить catalog во всех executors (для DDL операций)
-    pub fn update_catalog(&mut self, new_catalog: Catalog) {
-        for executor in &mut self.executors {
+    pub fn update_catalog(&mut self, _new_catalog: Catalog) {
+        for _executor in &mut self.executors {
             // Downcast к QueryExecutor и обновить catalog
             // В реальной реализации можно добавить метод в trait Executor
             // или использовать другой подход

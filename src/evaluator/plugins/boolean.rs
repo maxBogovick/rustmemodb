@@ -2,8 +2,11 @@ use super::super::{ExpressionEvaluator, EvaluationContext};
 use crate::parser::ast::{Expr, BinaryOp};
 use crate::core::{Result, Value, Row, Schema, DbError};
 
+use async_trait::async_trait;
+
 pub struct BooleanEvaluator;
 
+#[async_trait]
 impl ExpressionEvaluator for BooleanEvaluator {
     fn name(&self) -> &'static str {
         "BOOLEAN"
@@ -19,7 +22,7 @@ impl ExpressionEvaluator for BooleanEvaluator {
         }
     }
 
-    fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext) -> Result<Value> {
+    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
         match expr {
             // Handle AND/OR
             Expr::BinaryOp { left, op, right } => {
@@ -28,8 +31,8 @@ impl ExpressionEvaluator for BooleanEvaluator {
                     unreachable!("BooleanEvaluator: expected And/Or, got {:?}", op);
                 }
 
-                let left_val = context.evaluate(left, row, schema)?;
-                let right_val = context.evaluate(right, row, schema)?;
+                let left_val = context.evaluate(left, row, schema).await?;
+                let right_val = context.evaluate(right, row, schema).await?;
 
                 match (left_val, right_val) {
                     (Value::Boolean(a), Value::Boolean(b)) => {
@@ -49,7 +52,7 @@ impl ExpressionEvaluator for BooleanEvaluator {
 
             // Handle NOT
             Expr::Not { expr } => {
-                let val = context.evaluate(expr, row, schema)?;
+                let val = context.evaluate(expr, row, schema).await?;
 
                 match val {
                     Value::Boolean(b) => Ok(Value::Boolean(!b)),

@@ -6,18 +6,20 @@ use crate::parser::ast::{Expr, OrderByExpr, BinaryOp};
 use crate::core::{Result, Value, Row, Schema, DbError};
 use crate::evaluator::EvaluationContext;
 use std::cmp::Ordering;
+use async_trait::async_trait;
 
 /// Trait для сортировщиков (plugin interface)
+#[async_trait]
 pub trait RowSorter: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Сортировать строки согласно ORDER BY выражениям
-    fn sort(
+    async fn sort(
         &self,
         rows: Vec<Row>,
         order_by: &[OrderByExpr],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Vec<Row>>;
 }
 
@@ -66,39 +68,6 @@ impl OrderBySorter {
             _ => format!("{:?}", a).cmp(&format!("{:?}", b)),
         }
     }
-
-    /// Сравнить две строки по списку ORDER BY выражений
-    fn compare_rows(
-        &self,
-        row_a: &Row,
-        row_b: &Row,
-        order_by: &[OrderByExpr],
-        schema: &Schema,
-        eval_ctx: &EvaluationContext,
-    ) -> Result<Ordering> {
-        for order_expr in order_by {
-            // Вычисляем значения выражения для обеих строк
-            let val_a = eval_ctx.evaluate(&order_expr.expr, row_a, schema)?;
-            let val_b = eval_ctx.evaluate(&order_expr.expr, row_b, schema)?;
-
-            // Сравниваем
-            let mut cmp = self.compare_values(&val_a, &val_b);
-
-            // Инвертируем порядок для DESC
-            if order_expr.descending {
-                cmp = cmp.reverse();
-            }
-
-            // Если не равны - возвращаем результат
-            if cmp != Ordering::Equal {
-                return Ok(cmp);
-            }
-            // Иначе переходим к следующему ORDER BY выражению
-        }
-
-        // Все выражения равны
-        Ok(Ordering::Equal)
-    }
 }
 
 impl Default for OrderBySorter {
@@ -107,47 +76,63 @@ impl Default for OrderBySorter {
     }
 }
 
+#[async_trait]
 impl RowSorter for OrderBySorter {
     fn name(&self) -> &'static str {
         "ORDER BY"
     }
 
-    fn sort(
+    async fn sort(
         &self,
-        mut rows: Vec<Row>,
+        rows: Vec<Row>,
         order_by: &[OrderByExpr],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Vec<Row>> {
         // Если нет ORDER BY - возвращаем как есть
-        if order_by.is_empty() {
+        if order_by.is_empty() || rows.is_empty() {
             return Ok(rows);
         }
 
-        // Собираем ошибки сортировки (если будут)
-        let mut sort_error: Option<DbError> = None;
+        // Pre-evaluate sorting keys to avoid async in sort_by
+        let mut rows_with_keys = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut keys = Vec::with_capacity(order_by.len());
+            for order_expr in order_by {
+                keys.push(eval_ctx.evaluate(&order_expr.expr, &row, schema).await?);
+            }
+            rows_with_keys.push((row, keys));
+        }
 
-        rows.sort_by(|a, b| {
-            // Если уже была ошибка - не продолжаем вычисления
+        let sort_error: Option<DbError> = None;
+        rows_with_keys.sort_by(|(_, keys_a), (_, keys_b)| {
             if sort_error.is_some() {
                 return Ordering::Equal;
             }
 
-            match self.compare_rows(a, b, order_by, schema, eval_ctx) {
-                Ok(ordering) => ordering,
-                Err(e) => {
-                    sort_error = Some(e);
-                    Ordering::Equal
+            for (i, order_expr) in order_by.iter().enumerate() {
+                let val_a = &keys_a[i];
+                let val_b = &keys_b[i];
+
+                let mut cmp = self.compare_values(val_a, val_b);
+
+                if order_expr.descending {
+                    cmp = cmp.reverse();
+                }
+
+                if cmp != Ordering::Equal {
+                    return cmp;
                 }
             }
+
+            Ordering::Equal
         });
 
-        // Если была ошибка во время сортировки - возвращаем её
         if let Some(err) = sort_error {
             return Err(err);
         }
 
-        Ok(rows)
+        Ok(rows_with_keys.into_iter().map(|(row, _)| row).collect())
     }
 }
 
@@ -227,43 +212,40 @@ impl ExtendedOrderBySorter {
     }
 
     /// Сортировать с расширенными опциями
-    pub fn sort_extended(
+    pub async fn sort_extended(
         &self,
-        mut rows: Vec<Row>,
+        rows: Vec<Row>,
         order_by: &[ExtendedOrderByExpr],
         schema: &Schema,
-        eval_ctx: &EvaluationContext,
+        eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Vec<Row>> {
-        if order_by.is_empty() {
+        if order_by.is_empty() || rows.is_empty() {
             return Ok(rows);
         }
 
-        let mut sort_error: Option<DbError> = None;
+        // Pre-evaluate sorting keys to avoid async in sort_by
+        let mut rows_with_keys = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut keys = Vec::with_capacity(order_by.len());
+            for order_expr in order_by {
+                keys.push(eval_ctx.evaluate(&order_expr.expr, &row, schema).await?);
+            }
+            rows_with_keys.push((row, keys));
+        }
 
-        rows.sort_by(|row_a, row_b| {
+        let sort_error: Option<DbError> = None;
+        rows_with_keys.sort_by(|(_, keys_a), (_, keys_b)| {
             if sort_error.is_some() {
                 return Ordering::Equal;
             }
 
-            for order_expr in order_by {
-                let val_a = match eval_ctx.evaluate(&order_expr.expr, row_a, schema) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return Ordering::Equal;
-                    }
-                };
-                let val_b = match eval_ctx.evaluate(&order_expr.expr, row_b, schema) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        sort_error = Some(e);
-                        return Ordering::Equal;
-                    }
-                };
+            for (i, order_expr) in order_by.iter().enumerate() {
+                let val_a = &keys_a[i];
+                let val_b = &keys_b[i];
 
                 let mut cmp = self.compare_values_with_nulls(
-                    &val_a,
-                    &val_b,
+                    val_a,
+                    val_b,
                     order_expr.null_ordering,
                 );
 
@@ -283,7 +265,7 @@ impl ExtendedOrderBySorter {
             return Err(err);
         }
 
-        Ok(rows)
+        Ok(rows_with_keys.into_iter().map(|(row, _)| row).collect())
     }
 }
 
@@ -365,8 +347,8 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn test_sort_by_single_column_asc() {
+    #[tokio::test]
+    async fn test_sort_by_single_column_asc() {
         let schema = create_test_schema();
         let rows = create_test_rows();
         let sorter = OrderBySorter::new();
@@ -378,7 +360,7 @@ mod tests {
             descending: false,
         }];
 
-        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).unwrap();
+        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).await.unwrap();
 
         // age: 25, 25, 30, 35
         assert_eq!(sorted[0][2], Value::Integer(25));
@@ -387,8 +369,8 @@ mod tests {
         assert_eq!(sorted[3][2], Value::Integer(35));
     }
 
-    #[test]
-    fn test_sort_by_single_column_desc() {
+    #[tokio::test]
+    async fn test_sort_by_single_column_desc() {
         let schema = create_test_schema();
         let rows = create_test_rows();
         let sorter = OrderBySorter::new();
@@ -400,7 +382,7 @@ mod tests {
             descending: true,
         }];
 
-        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).unwrap();
+        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).await.unwrap();
 
         // age: 35, 30, 25, 25
         assert_eq!(sorted[0][2], Value::Integer(35));
@@ -409,8 +391,8 @@ mod tests {
         assert_eq!(sorted[3][2], Value::Integer(25));
     }
 
-    #[test]
-    fn test_sort_by_multiple_columns() {
+    #[tokio::test]
+    async fn test_sort_by_multiple_columns() {
         let schema = create_test_schema();
         let rows = create_test_rows();
         let sorter = OrderBySorter::new();
@@ -429,7 +411,7 @@ mod tests {
             },
         ];
 
-        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).unwrap();
+        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).await.unwrap();
 
         // age 25: Bob, Diana (alphabetically)
         // age 30: Alice
@@ -440,8 +422,8 @@ mod tests {
         assert_eq!(sorted[3][1], Value::Text("Charlie".into()));
     }
 
-    #[test]
-    fn test_sort_with_nulls() {
+    #[tokio::test]
+    async fn test_sort_with_nulls() {
         let schema = Schema::new(vec![
             Column::new("id", DataType::Integer),
             Column::new("value", DataType::Integer),
@@ -463,7 +445,7 @@ mod tests {
             descending: false,
         }];
 
-        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).unwrap();
+        let sorted = sorter.sort(rows, &order_by, &schema, &eval_ctx).await.unwrap();
 
         // NULL LAST by default: 5, 10, NULL, NULL
         assert_eq!(sorted[0][1], Value::Integer(5));

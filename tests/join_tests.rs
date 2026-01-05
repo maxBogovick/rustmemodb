@@ -1,28 +1,28 @@
 use rustmemodb::InMemoryDB;
 use rustmemodb::core::Value;
 
-fn setup_db() -> InMemoryDB {
+async fn setup_db() -> InMemoryDB {
     let mut db = InMemoryDB::new();
 
     // Create 'users' table
-    db.execute("CREATE TABLE users (id INTEGER, name TEXT, department_id INTEGER)").unwrap();
-    db.execute("INSERT INTO users VALUES (1, 'Alice', 1)").unwrap();
-    db.execute("INSERT INTO users VALUES (2, 'Bob', 1)").unwrap();
-    db.execute("INSERT INTO users VALUES (3, 'Charlie', 2)").unwrap();
-    db.execute("INSERT INTO users VALUES (4, 'David', NULL)").unwrap(); // No department
+    db.execute("CREATE TABLE users (id INTEGER, name TEXT, department_id INTEGER)").await.unwrap();
+    db.execute("INSERT INTO users VALUES (1, 'Alice', 1)").await.unwrap();
+    db.execute("INSERT INTO users VALUES (2, 'Bob', 1)").await.unwrap();
+    db.execute("INSERT INTO users VALUES (3, 'Charlie', 2)").await.unwrap();
+    db.execute("INSERT INTO users VALUES (4, 'David', NULL)").await.unwrap(); // No department
 
     // Create 'departments' table
-    db.execute("CREATE TABLE departments (id INTEGER, name TEXT)").unwrap();
-    db.execute("INSERT INTO departments VALUES (1, 'Engineering')").unwrap();
-    db.execute("INSERT INTO departments VALUES (2, 'Sales')").unwrap();
-    db.execute("INSERT INTO departments VALUES (3, 'Marketing')").unwrap(); // No users
+    db.execute("CREATE TABLE departments (id INTEGER, name TEXT)").await.unwrap();
+    db.execute("INSERT INTO departments VALUES (1, 'Engineering')").await.unwrap();
+    db.execute("INSERT INTO departments VALUES (2, 'Sales')").await.unwrap();
+    db.execute("INSERT INTO departments VALUES (3, 'Marketing')").await.unwrap(); // No users
 
     db
 }
 
-#[test]
-fn test_inner_join() {
-    let mut db = setup_db();
+#[tokio::test]
+async fn test_inner_join() {
+    let mut db = setup_db().await;
 
     // SELECT users.name, departments.name 
     // FROM users 
@@ -32,7 +32,7 @@ fn test_inner_join() {
          FROM users 
          INNER JOIN departments ON users.department_id = departments.id
          ORDER BY users.name"
-    ).unwrap();
+    ).await.unwrap();
 
     assert_eq!(result.row_count(), 3);
     
@@ -47,9 +47,9 @@ fn test_inner_join() {
     assert_eq!(rows[2][1], Value::Text("Sales".into()));
 }
 
-#[test]
-fn test_left_join() {
-    let mut db = setup_db();
+#[tokio::test]
+async fn test_left_join() {
+    let mut db = setup_db().await;
 
     // SELECT users.name, departments.name 
     // FROM users 
@@ -59,7 +59,7 @@ fn test_left_join() {
          FROM users u
          LEFT JOIN departments d ON u.department_id = d.id
          ORDER BY u.name"
-    ).unwrap();
+    ).await.unwrap();
 
     assert_eq!(result.row_count(), 4); // All users
     
@@ -79,9 +79,9 @@ fn test_left_join() {
     assert_eq!(rows[3][1], Value::Null);
 }
 
-#[test]
-fn test_right_join() {
-    let mut db = setup_db();
+#[tokio::test]
+async fn test_right_join() {
+    let mut db = setup_db().await;
 
     // SELECT users.name, departments.name 
     // FROM users 
@@ -91,15 +91,8 @@ fn test_right_join() {
          FROM users 
          RIGHT JOIN departments ON users.department_id = departments.id
          ORDER BY departments.name"
-    ).unwrap();
+    ).await.unwrap();
 
-    // Should include Marketing (no users) and exclude David (no department)
-    // Rows:
-    // Alice - Engineering
-    // Bob - Engineering
-    // Charlie - Sales
-    // NULL - Marketing
-    
     assert_eq!(result.row_count(), 4);
     
     // Find Marketing row
@@ -108,25 +101,24 @@ fn test_right_join() {
     assert_eq!(marketing_row.unwrap()[0], Value::Null);
 }
 
-#[test]
-fn test_cross_join() {
-    let mut db = setup_db();
+#[tokio::test]
+async fn test_cross_join() {
+    let mut db = setup_db().await;
 
     // SELECT * FROM users CROSS JOIN departments
-    // 4 users * 3 departments = 12 rows
-    let result = db.execute("SELECT * FROM users CROSS JOIN departments").unwrap();
+    let result = db.execute("SELECT * FROM users CROSS JOIN departments").await.unwrap();
     assert_eq!(result.row_count(), 12);
 }
 
-#[test]
-fn test_self_join() {
+#[tokio::test]
+async fn test_self_join() {
     let mut db = InMemoryDB::new();
     
     // Employees with managers
-    db.execute("CREATE TABLE employees (id INTEGER, name TEXT, manager_id INTEGER)").unwrap();
-    db.execute("INSERT INTO employees VALUES (1, 'Boss', NULL)").unwrap();
-    db.execute("INSERT INTO employees VALUES (2, 'Manager', 1)").unwrap();
-    db.execute("INSERT INTO employees VALUES (3, 'Worker', 2)").unwrap();
+    db.execute("CREATE TABLE employees (id INTEGER, name TEXT, manager_id INTEGER)").await.unwrap();
+    db.execute("INSERT INTO employees VALUES (1, 'Boss', NULL)").await.unwrap();
+    db.execute("INSERT INTO employees VALUES (2, 'Manager', 1)").await.unwrap();
+    db.execute("INSERT INTO employees VALUES (3, 'Worker', 2)").await.unwrap();
 
     // SELECT e.name, m.name 
     // FROM employees e 
@@ -136,7 +128,7 @@ fn test_self_join() {
          FROM employees AS e 
          JOIN employees AS m ON e.manager_id = m.id
          ORDER BY e.name"
-    ).unwrap();
+    ).await.unwrap();
 
     assert_eq!(result.row_count(), 2);
     
@@ -150,9 +142,9 @@ fn test_self_join() {
     assert_eq!(rows[1][1], Value::Text("Manager".into()));
 }
 
-#[test]
-fn test_complex_join_with_where() {
-    let mut db = setup_db();
+#[tokio::test]
+async fn test_complex_join_with_where() {
+    let mut db = setup_db().await;
 
     // Join with WHERE clause
     let result = db.execute(
@@ -160,7 +152,7 @@ fn test_complex_join_with_where() {
          FROM users 
          JOIN departments ON users.department_id = departments.id 
          WHERE departments.name = 'Engineering'"
-    ).unwrap();
+    ).await.unwrap();
 
     assert_eq!(result.row_count(), 2); // Alice and Bob
 }

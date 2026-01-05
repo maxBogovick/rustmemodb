@@ -16,6 +16,8 @@ use crate::executor::{ExecutionContext, Executor};
 use crate::parser::ast::Statement;
 use crate::result::QueryResult;
 
+use async_trait::async_trait;
+
 /// Executor for BEGIN/START TRANSACTION statement
 ///
 /// Starts a new transaction for the current connection.
@@ -28,6 +30,7 @@ use crate::result::QueryResult;
 /// - Nested transactions not supported (error on nested BEGIN)
 pub struct BeginExecutor;
 
+#[async_trait]
 impl Executor for BeginExecutor {
     fn name(&self) -> &'static str {
         "BEGIN"
@@ -37,7 +40,7 @@ impl Executor for BeginExecutor {
         matches!(stmt, Statement::Begin)
     }
 
-    fn execute(&self, _stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute(&self, _stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         // Check for nested transaction
         if ctx.is_in_transaction() {
             return Err(DbError::ExecutionError(
@@ -64,6 +67,7 @@ impl Executor for BeginExecutor {
 /// - On error, transaction remains active (can retry or rollback)
 pub struct CommitExecutor;
 
+#[async_trait]
 impl Executor for CommitExecutor {
     fn name(&self) -> &'static str {
         "COMMIT"
@@ -73,7 +77,7 @@ impl Executor for CommitExecutor {
         matches!(stmt, Statement::Commit)
     }
 
-    fn execute(&self, _stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute(&self, _stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         // Must be in a transaction to commit
         if !ctx.is_in_transaction() {
             return Err(DbError::ExecutionError(
@@ -99,6 +103,7 @@ impl Executor for CommitExecutor {
 /// - No effect if no transaction is active
 pub struct RollbackExecutor;
 
+#[async_trait]
 impl Executor for RollbackExecutor {
     fn name(&self) -> &'static str {
         "ROLLBACK"
@@ -108,7 +113,7 @@ impl Executor for RollbackExecutor {
         matches!(stmt, Statement::Rollback)
     }
 
-    fn execute(&self, _stmt: &Statement, ctx: &ExecutionContext) -> Result<QueryResult> {
+    async fn execute(&self, _stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         // Rollback without active transaction is a no-op (SQL standard behavior)
         if !ctx.is_in_transaction() {
             return Ok(QueryResult::empty_with_message(
@@ -130,63 +135,63 @@ mod tests {
     use crate::transaction::TransactionManager;
     use std::sync::Arc;
 
-    #[test]
-    fn test_begin_executor_can_handle() {
+    #[tokio::test]
+    async fn test_begin_executor_can_handle() {
         let executor = BeginExecutor;
         assert!(executor.can_handle(&Statement::Begin));
         assert!(!executor.can_handle(&Statement::Commit));
     }
 
-    #[test]
-    fn test_commit_executor_can_handle() {
+    #[tokio::test]
+    async fn test_commit_executor_can_handle() {
         let executor = CommitExecutor;
         assert!(executor.can_handle(&Statement::Commit));
         assert!(!executor.can_handle(&Statement::Rollback));
     }
 
-    #[test]
-    fn test_rollback_executor_can_handle() {
+    #[tokio::test]
+    async fn test_rollback_executor_can_handle() {
         let executor = RollbackExecutor;
         assert!(executor.can_handle(&Statement::Rollback));
         assert!(!executor.can_handle(&Statement::Begin));
     }
 
-    #[test]
-    fn test_begin_fails_in_transaction() {
+    #[tokio::test]
+    async fn test_begin_fails_in_transaction() {
         let executor = BeginExecutor;
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
-        let txn_id = txn_mgr.begin().unwrap();
+        let txn_id = txn_mgr.begin().await.unwrap();
 
         let ctx = ExecutionContext::with_transaction(&storage, &txn_mgr, txn_id, None);
 
-        let result = executor.execute(&Statement::Begin, &ctx);
+        let result = executor.execute(&Statement::Begin, &ctx).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Nested"));
     }
 
-    #[test]
-    fn test_commit_fails_without_transaction() {
+    #[tokio::test]
+    async fn test_commit_fails_without_transaction() {
         let executor = CommitExecutor;
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
 
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        let result = executor.execute(&Statement::Commit, &ctx);
+        let result = executor.execute(&Statement::Commit, &ctx).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No active transaction"));
     }
 
-    #[test]
-    fn test_rollback_without_transaction_is_noop() {
+    #[tokio::test]
+    async fn test_rollback_without_transaction_is_noop() {
         let executor = RollbackExecutor;
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
 
         let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
 
-        let result = executor.execute(&Statement::Rollback, &ctx);
+        let result = executor.execute(&Statement::Rollback, &ctx).await;
         assert!(result.is_ok());
     }
 }

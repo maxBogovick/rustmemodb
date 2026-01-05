@@ -3,8 +3,11 @@ use crate::parser::ast::{Expr, BinaryOp};
 use crate::core::{Result, Value, Row, Schema};
 use crate::evaluator::plugins::comparison::ComparisonEvaluator;
 
+use async_trait::async_trait;
+
 pub struct BetweenEvaluator;
 
+#[async_trait]
 impl ExpressionEvaluator for BetweenEvaluator {
     fn name(&self) -> &'static str {
         "BETWEEN"
@@ -14,14 +17,14 @@ impl ExpressionEvaluator for BetweenEvaluator {
         matches!(expr, Expr::Between { .. })
     }
 
-    fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext) -> Result<Value> {
+    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
         let Expr::Between { expr, low, high, negated } = expr else {
             unreachable!();
         };
 
-        let val = context.evaluate(expr, row, schema)?;
-        let low_val = context.evaluate(low, row, schema)?;
-        let high_val = context.evaluate(high, row, schema)?;
+        let val = context.evaluate(expr, row, schema).await?;
+        let low_val = context.evaluate(low, row, schema).await?;
+        let high_val = context.evaluate(high, row, schema).await?;
 
         if matches!(val, Value::Null) {
             return Ok(Value::Boolean(false));

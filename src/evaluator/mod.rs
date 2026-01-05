@@ -3,7 +3,10 @@ pub mod plugins;
 use crate::core::{Result, Row, Schema, Value};
 use crate::parser::ast::Expr;
 
+use async_trait::async_trait;
+
 /// Trait для оценки выражений
+#[async_trait]
 pub trait ExpressionEvaluator: Send + Sync {
     /// Имя evaluator'а
     fn name(&self) -> &'static str;
@@ -12,7 +15,7 @@ pub trait ExpressionEvaluator: Send + Sync {
     fn can_evaluate(&self, expr: &Expr) -> bool;
 
     /// Вычислить выражение
-    fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext) -> Result<Value>;
+    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value>;
 }
 
 /// Контекст для оценки выражений
@@ -27,7 +30,7 @@ impl<'a> EvaluationContext<'a> {
     }
 
     /// Вычислить выражение через подходящий evaluator
-    pub fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema) -> Result<Value> {
+    pub async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema) -> Result<Value> {
         // Базовые случаи (всегда напрямую)
         match expr {
             Expr::Column(name) => {
@@ -57,7 +60,7 @@ impl<'a> EvaluationContext<'a> {
 
         // Ищем подходящий evaluator
         if let Some(evaluator) = self.registry.find_evaluator(expr) {
-            return evaluator.evaluate(expr, row, schema, self);
+            return evaluator.evaluate(expr, row, schema, self).await;
         }
 
         Err(crate::core::DbError::UnsupportedOperation(format!(
