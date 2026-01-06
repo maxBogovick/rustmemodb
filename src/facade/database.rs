@@ -10,7 +10,7 @@ use crate::executor::update::UpdateExecutor;
 use crate::executor::query::QueryExecutor;
 use crate::executor::{BeginExecutor, CommitExecutor, RollbackExecutor};
 use crate::result::QueryResult;
-use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
+use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt, CreateIndexStmt, AlterTableStmt};
 use crate::transaction::TransactionManager;
 use std::sync::{Arc};
 use tokio::sync::{RwLock, Mutex};
@@ -108,6 +108,13 @@ impl InMemoryDB {
             }
             Statement::DropTable(drop) => {
                 return self.execute_drop_table(drop).await;
+            }
+            Statement::CreateIndex(create_index) => {
+                self.create_index(&create_index.table_name, &create_index.column).await?;
+                return Ok(QueryResult::empty());
+            }
+            Statement::AlterTable(_) => {
+                return Err(DbError::UnsupportedOperation("ALTER TABLE not implemented yet".into()));
             }
             _ => {}
         }
@@ -251,17 +258,26 @@ impl InMemoryDB {
 
     /// Create an index on a table column
     pub async fn create_index(&mut self, table_name: &str, column_name: &str) -> Result<()> {
-        // 1. Create index in storage
+        // 1. Log to WAL BEFORE making changes
+        if let Some(ref persistence) = self.persistence {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::CreateIndex {
+                table_name: table_name.to_string(),
+                column_name: column_name.to_string(),
+            })?;
+        }
+
+        // 2. Create index in storage
         self.storage.create_index(table_name, column_name).await?;
         
-        // 2. Update catalog to reflect that column is indexed
+        // 3. Update catalog to reflect that column is indexed
         // We need to fetch the updated schema from storage because storage.create_index updates it
         let updated_schema = self.storage.get_schema(table_name).await?;
         
-        // 3. Update catalog
+        // 4. Update catalog
         self.catalog = self.catalog.clone().without_table(table_name)?.with_table(updated_schema)?;
 
-        // 4. Recreate QueryExecutor with updated catalog so planner sees the new index
+        // 5. Recreate QueryExecutor with updated catalog so planner sees the new index
         self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
             crate::parser::ast::QueryStmt {
                 projection: vec![],
@@ -275,6 +291,9 @@ impl InMemoryDB {
         )));
 
         self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+
+        // 6. Check if checkpoint is needed
+        self.maybe_checkpoint().await?;
 
         Ok(())
     }

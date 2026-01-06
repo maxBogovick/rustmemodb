@@ -9,6 +9,8 @@ pub enum Statement {
     Query(QueryStmt),
     Delete(DeleteStmt),
     Update(UpdateStmt),
+    CreateIndex(CreateIndexStmt),
+    AlterTable(AlterTableStmt),
     Begin,
     Commit,
     Rollback,
@@ -20,6 +22,31 @@ pub struct CreateTableStmt {
     pub table_name: String,
     pub columns: Vec<ColumnDef>,
     pub if_not_exists: bool,
+}
+
+/// CREATE INDEX statement
+#[derive(Debug, Clone)]
+pub struct CreateIndexStmt {
+    pub index_name: String,
+    pub table_name: String,
+    pub column: String, // Currently only single column index supported
+    pub if_not_exists: bool,
+    pub unique: bool,
+}
+
+/// ALTER TABLE statement
+#[derive(Debug, Clone)]
+pub struct AlterTableStmt {
+    pub table_name: String,
+    pub operation: AlterTableOperation,
+}
+
+#[derive(Debug, Clone)]
+pub enum AlterTableOperation {
+    AddColumn(ColumnDef),
+    DropColumn(String),
+    RenameColumn { old_name: String, new_name: String },
+    RenameTable(String),
 }
 
 /// DROP TABLE statement

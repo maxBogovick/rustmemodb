@@ -7,6 +7,9 @@ async fn test_create_index_and_use_it() {
 
     db.execute("CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)").await.unwrap();
 
+    // Create index using SQL
+    db.execute("CREATE INDEX idx_age ON users (age)").await.unwrap();
+
     // Insert data
     db.execute("INSERT INTO users VALUES (1, 'Alice', 30)").await.unwrap();
     db.execute("INSERT INTO users VALUES (2, 'Bob', 25)").await.unwrap();
@@ -46,4 +49,56 @@ async fn test_indexing_backend() {
     // Scan non-existent value
     let rows = storage.scan_index("users", "age", &Value::Integer(99)).await.unwrap().unwrap();
     assert_eq!(rows.len(), 0);
+}
+
+#[tokio::test]
+async fn test_index_performance_comparison() {
+    use std::time::Instant;
+
+    let mut db = InMemoryDB::new();
+    db.execute("CREATE TABLE large_table (id INTEGER, val INTEGER)").await.unwrap();
+
+    // Insert 5000 rows
+    // Using a loop to generate INSERT statements might be slow for testing if not batched, 
+    // but for 5000 it should be acceptable for a functional/perf test.
+    println!("Generating data...");
+    for i in 0..5000 {
+        let val = i % 100; // Values 0-99 repeated
+        let sql = format!("INSERT INTO large_table VALUES ({}, {})", i, val);
+        db.execute(&sql).await.unwrap();
+    }
+    println!("Data generation complete.");
+
+    // Query BEFORE index
+    let start_no_index = Instant::now();
+    let result_no_index = db.execute("SELECT * FROM large_table WHERE val = 42").await.unwrap();
+    let duration_no_index = start_no_index.elapsed();
+    
+    assert!(result_no_index.row_count() > 0);
+    println!("Time without index: {:?}", duration_no_index);
+
+    // Create Index
+    println!("Creating index...");
+    let start_create_index = Instant::now();
+    db.execute("CREATE INDEX idx_val ON large_table (val)").await.unwrap();
+    println!("Index creation took: {:?}", start_create_index.elapsed());
+
+    // Query AFTER index
+    let start_with_index = Instant::now();
+    let result_with_index = db.execute("SELECT * FROM large_table WHERE val = 42").await.unwrap();
+    let duration_with_index = start_with_index.elapsed();
+    
+    assert_eq!(result_with_index.row_count(), result_no_index.row_count());
+    println!("Time with index:    {:?}", duration_with_index);
+
+    // Assert improvement
+    // Note: On very small datasets or fast machines, the overhead might mask the benefit, 
+    // but with 5000 rows and full scan vs index lookup, it should be faster.
+    // We use a soft assertion or just print.
+    if duration_with_index < duration_no_index {
+        println!("SUCCESS: Indexing improved performance by {:.2}x", 
+            duration_no_index.as_secs_f64() / duration_with_index.as_secs_f64());
+    } else {
+        println!("WARNING: Indexing did not improve performance (dataset might be too small)");
+    }
 }

@@ -57,6 +57,15 @@ impl SqlParserAdapter {
             sql_ast::Statement::CreateTable(create) => {
                 Ok(Statement::CreateTable(self.convert_create_table(create)?))
             }
+            sql_ast::Statement::CreateIndex(ci) => {
+                Ok(Statement::CreateIndex(self.convert_create_index(&ci)?))
+            }
+            sql_ast::Statement::AlterTable { name, operations, .. } => {
+                if operations.len() != 1 {
+                    return Err(DbError::UnsupportedOperation("Only single ALTER TABLE operation supported".into()));
+                }
+                Ok(Statement::AlterTable(self.convert_alter_table(name, operations.into_iter().next().unwrap())?))
+            }
             sql_ast::Statement::Drop { object_type, names, if_exists, .. } => {
                 if let sql_ast::ObjectType::Table = object_type {
                     Ok(Statement::DropTable(self.convert_drop_table(names, if_exists)?))
@@ -499,6 +508,75 @@ impl SqlParserAdapter {
                 format!("Only numeric LIMIT supported, got: {:?}", value)
             )),
         }
+    }
+
+    fn convert_create_index(
+        &self,
+        ci: &sql_ast::CreateIndex,
+    ) -> Result<CreateIndexStmt> {
+        let index_name = match &ci.name {
+            Some(n) => extract_table_name(n)?,
+            None => {
+                return Err(DbError::ParseError("Index name is required".into()));
+            }
+        };
+
+        let table_name_str = extract_table_name(&ci.table_name)?;
+
+        if ci.columns.len() != 1 {
+            return Err(DbError::UnsupportedOperation(
+                "Multi-column indexes are not supported yet".into()
+            ));
+        }
+
+        let column = match &ci.columns[0].column.expr {
+             sql_ast::Expr::Identifier(ident) => ident.value.clone(),
+             _ => return Err(DbError::UnsupportedOperation("Index column must be an identifier".into())),
+        };
+
+        Ok(CreateIndexStmt {
+            index_name,
+            table_name: table_name_str,
+            column,
+            if_not_exists: ci.if_not_exists,
+            unique: ci.unique,
+        })
+    }
+
+    fn convert_alter_table(
+        &self,
+        name: sql_ast::ObjectName,
+        operation: sql_ast::AlterTableOperation,
+    ) -> Result<AlterTableStmt> {
+        let table_name = extract_table_name(&name)?;
+        let op = match operation {
+            sql_ast::AlterTableOperation::AddColumn { column_def, .. } => {
+                let col_def = self.convert_column_def(column_def)?;
+                AlterTableOperation::AddColumn(col_def)
+            }
+            sql_ast::AlterTableOperation::DropColumn { column_names, .. } => {
+                if column_names.len() != 1 {
+                    return Err(DbError::UnsupportedOperation(
+                        "Only single column drop supported".into()
+                    ));
+                }
+                AlterTableOperation::DropColumn(column_names[0].value.clone())
+            }
+            sql_ast::AlterTableOperation::RenameColumn { old_column_name, new_column_name } => {
+                AlterTableOperation::RenameColumn {
+                    old_name: old_column_name.value,
+                    new_name: new_column_name.value,
+                }
+            }
+            _ => return Err(DbError::UnsupportedOperation(format!(
+                "Unsupported ALTER TABLE operation: {:?}", operation
+            ))),
+        };
+
+        Ok(AlterTableStmt {
+            table_name,
+            operation: op,
+        })
     }
 
     fn convert_select_item(&self, item: sql_ast::SelectItem) -> Result<SelectItem> {

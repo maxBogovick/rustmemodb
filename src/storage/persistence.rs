@@ -64,6 +64,12 @@ pub enum WalEntry {
         /// Store table for potential recovery
         table: Table,
     },
+
+    /// Create an index
+    CreateIndex {
+        table_name: String,
+        column_name: String,
+    },
 }
 
 impl WalEntry {
@@ -541,6 +547,13 @@ impl PersistenceManager {
 
                 WalEntry::DropTable { name, .. } => {
                     tables.remove(&name);
+                }
+
+                WalEntry::CreateIndex { table_name, column_name } => {
+                    if let Some(tbl) = tables.get_mut(&table_name) {
+                        // Ignore error (e.g. index already exists) during recovery
+                        let _ = tbl.create_index(&column_name);
+                    }
                 }
 
                 // Transaction markers don't modify data
