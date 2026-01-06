@@ -227,6 +227,8 @@ Runtime expression evaluation system.
 - ✅ **DDL (Data Definition Language)**
   - `CREATE TABLE` with column types and constraints
   - `DROP TABLE` with `IF EXISTS` support
+  - `CREATE INDEX` for faster lookups
+  - `ALTER TABLE` (Basic support: Add/Drop column)
 - ✅ **DML (Data Manipulation Language)**
   - `INSERT INTO` with multiple rows
   - `UPDATE` with `SET` and `WHERE` clauses
@@ -239,7 +241,7 @@ Runtime expression evaluation system.
   - `COMMIT` - Commit all changes atomically
   - `ROLLBACK` - Undo all changes in the transaction
   - Full MVCC support with snapshot isolation
-  - Auto-rollback on connection drop
+  - Manual `close()` required for safety (Warning on connection drop)
 
 #### Query Capabilities
 - ✅ **Projection** - `SELECT col1, col2` or `SELECT *`
@@ -247,6 +249,7 @@ Runtime expression evaluation system.
 - ✅ **Aggregation** - `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`
 - ✅ **Sorting** - `ORDER BY col1 ASC, col2 DESC` (multiple columns)
 - ✅ **Limiting** - `LIMIT n` for result pagination
+- ✅ **Indexing** - B-Tree backed indexes for O(log n) lookups
 - ✅ **Expressions** - Full arithmetic and logical expressions in all clauses
 
 #### Operators & Functions
@@ -275,6 +278,7 @@ Runtime expression evaluation system.
 - ✅ **Client API** - PostgreSQL/MySQL-like connection interface
 - ✅ **Connection pooling** - Efficient connection management
 - ✅ **User management** - Authentication and authorization system
+- ✅ **Persistence** - WAL-based durability and snapshots
 
 ### Performance Features
 - ✅ **Per-table locking** - Concurrent access to different tables
@@ -282,6 +286,7 @@ Runtime expression evaluation system.
 - ✅ **Stable sorting** - Predictable ORDER BY results
 - ✅ **Efficient aggregation** - Single-pass aggregate computation
 - ✅ **Global singleton** - Shared state for all connections
+- ✅ **Indexing** - High-performance data retrieval
 
 ### Performance Metrics
 ```
@@ -289,6 +294,7 @@ Sequential UPDATE:     2.9M updates/sec (5,000 rows)
 Mixed operations:      7,083 ops/sec (UPDATE + SELECT)
 Concurrent access:     Stable with 4 threads
 Aggregate functions:   Fast single-pass computation
+Index Scan:            O(log n) retrieval vs O(n) full scan
 ```
 
 ---
@@ -346,6 +352,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             age INTEGER
         )"
     )?;
+    
+    // Create an index for performance
+    db.execute("CREATE INDEX idx_age ON users (age)")?;
 
     // Insert data
     db.execute("INSERT INTO users VALUES (1, 'Alice', 30)")?;
@@ -353,7 +362,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     db.execute("INSERT INTO users VALUES (3, 'Charlie', 35)")?;
 
     // Query data
-    let result = db.execute("SELECT * FROM users WHERE age > 26")?;
+    let result = db.execute("SELECT * FROM users WHERE age > 25")?;
     result.print();
 
     Ok(())
@@ -1109,14 +1118,12 @@ For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md
 
 ### Current Limitations
 
-❌ **No persistent storage** - All data lost on shutdown
-❌ **No indexes** - All queries do full table scans
 ❌ **No JOINs** - Single table queries only
 ❌ **No GROUP BY/HAVING** - Aggregates work on full result set only
-❌ **No constraints** - No PRIMARY KEY, FOREIGN KEY, UNIQUE enforcement
+❌ **No constraints** - No PRIMARY KEY, FOREIGN KEY, UNIQUE enforcement (except via unique index)
 ❌ **No views** - No CREATE VIEW
 ❌ **Limited SQL** - Subset of SQL-92
-❌ **No query optimization** - Plans not optimized
+❌ **No query optimization** - Plans not optimized (basic index usage only)
 ❌ **Single process** - No client-server architecture
 
 ### What We Have ✅
@@ -1125,7 +1132,9 @@ For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md
 ✅ **Connection Pooling** - Efficient connection management
 ✅ **User Authentication** - Secure password hashing with bcrypt
 ✅ **Concurrent Access** - Fine-grained locking for multiple connections
-✅ **Auto-rollback** - Transactions automatically rolled back on connection drop
+✅ **Manual Rollback** - Safety via explicit `close()` or `rollback()` on drop warning
+✅ **Indexes** - B-Tree indexes for fast lookups
+✅ **Persistence** - Write-Ahead Log (WAL) and Snapshots
 
 ### Known Issues
 
@@ -1137,7 +1146,6 @@ See [CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md) for detailed issue analy
 - Silent error swallowing in sort comparisons
 
 **High:**
-- No index support causes O(n) queries
 - Catalog clones entire HashMap on schema changes
 - Transaction system exists but not integrated
 
@@ -1160,28 +1168,25 @@ See [CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md) for detailed issue analy
 - [x] Password hashing with bcrypt
 - [x] **Transaction support (BEGIN, COMMIT, ROLLBACK)**
 - [x] **MVCC with snapshot isolation**
-- [x] **Auto-rollback on connection drop**
+- [x] **Basic Indexes (CREATE INDEX)**
+- [x] **Persistence (WAL + Snapshots)**
 
 ### Phase 2: Core Features (Current)
-- [ ] Basic indexes (B-Tree for PRIMARY KEY)
 - [ ] GROUP BY and HAVING
 - [ ] Subqueries
 - [ ] Fix remaining bugs from code review
+- [ ] `ALTER TABLE` full support
 
 ### Phase 3: Advanced Features
 - [ ] INNER JOIN support
 - [ ] LEFT/RIGHT JOIN support
 - [ ] Query optimizer (predicate pushdown, join ordering)
-- [ ] Secondary indexes
+- [ ] Secondary indexes (optimization)
 - [ ] Views (CREATE VIEW)
 - [ ] Constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE)
 
-### Phase 4: Production Readiness
-- [ ] Persistent storage backend
-- [ ] Write-ahead logging (WAL)
-- [ ] MVCC (Multi-Version Concurrency Control)
+### Phase 4: Production Readiness (Future)
 - [ ] Query caching
-- [ ] Connection pooling
 - [ ] SQL-92 compliance
 
 ### Phase 5: Ecosystem
@@ -1238,7 +1243,6 @@ Looking to contribute? Try these:
 - Add more expression evaluators (string functions, date functions)
 - Improve error messages
 - Add more integration tests
-- Implement basic indexes (B-Tree)
 - Fix issues from CODE_REVIEW_REPORT.md
 
 ---

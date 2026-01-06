@@ -10,7 +10,7 @@ use crate::executor::update::UpdateExecutor;
 use crate::executor::query::QueryExecutor;
 use crate::executor::{BeginExecutor, CommitExecutor, RollbackExecutor};
 use crate::result::QueryResult;
-use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt, CreateIndexStmt, AlterTableStmt};
+use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
 use crate::transaction::TransactionManager;
 use std::sync::{Arc};
 use tokio::sync::{RwLock, Mutex};

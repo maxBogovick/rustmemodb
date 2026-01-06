@@ -269,29 +269,43 @@ impl PoolGuard {
     pub async fn rollback(&mut self) -> Result<()> {
         self.connection().rollback().await
     }
+
+    /// Explicitly close the guard and return the connection to the pool.
+    ///
+    /// This method allows for async cleanup (rollback) which is not possible in Drop.
+    pub async fn close(mut self) -> Result<()> {
+        if let Some(mut connection) = self.connection.take() {
+            // Rollback if needed
+            if connection.is_in_transaction() {
+                connection.rollback().await?;
+            }
+
+            // Return to pool
+            let mut pool = self.pool.lock().await;
+            pool.push_back(PooledConnection::new(connection));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for PoolGuard {
     fn drop(&mut self) {
-        if let Some(mut connection) = self.connection.take() {
-            let pool_clone = self.pool.clone();
+        if let Some(connection) = self.connection.take() {
+            // If we are here, close() was not called.
+            // Check if we can return it to the pool immediately (only if no transaction).
             
-            // If connection has active transaction, rollback asynchronously
             if connection.is_in_transaction() {
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
-                        let _ = connection.rollback().await;
-                        // Return to pool after rollback
-                        let mut pool = pool_clone.lock().await;
-                        pool.push_back(PooledConnection::new(connection));
-                    });
-                    return;
-                }
+                 eprintln!("Warning: PoolGuard dropped with active transaction. Connection dropped/leaked because async rollback is not possible in Drop. Use pool_guard.close().await.");
+                 // Connection is dropped here (leaked from pool perspective, but memory freed)
+                 // NOTE: We can't easily decrement total_connections here because we can't lock async mutex.
+                 return;
             }
 
-            // Return to pool immediately if no transaction or no runtime
-            if let Ok(mut pool) = pool_clone.try_lock() {
+            // Try to return to pool if we can acquire the lock immediately
+            if let Ok(mut pool) = self.pool.try_lock() {
                 pool.push_back(PooledConnection::new(connection));
+            } else {
+                 eprintln!("Warning: PoolGuard dropped and pool lock busy. Connection dropped/leaked. Use pool_guard.close().await.");
             }
         }
     }

@@ -198,18 +198,9 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         if self.state == ConnectionState::InTransaction {
-            let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
-            let db_clone = Arc::clone(&self.db);
-            
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    let txn_mgr = {
-                        let db = db_clone.read().await;
-                        Arc::clone(db.transaction_manager())
-                    };
-                    let _ = txn_mgr.rollback_database(txn_id, db_clone).await;
-                });
-            }
+            // We cannot rollback asynchronously in Drop without spawning, which is risky.
+            // Users should call close() explicitly.
+            eprintln!("Warning: Connection dropped while in transaction. Transaction may hang. Use connection.close() or commit/rollback explicitly.");
         }
         self.state = ConnectionState::Closed;
     }
@@ -286,15 +277,5 @@ mod tests {
 
         // Should fail after close
         assert!(conn.execute("SELECT 1").await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_auto_rollback_on_drop() {
-        let mut conn = create_test_connection().await;
-        conn.begin().await.unwrap();
-
-        // Drop should auto-rollback
-        drop(conn);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
