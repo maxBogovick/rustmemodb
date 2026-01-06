@@ -1,5 +1,6 @@
 use super::{Table, TableSchema};
 use crate::core::{DbError, Result, Row};
+use crate::storage::table::Snapshot;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -48,44 +49,44 @@ impl InMemoryStorage {
             .ok_or_else(|| DbError::TableNotFound(name.to_string()))
     }
 
-    /// Вставить строку - блокируется только одна таблица
-    pub async fn insert_row(&self, table_name: &str, row: Row) -> Result<()> {
+    /// Вставить строку (MVCC)
+    pub async fn insert_row(&self, table_name: &str, row: Row, snapshot: &Snapshot) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
-
         let mut table = table_handle.write().await;
-
-        table.insert(row)?;
+        table.insert(row, snapshot)?;
         Ok(())
     }
 
-    /// Сканировать таблицу - read lock только на одну таблицу
-    pub async fn scan_table(&self, table_name: &str) -> Result<Vec<Row>> {
+    /// Сканировать таблицу (MVCC Snapshot)
+    pub async fn scan_table(&self, table_name: &str, snapshot: &Snapshot) -> Result<Vec<Row>> {
         let table_handle = self.get_table(table_name)?;
-
         let table = table_handle.read().await;
-
-        Ok(table.rows_iter().map(|(_, r)| r.clone()).collect())
+        Ok(table.scan(snapshot))
     }
 
-    /// Insert a row at a specific index (for transaction rollback)
-    pub async fn insert_row_at_index(&self, table_name: &str, index: usize, row: Row) -> Result<()> {
+    /// Сканировать таблицу с ID (для Update/Delete)
+    pub async fn scan_table_with_ids(&self, table_name: &str, snapshot: &Snapshot) -> Result<Vec<(usize, Row)>> {
         let table_handle = self.get_table(table_name)?;
+        let table = table_handle.read().await;
+        Ok(table.scan_with_ids(snapshot))
+    }
 
-        let mut table = table_handle.write().await;
-
-        table.insert_at_id(index, row)
+    // Legacy/System scan
+    pub async fn scan_table_all(&self, table_name: &str) -> Result<Vec<Row>> {
+        let table_handle = self.get_table(table_name)?;
+        let table = table_handle.read().await;
+        let snapshot = Snapshot { tx_id: u64::MAX, active: std::collections::HashSet::new(), aborted: std::collections::HashSet::new(), max_tx_id: u64::MAX };
+        Ok(table.scan(&snapshot))
     }
 
     /// Получить схему таблицы
     pub async fn get_schema(&self, table_name: &str) -> Result<TableSchema> {
         let table_handle = self.get_table(table_name)?;
-
         let table = table_handle.read().await;
-
         Ok(table.schema().clone())
     }
 
-    /// Проверить существование таблицы - быстрая операция без lock'а на таблицы
+    /// Проверить существование таблицы
     pub fn table_exists(&self, name: &str) -> bool {
         self.tables.contains_key(name)
     }
@@ -95,49 +96,36 @@ impl InMemoryStorage {
         self.tables.keys().cloned().collect()
     }
 
-    /// Количество строк
+    /// Количество строк (Approximate)
     pub async fn row_count(&self, table_name: &str) -> Result<usize> {
         let table_handle = self.get_table(table_name)?;
-
         let table = table_handle.read().await;
-
         Ok(table.row_count())
     }
 
-    /// Update a row at a specific index (for transaction support)
-    pub async fn update_row_at_index(&self, table_name: &str, index: usize, new_row: Row) -> Result<()> {
+    /// Update row (MVCC)
+    pub async fn update_row(&self, table_name: &str, id: usize, new_row: Row, snapshot: &Snapshot) -> Result<bool> {
         let table_handle = self.get_table(table_name)?;
-
         let mut table = table_handle.write().await;
-
-        table.update_row(index, new_row)
+        table.update(id, new_row, snapshot)
     }
 
-    /// Delete a row at a specific index (for transaction support)
-    pub async fn delete_row_at_index(&self, table_name: &str, index: usize) -> Result<()> {
+    /// Delete row (MVCC)
+    pub async fn delete_row(&self, table_name: &str, id: usize, tx_id: u64) -> Result<bool> {
         let table_handle = self.get_table(table_name)?;
-
         let mut table = table_handle.write().await;
-
-        table.delete_rows(vec![index])?;
-        Ok(())
-    }
-
-    /// Get all rows from a table (for transaction snapshotting)
-    pub async fn get_all_rows(&self, table_name: &str) -> Result<Vec<Row>> {
-        self.scan_table(table_name).await
+        table.delete(id, tx_id)
     }
 
     /// Create an index on a column
     pub async fn create_index(&self, table_name: &str, column_name: &str) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
-        
         table.create_index(column_name)
     }
 
-    /// Scan a table using an index (exact match)
-    pub async fn scan_index(&self, table_name: &str, column_name: &str, value: &crate::core::Value) -> Result<Option<Vec<Row>>> {
+    /// Scan a table using an index (MVCC)
+    pub async fn scan_index(&self, table_name: &str, column_name: &str, value: &crate::core::Value, snapshot: &Snapshot) -> Result<Option<Vec<Row>>> {
         let table_handle = self.get_table(table_name)?;
         let table = table_handle.read().await;
 
@@ -145,8 +133,8 @@ impl InMemoryStorage {
             if let Some(ids) = index.get(value) {
                 let mut rows = Vec::with_capacity(ids.len());
                 for id in ids {
-                    if let Some(row) = table.get_row(*id) {
-                        rows.push(row.clone());
+                    if let Some(row) = table.get_visible_row(*id, snapshot) {
+                        rows.push(row);
                     }
                 }
                 return Ok(Some(rows));
@@ -164,7 +152,6 @@ impl InMemoryStorage {
 
         for (name, table_handle) in &self.tables {
             let table = table_handle.read().await;
-
             tables.insert(name.clone(), table.clone());
         }
 

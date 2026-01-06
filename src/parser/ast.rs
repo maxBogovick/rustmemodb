@@ -62,6 +62,8 @@ pub struct ColumnDef {
     pub data_type: DataType,
     pub nullable: bool,
     pub default: Option<Value>,
+    pub primary_key: bool,
+    pub unique: bool,
 }
 
 /// INSERT statement

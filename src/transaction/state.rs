@@ -20,7 +20,7 @@ static NEXT_TXN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Unique identifier for a transaction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TransactionId(u64);
+pub struct TransactionId(pub u64);
 
 impl TransactionId {
     /// Generate a new unique transaction ID

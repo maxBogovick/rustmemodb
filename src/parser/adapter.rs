@@ -214,16 +214,30 @@ impl SqlParserAdapter {
 
     fn convert_column_def(&self, col: sql_ast::ColumnDef) -> Result<ColumnDef> {
         let data_type = self.convert_data_type(&col.data_type)?;
-        let nullable = !col
-            .options
-            .iter()
-            .any(|opt| matches!(opt.option, sql_ast::ColumnOption::NotNull));
+        let mut nullable = true;
+        let mut primary_key = false;
+        let mut unique = false;
+
+        for opt in &col.options {
+            match opt.option {
+                sql_ast::ColumnOption::NotNull => nullable = false,
+                sql_ast::ColumnOption::Unique { is_primary: true, .. } => {
+                    primary_key = true;
+                    nullable = false;
+                    unique = true;
+                }
+                sql_ast::ColumnOption::Unique { is_primary: false, .. } => unique = true,
+                _ => {}
+            }
+        }
 
         Ok(ColumnDef {
             name: col.name.value,
             data_type,
             nullable,
             default: None,
+            primary_key,
+            unique,
         })
     }
 

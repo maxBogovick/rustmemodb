@@ -229,6 +229,9 @@ Runtime expression evaluation system.
   - `DROP TABLE` with `IF EXISTS` support
   - `CREATE INDEX` for faster lookups
   - `ALTER TABLE` (Basic support: Add/Drop column)
+- ✅ **Constraints**
+  - `PRIMARY KEY` (enforces uniqueness and NOT NULL)
+  - `UNIQUE` (enforces uniqueness, allows multiple NULLs)
 - ✅ **DML (Data Manipulation Language)**
   - `INSERT INTO` with multiple rows
   - `UPDATE` with `SET` and `WHERE` clauses
@@ -1120,7 +1123,7 @@ For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md
 
 ❌ **No JOINs** - Single table queries only
 ❌ **No GROUP BY/HAVING** - Aggregates work on full result set only
-❌ **No constraints** - No PRIMARY KEY, FOREIGN KEY, UNIQUE enforcement (except via unique index)
+❌ **No FOREIGN KEY constraints** - Referential integrity not enforced
 ❌ **No views** - No CREATE VIEW
 ❌ **Limited SQL** - Subset of SQL-92
 ❌ **No query optimization** - Plans not optimized (basic index usage only)

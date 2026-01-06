@@ -218,13 +218,13 @@ impl QueryExecutor {
     ) -> Result<Vec<Row>> {
         if let Some(ref idx) = scan.index_scan {
             // Try to use index
-            if let Some(rows) = ctx.storage.scan_index(&scan.table_name, &idx.column, &idx.value).await? {
+            if let Some(rows) = ctx.storage.scan_index(&scan.table_name, &idx.column, &idx.value, &ctx.snapshot).await? {
                 return Ok(rows);
             }
             // If index scan returned None (e.g. index dropped concurrently?), fallback to full scan
         }
         
-        ctx.storage.scan_table(&scan.table_name).await
+        ctx.storage.scan_table(&scan.table_name, &ctx.snapshot).await
     }
 
     /// Execute filter operation
@@ -701,6 +701,8 @@ mod tests {
     use crate::planner::logical_plan::{FilterNode, TableScanNode, ProjectionNode, LimitNode, SortNode};
 
     async fn setup_test_storage() -> (InMemoryStorage, Catalog) {
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
         let mut storage = InMemoryStorage::new();
         let mut catalog = Catalog::new();
 
@@ -720,25 +722,25 @@ mod tests {
             Value::Integer(1),
             Value::Text("Alice".into()),
             Value::Integer(30),
-        ]).await.unwrap();
+        ], &snapshot).await.unwrap();
 
         storage.insert_row("users", vec![
             Value::Integer(2),
             Value::Text("Bob".into()),
             Value::Integer(25),
-        ]).await.unwrap();
+        ], &snapshot).await.unwrap();
 
         storage.insert_row("users", vec![
             Value::Integer(3),
             Value::Text("Charlie".into()),
             Value::Integer(35),
-        ]).await.unwrap();
+        ], &snapshot).await.unwrap();
 
         storage.insert_row("users", vec![
             Value::Integer(4),
             Value::Text("Diana".into()),
             Value::Integer(25),
-        ]).await.unwrap();
+        ], &snapshot).await.unwrap();
 
         (storage, catalog)
     }
@@ -756,7 +758,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         let plan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
@@ -774,7 +777,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
@@ -802,7 +806,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
@@ -827,7 +832,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),
@@ -855,7 +861,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users ORDER BY age ASC
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -888,7 +895,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users ORDER BY age DESC
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -921,7 +929,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users ORDER BY age ASC, name ASC
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -960,7 +969,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users WHERE age > 24 ORDER BY name DESC
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1004,7 +1014,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users ORDER BY age DESC LIMIT 2
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1052,16 +1063,20 @@ mod tests {
 
         storage.create_table(schema.clone()).await.unwrap();
         catalog = catalog.with_table(schema).unwrap();
-
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
         // Insert data with NULLs
-        storage.insert_row("test", vec![Value::Integer(1), Value::Integer(10)]).await.unwrap();
-        storage.insert_row("test", vec![Value::Integer(2), Value::Null]).await.unwrap();
-        storage.insert_row("test", vec![Value::Integer(3), Value::Integer(5)]).await.unwrap();
-        storage.insert_row("test", vec![Value::Integer(4), Value::Null]).await.unwrap();
+        storage.insert_row("test", vec![Value::Integer(1), Value::Integer(10)], &snapshot).await.unwrap();
+        storage.insert_row("test", vec![Value::Integer(2), Value::Null], &snapshot).await.unwrap();
+        storage.insert_row("test", vec![Value::Integer(3), Value::Integer(5)], &snapshot).await.unwrap();
+        storage.insert_row("test", vec![Value::Integer(4), Value::Null], &snapshot).await.unwrap();
 
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM test ORDER BY value ASC
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1094,7 +1109,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users ORDER BY age * -1 ASC (equivalent to ORDER BY age DESC)
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1131,7 +1147,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT name FROM users WHERE age > 26 LIMIT 1
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1173,7 +1190,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users WHERE name LIKE 'A%'
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1203,7 +1221,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users WHERE age BETWEEN 25 AND 30
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1232,6 +1251,8 @@ mod tests {
     async fn test_is_null_evaluation() {
         let mut storage = InMemoryStorage::new();
         let mut catalog = Catalog::new();
+        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
 
         // Create table with nullable column
         let columns = vec![
@@ -1248,16 +1269,17 @@ mod tests {
         storage.insert_row("test", vec![
             Value::Integer(1),
             Value::Text("Alice".into()),
-        ]).await.unwrap();
+        ],  &snapshot).await.unwrap();
 
         storage.insert_row("test", vec![
             Value::Integer(2),
             Value::Null,
-        ]).await.unwrap();
+        ],  &snapshot).await.unwrap();
 
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM test WHERE name IS NULL
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1285,7 +1307,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // SELECT * FROM users WHERE age > 26 AND age < 32
         let scan = LogicalPlan::TableScan(TableScanNode {
@@ -1322,7 +1345,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         // Test wildcard
         let scan = TableScanNode {
@@ -1341,7 +1365,8 @@ mod tests {
         let (storage, catalog) = setup_test_storage().await;
         let executor = QueryExecutor::new(catalog);
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         let scan = LogicalPlan::TableScan(TableScanNode {
             table_name: "users".to_string(),

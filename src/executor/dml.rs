@@ -3,7 +3,6 @@ use crate::core::{Column, DbError, Result, Row, Value};
 use crate::parser::ast::{Expr, InsertStmt, Statement};
 use crate::result::QueryResult;
 use crate::storage::WalEntry;
-use crate::transaction::Change;
 
 use async_trait::async_trait;
 
@@ -39,9 +38,9 @@ impl InsertExecutor {
             .map(|row_exprs| self.evaluate_row(row_exprs, schema.schema().columns()))
             .collect::<Result<Vec<_>>>()?;
 
-        // Insert rows into storage (both in transaction and auto-commit mode)
+        // Insert rows into storage (MVCC write)
         for row in rows {
-            ctx.storage.insert_row(&insert.table_name, row.clone()).await?;
+            ctx.storage.insert_row(&insert.table_name, row.clone(), &ctx.snapshot).await?;
 
             // Log to WAL if persistence is enabled
             if let Some(ref persistence) = ctx.persistence {
@@ -50,15 +49,6 @@ impl InsertExecutor {
                     table: insert.table_name.clone(),
                     row: row.clone(),
                 })?;
-            }
-
-            // If in transaction, record change for potential rollback
-            if let Some(txn_id) = ctx.transaction_id {
-                let change = Change::InsertRow {
-                    table: insert.table_name.clone(),
-                    row,
-                };
-                ctx.transaction_manager.record_change(txn_id, change).await?;
             }
         }
 

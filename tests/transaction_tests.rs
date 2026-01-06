@@ -61,7 +61,8 @@ async fn test_transaction_auto_rollback_on_drop() {
         conn.begin().await.unwrap();
         conn.execute("INSERT INTO test_auto_rollback VALUES (1)").await.unwrap();
 
-        // Connection dropped here without commit - should auto-rollback
+        // Explicitly close connection to trigger rollback (async drop is not supported)
+        conn.close().await.unwrap();
     }
 
     // Verify data was rolled back
@@ -136,7 +137,6 @@ async fn test_transaction_nested_not_supported() {
 }
 
 #[tokio::test]
-#[ignore] // Isolation not yet fully implemented in storage layer
 async fn test_transaction_isolation_between_connections() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 

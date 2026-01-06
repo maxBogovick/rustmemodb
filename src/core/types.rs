@@ -8,6 +8,8 @@ pub struct Column {
     pub name: String,
     pub data_type: DataType,
     pub nullable: bool,
+    pub primary_key: bool,
+    pub unique: bool,
 }
 
 impl Column {
@@ -16,11 +18,25 @@ impl Column {
             name: name.into(),
             data_type,
             nullable: true,
+            primary_key: false,
+            unique: false,
         }
     }
 
     pub fn not_null(mut self) -> Self {
         self.nullable = false;
+        self
+    }
+
+    pub fn primary_key(mut self) -> Self {
+        self.primary_key = true;
+        self.nullable = false; // Primary keys imply NOT NULL
+        self.unique = true;    // Primary keys imply UNIQUE
+        self
+    }
+
+    pub fn unique(mut self) -> Self {
+        self.unique = true;
         self
     }
 

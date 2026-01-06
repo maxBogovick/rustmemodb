@@ -4,7 +4,6 @@ use crate::parser::ast::{DeleteStmt, Statement};
 use crate::result::QueryResult;
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
 use crate::storage::WalEntry;
-use crate::transaction::Change;
 
 use async_trait::async_trait;
 
@@ -41,19 +40,15 @@ impl Executor for DeleteExecutor {
 
 impl DeleteExecutor {
     async fn execute_delete(&self, delete: &DeleteStmt, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
-        let table_handle = ctx.storage.get_table(&delete.table_name)?;
         let schema = ctx.storage.get_schema(&delete.table_name).await?;
 
-        // Get all rows
-        let rows: Vec<(usize, crate::core::Row)> = {
-            let table = table_handle.read().await;
-            table.rows_iter().map(|(id, row)| (*id, row.clone())).collect()
-        };
+        // Get visible rows with IDs (MVCC scan)
+        let rows = ctx.storage.scan_table_with_ids(&delete.table_name, &ctx.snapshot).await?;
 
         // Create evaluation context
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
 
-        // Find rows to delete (id and old row data)
+        // Find rows to delete
         let mut rows_to_delete = Vec::new();
         for (id, row) in rows {
             let should_delete = if let Some(ref condition) = delete.selection {
@@ -64,7 +59,7 @@ impl DeleteExecutor {
                     Err(_) => false,
                 }
             } else {
-                true // Delete all rows if no condition
+                true 
             };
 
             if should_delete {
@@ -74,34 +69,27 @@ impl DeleteExecutor {
 
         let deleted_count = rows_to_delete.len();
 
-        // Delete rows from storage (both in transaction and auto-commit mode)
-        {
-            let indices_to_delete: Vec<usize> = rows_to_delete.iter().map(|(idx, _)| *idx).collect();
-            let deleted_rows: Vec<_> = rows_to_delete.iter().map(|(_, row)| row.clone()).collect();
+        // Delete rows from storage (MVCC delete)
+        let mut deleted_indices = Vec::new();
+        let mut deleted_rows_data = Vec::new();
 
-            let mut table = table_handle.write().await;
-            table.delete_rows(indices_to_delete.clone())?;
+        for (idx, row) in &rows_to_delete {
+            let success = ctx.storage.delete_row(&delete.table_name, *idx, ctx.snapshot.tx_id).await?;
+            if success {
+                deleted_indices.push(*idx);
+                deleted_rows_data.push(row.clone());
+            }
+        }
 
-            // Log to WAL if persistence is enabled
+        // Log to WAL if persistence is enabled
+        if !deleted_indices.is_empty() {
             if let Some(ref persistence) = ctx.persistence {
                 let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::Delete {
                     table: delete.table_name.clone(),
-                    row_indices: indices_to_delete,
-                    deleted_rows,
+                    row_indices: deleted_indices,
+                    deleted_rows: deleted_rows_data,
                 })?;
-            }
-
-            // If in transaction, record changes for potential rollback
-            if let Some(txn_id) = ctx.transaction_id {
-                for (row_index, old_row) in rows_to_delete {
-                    let change = Change::DeleteRow {
-                        table: delete.table_name.clone(),
-                        row_index,
-                        old_row,
-                    };
-                    ctx.transaction_manager.record_change(txn_id, change).await?;
-                }
             }
         }
 

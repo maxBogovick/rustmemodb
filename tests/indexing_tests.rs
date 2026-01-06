@@ -1,5 +1,7 @@
 use rustmemodb::InMemoryDB;
 use rustmemodb::core::Value;
+use rustmemodb::storage::table::Snapshot;
+use std::collections::HashSet;
 
 #[tokio::test]
 async fn test_create_index_and_use_it() {
@@ -36,18 +38,25 @@ async fn test_indexing_backend() {
     
     storage.create_index("users", "age").await.unwrap();
     
-    storage.insert_row("users", vec![Value::Integer(1), Value::Integer(30)]).await.unwrap();
-    storage.insert_row("users", vec![Value::Integer(2), Value::Integer(25)]).await.unwrap();
-    storage.insert_row("users", vec![Value::Integer(3), Value::Integer(25)]).await.unwrap();
+    let snapshot = Snapshot {
+        tx_id: 0,
+        active: HashSet::new(),
+        aborted: HashSet::new(),
+        max_tx_id: u64::MAX,
+    };
+
+    storage.insert_row("users", vec![Value::Integer(1), Value::Integer(30)], &snapshot).await.unwrap();
+    storage.insert_row("users", vec![Value::Integer(2), Value::Integer(25)], &snapshot).await.unwrap();
+    storage.insert_row("users", vec![Value::Integer(3), Value::Integer(25)], &snapshot).await.unwrap();
     
     // Scan index
-    let rows = storage.scan_index("users", "age", &Value::Integer(25)).await.unwrap().unwrap();
+    let rows = storage.scan_index("users", "age", &Value::Integer(25), &snapshot).await.unwrap().unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0][0], Value::Integer(2));
     assert_eq!(rows[1][0], Value::Integer(3));
     
     // Scan non-existent value
-    let rows = storage.scan_index("users", "age", &Value::Integer(99)).await.unwrap().unwrap();
+    let rows = storage.scan_index("users", "age", &Value::Integer(99), &snapshot).await.unwrap().unwrap();
     assert_eq!(rows.len(), 0);
 }
 
@@ -59,8 +68,6 @@ async fn test_index_performance_comparison() {
     db.execute("CREATE TABLE large_table (id INTEGER, val INTEGER)").await.unwrap();
 
     // Insert 5000 rows
-    // Using a loop to generate INSERT statements might be slow for testing if not batched, 
-    // but for 5000 it should be acceptable for a functional/perf test.
     println!("Generating data...");
     for i in 0..5000 {
         let val = i % 100; // Values 0-99 repeated
@@ -91,10 +98,6 @@ async fn test_index_performance_comparison() {
     assert_eq!(result_with_index.row_count(), result_no_index.row_count());
     println!("Time with index:    {:?}", duration_with_index);
 
-    // Assert improvement
-    // Note: On very small datasets or fast machines, the overhead might mask the benefit, 
-    // but with 5000 rows and full scan vs index lookup, it should be faster.
-    // We use a soft assertion or just print.
     if duration_with_index < duration_no_index {
         println!("SUCCESS: Indexing improved performance by {:.2}x", 
             duration_no_index.as_secs_f64() / duration_with_index.as_secs_f64());

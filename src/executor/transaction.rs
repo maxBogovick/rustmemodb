@@ -162,8 +162,9 @@ mod tests {
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
         let txn_id = txn_mgr.begin().await.unwrap();
+        let snapshot = txn_mgr.get_snapshot(txn_id).await.unwrap();
 
-        let ctx = ExecutionContext::with_transaction(&storage, &txn_mgr, txn_id, None);
+        let ctx = ExecutionContext::with_transaction(&storage, &txn_mgr, txn_id, None, snapshot);
 
         let result = executor.execute(&Statement::Begin, &ctx).await;
         assert!(result.is_err());
@@ -175,8 +176,9 @@ mod tests {
         let executor = CommitExecutor;
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
 
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         let result = executor.execute(&Statement::Commit, &ctx).await;
         assert!(result.is_err());
@@ -188,8 +190,9 @@ mod tests {
         let executor = RollbackExecutor;
         let storage = InMemoryStorage::new();
         let txn_mgr = Arc::new(TransactionManager::new());
+        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
 
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None);
+        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
 
         let result = executor.execute(&Statement::Rollback, &ctx).await;
         assert!(result.is_ok());
