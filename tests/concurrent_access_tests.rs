@@ -99,7 +99,7 @@ async fn test_concurrent_read_write_mix() {
 
             for _ in 0..30 {
                 let result = client_clone.query("SELECT * FROM concurrent_mix WHERE value > 100").await.unwrap();
-                assert!(result.row_count() >= 0, "Reader {} failed", task_id);
+                assert!(!result.columns().is_empty(), "Reader {} failed", task_id);
             }
         });
 

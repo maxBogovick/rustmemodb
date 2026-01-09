@@ -20,6 +20,7 @@ pub trait SchemaInferenceStrategy: Send + Sync {
 
 /// Infers schema from the first document only (fast but less accurate)
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct FirstDocumentStrategy;
 
 impl SchemaInferenceStrategy for FirstDocumentStrategy {

@@ -66,8 +66,8 @@ impl Table {
         self.validate_row(&new_row)?;
         self.check_uniqueness(&new_row, Some(id), snapshot)?;
         
-        let mut row_to_index_delete = None;
-        let mut row_to_index_add = None;
+        let row_to_index_delete;
+        let row_to_index_add;
 
         if let Some(versions) = self.rows.get_mut(&id) {
             if let Some(latest) = versions.last_mut() {

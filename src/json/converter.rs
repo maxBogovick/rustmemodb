@@ -151,6 +151,7 @@ impl InsertStatementBuilder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn add_row(mut self, row: Vec<Value>) -> Self {
         self.values.push(row);
         self
@@ -162,6 +163,7 @@ impl InsertStatementBuilder {
     }
 
     /// Build a single INSERT statement (for small batches)
+    #[allow(dead_code)]
     pub fn build_single(self) -> String {
         if self.values.is_empty() {
             return String::new();
@@ -246,6 +248,7 @@ impl UpdateStatementBuilder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn set_multiple(mut self, updates: Vec<(String, Value)>) -> Self {
         self.set_clause.extend(updates);
         self

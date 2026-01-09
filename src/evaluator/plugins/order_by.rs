@@ -10,6 +10,7 @@ use async_trait::async_trait;
 
 /// Trait для сортировщиков (plugin interface)
 #[async_trait]
+#[allow(dead_code)]
 pub trait RowSorter: Send + Sync {
     fn name(&self) -> &'static str;
 
@@ -27,14 +28,17 @@ pub trait RowSorter: Send + Sync {
 // ORDER BY SORTER - Основная реализация
 // ============================================================================
 
+#[allow(dead_code)]
 pub struct OrderBySorter;
 
 impl OrderBySorter {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self
     }
 
     /// Сравнить два значения с учётом NULL (NULL LAST по умолчанию)
+    #[allow(dead_code)]
     fn compare_values(&self, a: &Value, b: &Value) -> Ordering {
         match (a, b) {
             // NULL handling: NULL считается "больше" всех значений (NULL LAST)
@@ -142,6 +146,7 @@ impl RowSorter for OrderBySorter {
 
 /// Политика обработки NULL при сортировке
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum NullOrdering {
     NullsFirst,
     NullsLast,
@@ -149,6 +154,7 @@ pub enum NullOrdering {
 
 /// Расширенное выражение ORDER BY с поддержкой NULLS FIRST/LAST
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ExtendedOrderByExpr {
     pub expr: Expr,
     pub descending: bool,
@@ -170,8 +176,10 @@ impl From<OrderByExpr> for ExtendedOrderByExpr {
     }
 }
 
+#[allow(dead_code)]
 pub struct ExtendedOrderBySorter;
 
+#[allow(dead_code)]
 impl ExtendedOrderBySorter {
     pub fn new() -> Self {
         Self
@@ -280,8 +288,10 @@ impl Default for ExtendedOrderBySorter {
 // ============================================================================
 
 /// Компаратор значений для переиспользования в других модулях
+#[allow(dead_code)]
 pub struct ValueComparator;
 
+#[allow(dead_code)]
 impl ValueComparator {
     /// Сравнить два Value, возвращая Ordering
     pub fn compare(a: &Value, b: &Value) -> Ordering {

@@ -46,11 +46,6 @@ impl User {
         &self.username
     }
 
-    /// Returns the password hash (internal use only)
-    pub(crate) fn password_hash(&self) -> &str {
-        &self.password_hash
-    }
-
     /// Returns the user's permission list
     pub fn permissions(&self) -> &[Permission] {
         &self.permissions

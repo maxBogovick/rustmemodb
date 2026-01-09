@@ -4,10 +4,12 @@ use crate::core::Result;
 use super::{ExecutionContext, Executor};
 
 /// Registry для автоматической регистрации executors
+#[allow(dead_code)]
 pub struct ExecutorRegistry {
     executors: Vec<Box<dyn Executor>>,
 }
 
+#[allow(dead_code)]
 impl ExecutorRegistry {
     pub fn new() -> Self {
         Self {

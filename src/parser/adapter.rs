@@ -23,6 +23,7 @@ impl SqlParserAdapter {
     }
 
     /// Создать адаптер с кастомными плагинами
+    #[allow(dead_code)]
     pub fn with_expression_converter(expr_converter: ExpressionConverter) -> Self {
         Self {
             dialect: PostgreSqlDialect {},

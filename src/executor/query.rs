@@ -36,6 +36,7 @@ impl QueryExecutor {
     }
 
     /// Create executor with custom evaluators
+    #[allow(dead_code)]
     pub fn with_evaluators(catalog: Catalog, evaluator_registry: EvaluatorRegistry) -> Self {
         Self {
             planner: QueryPlanner::new(),
@@ -45,6 +46,7 @@ impl QueryExecutor {
     }
 
     /// Update catalog (called during DDL operations)
+    #[allow(dead_code)]
     pub fn update_catalog(&mut self, new_catalog: Catalog) {
         self.catalog = new_catalog;
     }
@@ -1063,8 +1065,6 @@ mod tests {
 
         storage.create_table(schema.clone()).await.unwrap();
         catalog = catalog.with_table(schema).unwrap();
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
         let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
         let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
         // Insert data with NULLs

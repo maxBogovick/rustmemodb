@@ -6,6 +6,7 @@ use tokio::sync::Mutex;
 
 pub struct ExecutionContext<'a> {
     pub storage: &'a InMemoryStorage,
+    #[allow(dead_code)]
     pub transaction_manager: &'a Arc<TransactionManager>,
     pub transaction_id: Option<TransactionId>,
     pub persistence: Option<&'a Arc<Mutex<PersistenceManager>>>,
@@ -48,6 +49,7 @@ impl<'a> ExecutionContext<'a> {
         self.transaction_id.is_some()
     }
 
+    #[allow(dead_code)]
     pub fn get_transaction_id(&self) -> Option<TransactionId> {
         self.transaction_id
     }

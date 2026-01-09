@@ -88,6 +88,7 @@ impl ExpressionConverter {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_custom_plugins(registry: ExpressionPluginRegistry) -> Self {
         Self { registry }
     }

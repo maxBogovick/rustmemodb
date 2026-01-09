@@ -29,6 +29,7 @@ pub enum LogicalPlan {
 #[derive(Debug, Clone)]
 pub struct TableScanNode {
     pub table_name: String,
+    #[allow(dead_code)]
     pub projected_columns: Option<Vec<String>>, // None = all columns
     pub index_scan: Option<IndexScanInfo>,
     pub schema: Schema,
@@ -38,6 +39,7 @@ pub struct TableScanNode {
 pub struct IndexScanInfo {
     pub column: String,
     pub value: Value,
+    #[allow(dead_code)]
     pub op: IndexOp,
 }
 
@@ -70,6 +72,7 @@ pub struct SortNode {
 
 impl SortNode {
     /// Создать из tuple формата (для обратной совместимости)
+    #[allow(dead_code)]
     pub fn from_tuples(input: Box<LogicalPlan>, sort_keys: Vec<(Expr, bool)>) -> Self {
         let schema = input.schema().clone();
         Self {
@@ -83,6 +86,7 @@ impl SortNode {
     }
 
     /// Получить как tuples (для обратной совместимости)
+    #[allow(dead_code)]
     pub fn as_tuples(&self) -> Vec<(&Expr, bool)> {
         self.order_by
             .iter()
@@ -139,6 +143,7 @@ impl LogicalPlan {
         }
     
         /// Get child plans
+        #[allow(dead_code)]
         pub fn children(&self) -> Vec<&LogicalPlan> {
             match self {
                 LogicalPlan::TableScan(_) => vec![],

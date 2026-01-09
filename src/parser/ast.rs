@@ -2,6 +2,7 @@ use crate::core::{Value, DataType};
 
 /// Root statement type
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Statement {
     CreateTable(CreateTableStmt),
     DropTable(DropTableStmt),
@@ -18,6 +19,7 @@ pub enum Statement {
 
 /// CREATE TABLE statement
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CreateTableStmt {
     pub table_name: String,
     pub columns: Vec<ColumnDef>,
@@ -26,6 +28,7 @@ pub struct CreateTableStmt {
 
 /// CREATE INDEX statement
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CreateIndexStmt {
     pub index_name: String,
     pub table_name: String,
@@ -36,12 +39,14 @@ pub struct CreateIndexStmt {
 
 /// ALTER TABLE statement
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AlterTableStmt {
     pub table_name: String,
     pub operation: AlterTableOperation,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum AlterTableOperation {
     AddColumn(ColumnDef),
     DropColumn(String),
@@ -57,6 +62,7 @@ pub struct DropTableStmt {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ColumnDef {
     pub name: String,
     pub data_type: DataType,
@@ -68,6 +74,7 @@ pub struct ColumnDef {
 
 /// INSERT statement
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct InsertStmt {
     pub table_name: String,
     pub columns: Option<Vec<String>>, // None = all columns
@@ -153,6 +160,7 @@ pub struct Assignment {
 
 /// Expression types
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum Expr {
     /// Column reference
     Column(String),
@@ -241,6 +249,7 @@ pub enum BinaryOp {
 
 /// Unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum UnaryOp {
     Not,
     Minus,

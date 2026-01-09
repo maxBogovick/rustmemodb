@@ -9,6 +9,7 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait Executor: Send + Sync {
     /// Имя executor'а для отладки
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
 
     fn can_handle(&self, stmt: &Statement) -> bool;
@@ -43,6 +44,7 @@ impl ExecutorPipeline {
     }
 
     /// Обновить catalog во всех executors (для DDL операций)
+    #[allow(dead_code)]
     pub fn update_catalog(&mut self, _new_catalog: Catalog) {
         for _executor in &mut self.executors {
             // Downcast к QueryExecutor и обновить catalog

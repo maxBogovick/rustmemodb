@@ -259,8 +259,6 @@ async fn test_connection_pool_with_auth() {
 
 #[tokio::test]
 async fn test_multiple_users_concurrent_access() {
-    use std::sync::Arc;
-
     let admin_client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = admin_client.auth_manager();
 

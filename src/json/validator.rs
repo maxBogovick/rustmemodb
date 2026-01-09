@@ -136,6 +136,7 @@ impl QueryValidator {
     }
 
     /// Create validator with custom rules
+    #[allow(dead_code)]
     pub fn with_rules(rules: Vec<Box<dyn ValidationRule>>) -> Self {
         Self {
             rules,

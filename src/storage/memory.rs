@@ -8,15 +8,12 @@ use tokio::sync::RwLock;
 pub struct InMemoryStorage {
     /// Таблицы с индивидуальными блокировками
     tables: HashMap<String, Arc<RwLock<Table>>>,
-    /// Только метаданные (имена таблиц) под общим lock'ом - операции быстрые
-    metadata_lock: RwLock<()>,
 }
 
 impl InMemoryStorage {
     pub fn new() -> Self {
         Self {
             tables: HashMap::new(),
-            metadata_lock: RwLock::new(()),
         }
     }
 
