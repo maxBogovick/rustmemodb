@@ -53,7 +53,7 @@ impl Connection {
 
     /// Get authenticated username
     pub fn username(&self) -> &str {
-        &self.user.username()
+        self.user.username()
     }
 
     /// Execute a SQL query

@@ -65,7 +65,7 @@ impl ConnectionPool {
     /// Create a new connection pool
     pub async fn new(config: ConnectionConfig) -> Result<Self> {
         config.validate()
-            .map_err(|e| DbError::ExecutionError(e))?;
+            .map_err(DbError::ExecutionError)?;
 
         let db = Arc::clone(InMemoryDB::global());
         let available = Arc::new(Mutex::new(VecDeque::new()));

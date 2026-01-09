@@ -43,7 +43,7 @@ impl InsertExecutor {
             ctx.storage.insert_row(&insert.table_name, row.clone(), &ctx.snapshot).await?;
 
             // Log to WAL if persistence is enabled
-            if let Some(ref persistence) = ctx.persistence {
+            if let Some(persistence) = ctx.persistence {
                 let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::Insert {
                     table: insert.table_name.clone(),

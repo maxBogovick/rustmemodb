@@ -187,15 +187,14 @@ impl InMemoryDB {
             None
         };
 
-        if let Some(ref persistence) = self.persistence {
-            if let Some(table) = table {
+        if let Some(ref persistence) = self.persistence
+            && let Some(table) = table {
                 let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::DropTable {
                     name: drop.table_name.clone(),
                     table,
                 })?;
             }
-        }
 
         self.storage.drop_table(&drop.table_name).await?;
         self.catalog = self.catalog.clone().without_table(&drop.table_name)?;

@@ -70,17 +70,14 @@ impl DatabaseSnapshot {
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum DurabilityMode {
     Sync,
+    #[default]
     Async,
     None,
 }
 
-impl Default for DurabilityMode {
-    fn default() -> Self {
-        Self::Async
-    }
-}
 
 // ============================================================================
 // WAL Manager

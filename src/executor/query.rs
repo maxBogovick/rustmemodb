@@ -98,7 +98,7 @@ impl QueryExecutor {
                 for expr in &aggr.group_exprs {
                     key.push(eval_ctx.evaluate(expr, &row, input_schema).await?);
                 }
-                groups.entry(key).or_insert_with(Vec::new).push(row);
+                groups.entry(key).or_default().push(row);
             }
         }
 

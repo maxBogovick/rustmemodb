@@ -297,7 +297,7 @@ impl JsonStorageAdapter {
         let schema = {
             let db = self.db.read().await;
             db.table_exists(collection_name)
-                .then(|| ())
+                .then_some(())
                 .ok_or_else(|| JsonError::ValidationError(
                     format!("Collection '{}' does not exist", collection_name)
                 ))?;

@@ -101,7 +101,7 @@ impl UpdateExecutor {
             
             if success {
                 // Log to WAL
-                if let Some(ref persistence) = ctx.persistence {
+                if let Some(persistence) = ctx.persistence {
                     let mut persistence_guard = persistence.lock().await;
                     persistence_guard.log(&WalEntry::Update {
                         table: update.table_name.clone(),

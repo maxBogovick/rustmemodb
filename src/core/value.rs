@@ -20,11 +20,10 @@ impl Value {
         // Быстрая проверка на integer (без точки и экспоненты)
         let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
 
-        if !has_dot_or_exp {
-            if let Ok(i) = s.parse::<i64>() {
+        if !has_dot_or_exp
+            && let Ok(i) = s.parse::<i64>() {
                 return Ok(Value::Integer(i));
             }
-        }
 
         // Float
         if let Ok(f) = s.parse::<f64>() {

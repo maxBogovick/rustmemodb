@@ -51,15 +51,14 @@ impl Table {
     }
 
     pub fn delete(&mut self, id: usize, tx_id: u64) -> Result<bool> {
-        if let Some(versions) = self.rows.get_mut(&id) {
-            if let Some(latest) = versions.last_mut() {
+        if let Some(versions) = self.rows.get_mut(&id)
+            && let Some(latest) = versions.last_mut() {
                 if latest.xmax.is_some() {
                     return Ok(false);
                 }
                 latest.xmax = Some(tx_id);
                 return Ok(true);
             }
-        }
         Ok(false)
     }
 
@@ -159,9 +158,8 @@ impl Table {
                 if let Some(index) = self.indexes.get(&column.name) {
                     if let Some(ids) = index.get(value) {
                         for id in ids {
-                            if let Some(ign) = ignore_id {
-                                if *id == ign { continue; }
-                            }
+                            if let Some(ign) = ignore_id
+                                && *id == ign { continue; }
                             
                             // Check version chain for this ID
                             if let Some(versions) = self.rows.get(id) {
@@ -180,9 +178,8 @@ impl Table {
                 } else {
                     // Full Scan
                     for (id, versions) in &self.rows {
-                        if let Some(ign) = ignore_id {
-                            if *id == ign { continue; }
-                        }
+                        if let Some(ign) = ignore_id
+                            && *id == ign { continue; }
                         
                         // Check if any version matches value AND is live
                         for version in versions.iter().rev() {
@@ -229,11 +226,10 @@ impl Table {
 
     fn is_visible(&self, row: &MvccRow, snapshot: &Snapshot) -> bool {
         if row.xmin == snapshot.tx_id {
-            if let Some(xmax) = row.xmax {
-                if xmax == snapshot.tx_id {
+            if let Some(xmax) = row.xmax
+                && xmax == snapshot.tx_id {
                     return false;
                 }
-            }
             return true;
         }
 

@@ -82,8 +82,8 @@ impl DeleteExecutor {
         }
 
         // Log to WAL if persistence is enabled
-        if !deleted_indices.is_empty() {
-            if let Some(ref persistence) = ctx.persistence {
+        if !deleted_indices.is_empty()
+            && let Some(persistence) = ctx.persistence {
                 let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::Delete {
                     table: delete.table_name.clone(),
@@ -91,7 +91,6 @@ impl DeleteExecutor {
                     deleted_rows: deleted_rows_data,
                 })?;
             }
-        }
 
         Ok(QueryResult::deleted(deleted_count))
     }

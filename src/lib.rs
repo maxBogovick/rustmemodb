@@ -125,7 +125,7 @@ impl Client {
     /// ```
     pub async fn connect_url(url: &str) -> Result<Self> {
         let config = ConnectionConfig::from_url(url)
-            .map_err(|e| DbError::ParseError(e))?;
+            .map_err(DbError::ParseError)?;
         let pool = ConnectionPool::new(config).await?;
         Ok(Self { pool })
     }

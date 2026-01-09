@@ -33,7 +33,7 @@ impl QueryPlanner {
         let (has_aggr, aggr_exprs) = self.extract_aggregates(&query.projection, &query.having, &query.order_by);
         
         if !query.group_by.is_empty() || has_aggr {
-            let schema = self.build_aggregate_schema(&plan.schema(), &query.group_by, &aggr_exprs);
+            let schema = self.build_aggregate_schema(plan.schema(), &query.group_by, &aggr_exprs);
             
             plan = LogicalPlan::Aggregate(AggregateNode {
                 input: Box::new(plan),
@@ -350,8 +350,8 @@ impl QueryPlanner {
     /// Try to use an index for the WHERE clause
     fn try_optimize_filter(&self, input: LogicalPlan, predicate: &Expr, catalog: &Catalog) -> Result<LogicalPlan> {
         // Only optimize if input is a simple TableScan
-        if let LogicalPlan::TableScan(ref scan) = input {
-            if let Expr::BinaryOp { left, op, right } = predicate {
+        if let LogicalPlan::TableScan(ref scan) = input
+            && let Expr::BinaryOp { left, op, right } = predicate {
                 // Check for col = val
                 if let (Expr::Column(col_name), BinaryOp::Eq, Expr::Literal(val)) = (&**left, op, &**right) {
                     let schema = catalog.get_table(&scan.table_name)?;
@@ -380,7 +380,6 @@ impl QueryPlanner {
                     }
                 }
             }
-        }
 
         // Fallback: Add Filter node
         let schema = input.schema().clone();
