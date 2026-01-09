@@ -196,21 +196,7 @@ impl Eq for Value {}
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Self::Null, Self::Null) => Some(Ordering::Equal),
-            (Self::Null, _) => Some(Ordering::Less),
-            (_, Self::Null) => Some(Ordering::Greater),
-
-            (Self::Integer(a), Self::Integer(b)) => a.partial_cmp(b),
-            (Self::Float(a), Self::Float(b)) => a.partial_cmp(b),
-            (Self::Integer(i), Self::Float(f)) => (*i as f64).partial_cmp(f),
-            (Self::Float(f), Self::Integer(i)) => f.partial_cmp(&(*i as f64)),
-
-            (Self::Text(a), Self::Text(b)) => a.partial_cmp(b),
-            (Self::Boolean(a), Self::Boolean(b)) => a.partial_cmp(b),
-
-            _ => None,
-        }
+        Some(self.cmp(other))
     }
 }
 

@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
     for thread_id in 0..4 {
         let client_clone = concurrent_client.clone_pool().await;
 
-        let handle = thread::spawn(async move || {
+        let handle = tokio::spawn(async move {
             for i in 0..5 {
                 let mut conn = client_clone.get_connection().await.unwrap();
                 let sql = format!(
@@ -175,7 +175,7 @@ async fn main() -> Result<()> {
                     thread_id
                 );
                 conn.execute(&sql).await.unwrap();
-                thread::sleep(Duration::from_millis(10));
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             }
         });
 
@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
     }
 
     for handle in handles {
-        handle.join().unwrap();
+        handle.await.unwrap();
     }
 
     let result = concurrent_client.query("SELECT * FROM concurrent_test").await?;

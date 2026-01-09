@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn main2() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== RustMemDB Persistence Demo ===\n");
 

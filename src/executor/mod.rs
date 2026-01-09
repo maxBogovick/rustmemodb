@@ -1,5 +1,6 @@
-pub mod context;
+#![allow(clippy::module_inception)]
 pub mod executor;
+pub mod context;
 pub mod delete;
 pub mod update;
 pub mod ddl;
