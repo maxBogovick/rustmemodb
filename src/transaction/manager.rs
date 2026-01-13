@@ -3,17 +3,25 @@
 // ============================================================================
 
 use super::{Change, Transaction, TransactionId, TransactionState};
-use crate::core::{DbError, Result};
+use crate::core::{DbError, Result, Snapshot};
 use crate::storage::memory::InMemoryStorage;
-use crate::storage::table::Snapshot;
 use crate::facade::InMemoryDB;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub struct TransactionManager {
+    // Stores full transaction state.
     transactions: Arc<RwLock<HashMap<TransactionId, Transaction>>>,
-    aborted: Arc<RwLock<HashSet<TransactionId>>>,
+    
+    // Optimization: Cache active transaction IDs for O(1) snapshot creation.
+    // Uses Copy-on-Write (Arc) to allow lock-free reading in snapshots.
+    active_ids: Arc<RwLock<Arc<HashSet<u64>>>>,
+
+    // Optimization: Cache aborted IDs.
+    // Uses Copy-on-Write (Arc).
+    aborted_ids: Arc<RwLock<Arc<HashSet<u64>>>>,
+
     global_version: Arc<RwLock<u64>>,
     next_transaction_id: Arc<RwLock<u64>>,
 }
@@ -28,21 +36,43 @@ impl TransactionManager {
     pub fn new() -> Self {
         Self {
             transactions: Arc::new(RwLock::new(HashMap::new())),
-            aborted: Arc::new(RwLock::new(HashSet::new())),
+            active_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
+            aborted_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             global_version: Arc::new(RwLock::new(0)),
             next_transaction_id: Arc::new(RwLock::new(1)),
         }
     }
 
     pub async fn begin(&self) -> Result<TransactionId> {
-        let mut next_id = self.next_transaction_id.write().await;
-        let txn_id = *next_id;
-        *next_id += 1;
+        let mut next_id_guard = self.next_transaction_id.write().await;
+        let txn_id_val = *next_id_guard;
+        *next_id_guard += 1;
+        drop(next_id_guard); // Release early
 
-        let read_version = *self.global_version.read().await;
-        let transaction_id = TransactionId(txn_id);
-        let transaction = Transaction::new(transaction_id, read_version);
+        let transaction_id = TransactionId(txn_id_val);
+        
+        // Create snapshot for Repeatable Read
+        let active = self.active_ids.read().await.clone();
+        let aborted = self.aborted_ids.read().await.clone();
+        
+        let snapshot = Snapshot {
+            tx_id: txn_id_val,
+            active,
+            aborted,
+            max_tx_id: txn_id_val,
+        };
 
+        let transaction = Transaction::new(transaction_id, Some(snapshot));
+
+        // Update active cache (COW)
+        {
+            let mut active_lock = self.active_ids.write().await;
+            let mut new_set = (**active_lock).clone();
+            new_set.insert(txn_id_val);
+            *active_lock = Arc::new(new_set);
+        }
+
+        // Insert into transaction map
         let mut transactions = self.transactions.write().await;
         transactions.insert(transaction_id, transaction);
 
@@ -50,21 +80,32 @@ impl TransactionManager {
     }
 
     pub async fn get_snapshot(&self, txn_id: TransactionId) -> Result<Snapshot> {
-        let transactions = self.transactions.read().await;
-        let aborted = self.aborted.read().await;
+        // Try to get snapshot from active transaction (Repeatable Read)
+        {
+            let transactions = self.transactions.read().await;
+            if let Some(txn) = transactions.get(&txn_id) {
+                if let Some(snapshot) = txn.snapshot() {
+                    return Ok(snapshot.clone());
+                }
+            }
+        }
+
+        // Fast path: clone the Arcs (O(1))
+        let active = self.active_ids.read().await.clone();
+        let aborted = self.aborted_ids.read().await.clone();
         let next_id = *self.next_transaction_id.read().await;
-        
+
         Ok(Snapshot {
             tx_id: txn_id.0,
-            active: transactions.keys().map(|id| id.0).collect(),
-            aborted: aborted.iter().map(|id| id.0).collect(),
+            active, // Arc<HashSet<u64>>
+            aborted, // Arc<HashSet<u64>>
             max_tx_id: next_id,
         })
     }
 
     pub async fn get_auto_commit_snapshot(&self) -> Result<Snapshot> {
-        let transactions = self.transactions.read().await;
-        let aborted = self.aborted.read().await;
+        let active = self.active_ids.read().await.clone();
+        let aborted = self.aborted_ids.read().await.clone();
         
         let mut next_id_guard = self.next_transaction_id.write().await;
         let this_id = *next_id_guard;
@@ -72,8 +113,8 @@ impl TransactionManager {
         
         Ok(Snapshot {
             tx_id: this_id,
-            active: transactions.keys().map(|id| id.0).collect(),
-            aborted: aborted.iter().map(|id| id.0).collect(),
+            active,
+            aborted,
             max_tx_id: *next_id_guard,
         })
     }
@@ -96,6 +137,16 @@ impl TransactionManager {
         transaction.commit()?;
         transactions.remove(&txn_id);
 
+        // Update active cache (COW)
+        {
+            let mut active_lock = self.active_ids.write().await;
+            if active_lock.contains(&txn_id.0) {
+                let mut new_set = (**active_lock).clone();
+                new_set.remove(&txn_id.0);
+                *active_lock = Arc::new(new_set);
+            }
+        }
+
         let mut version = self.global_version.write().await;
         *version += 1;
 
@@ -117,9 +168,23 @@ impl TransactionManager {
              transaction.rollback()?;
              transactions.remove(&txn_id);
              
-             // Track as aborted so MVCC visibility checks fail
-             let mut aborted = self.aborted.write().await;
-             aborted.insert(txn_id);
+             // Update active cache (COW) - remove from active
+             {
+                 let mut active_lock = self.active_ids.write().await;
+                 if active_lock.contains(&txn_id.0) {
+                     let mut new_set = (**active_lock).clone();
+                     new_set.remove(&txn_id.0);
+                     *active_lock = Arc::new(new_set);
+                 }
+             }
+
+             // Update aborted cache (COW) - add to aborted
+             {
+                 let mut aborted_lock = self.aborted_ids.write().await;
+                 let mut new_set = (**aborted_lock).clone();
+                 new_set.insert(txn_id.0);
+                 *aborted_lock = Arc::new(new_set);
+             }
         }
         Ok(())
     }

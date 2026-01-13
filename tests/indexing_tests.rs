@@ -1,6 +1,6 @@
 use rustmemodb::InMemoryDB;
 use rustmemodb::core::Value;
-use rustmemodb::storage::table::Snapshot;
+use rustmemodb::core::Snapshot;
 use std::collections::HashSet;
 
 #[tokio::test]
@@ -28,6 +28,7 @@ async fn test_indexing_backend() {
     use rustmemodb::storage::InMemoryStorage;
     use rustmemodb::storage::TableSchema;
     use rustmemodb::core::{Column, DataType};
+    use std::sync::Arc;
     
     let mut storage = InMemoryStorage::new();
     let schema = TableSchema::new("users", vec![
@@ -40,8 +41,8 @@ async fn test_indexing_backend() {
     
     let snapshot = Snapshot {
         tx_id: 0,
-        active: HashSet::new(),
-        aborted: HashSet::new(),
+        active: Arc::new(HashSet::new()),
+        aborted: Arc::new(HashSet::new()),
         max_tx_id: u64::MAX,
     };
 

@@ -1,6 +1,5 @@
 use super::{Table, TableSchema};
-use crate::core::{DbError, Result, Row};
-use crate::storage::table::Snapshot;
+use crate::core::{DbError, Result, Row, Snapshot};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -72,7 +71,12 @@ impl InMemoryStorage {
     pub async fn scan_table_all(&self, table_name: &str) -> Result<Vec<Row>> {
         let table_handle = self.get_table(table_name)?;
         let table = table_handle.read().await;
-        let snapshot = Snapshot { tx_id: u64::MAX, active: std::collections::HashSet::new(), aborted: std::collections::HashSet::new(), max_tx_id: u64::MAX };
+        let snapshot = Snapshot {
+            tx_id: u64::MAX,
+            active: Arc::new(std::collections::HashSet::new()),
+            aborted: Arc::new(std::collections::HashSet::new()),
+            max_tx_id: u64::MAX
+        };
         Ok(table.scan(&snapshot))
     }
 
@@ -166,6 +170,16 @@ impl InMemoryStorage {
         }
 
         Ok(())
+    }
+
+    /// Vacuum all tables to remove dead row versions
+    pub async fn vacuum_all_tables(&self, min_active_tx_id: u64, aborted: &std::collections::HashSet<u64>) -> Result<usize> {
+        let mut total_freed = 0;
+        for table_handle in self.tables.values() {
+            let mut table = table_handle.write().await;
+            total_freed += table.vacuum(min_active_tx_id, aborted);
+        }
+        Ok(total_freed)
     }
 }
 

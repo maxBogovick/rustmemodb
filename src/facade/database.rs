@@ -141,7 +141,16 @@ impl InMemoryDB {
             })
             .collect();
 
-        let schema = TableSchema::new(create.table_name.clone(), columns);
+        let mut schema = TableSchema::new(create.table_name.clone(), columns);
+        
+        // Pre-populate indexes metadata for PK/Unique columns
+        // This ensures the Catalog knows about these indexes immediately for query planning
+        let columns_iter = schema.schema().columns().to_vec();
+        for col in columns_iter {
+            if col.primary_key || col.unique {
+                schema.indexes.push(col.name.clone());
+            }
+        }
 
         if let Some(ref persistence) = self.persistence {
             let mut persistence_guard = persistence.lock().await;
@@ -364,6 +373,16 @@ impl InMemoryDB {
             }
         }
         Ok(())
+    }
+
+    /// Run garbage collection to remove dead row versions
+    pub async fn vacuum(&self) -> Result<usize> {
+        let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+        // If there are no active transactions, min_active is the next transaction ID (max_tx_id)
+        // All committed transactions < max_tx_id are visible to everyone.
+        let min_active = snapshot.active.iter().min().cloned().unwrap_or(snapshot.max_tx_id);
+        
+        self.storage.vacuum_all_tables(min_active, &snapshot.aborted).await
     }
 }
 

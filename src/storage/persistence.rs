@@ -1,9 +1,10 @@
 //! Write-Ahead Logging (WAL) and persistence layer for RustMemDB
 
-use crate::core::{DbError, Result, Row};
-use crate::storage::table::{Table, TableSchema, Snapshot};
+use crate::core::{DbError, Result, Row, Snapshot};
+use crate::storage::table::{Table, TableSchema};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -274,8 +275,8 @@ impl PersistenceManager {
         // Use a dummy snapshot for applying WAL entries (committed/system)
         let snapshot = Snapshot {
             tx_id: 0,
-            active: HashSet::new(),
-            aborted: HashSet::new(),
+            active: Arc::new(HashSet::new()),
+            aborted: Arc::new(HashSet::new()),
             max_tx_id: u64::MAX,
         };
 
@@ -402,7 +403,12 @@ mod tests {
         let mut tables = HashMap::new();
         tables.insert("users".to_string(), {
             let mut table = Table::new(schema);
-            let snapshot = Snapshot { tx_id: 0, active: HashSet::new(), aborted: HashSet::new(), max_tx_id: u64::MAX };
+            let snapshot = Snapshot {
+                tx_id: 0,
+                active: Arc::new(HashSet::new()),
+                aborted: Arc::new(HashSet::new()),
+                max_tx_id: u64::MAX
+            };
             table.insert(vec![
                 crate::core::Value::Integer(1),
                 crate::core::Value::Text("Alice".to_string()),

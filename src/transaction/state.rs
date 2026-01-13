@@ -13,6 +13,7 @@
 // ============================================================================
 
 use super::Change;
+use crate::core::Snapshot;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Global transaction ID counter
@@ -104,9 +105,9 @@ pub struct Transaction {
     /// Current state (Active, Committed, Aborted)
     state: TransactionState,
 
-    /// Snapshot version for read consistency (MVCC)
-    /// All reads see data as of this version
-    read_version: u64,
+    /// Snapshot for read consistency (MVCC)
+    /// All reads see data as of this snapshot
+    snapshot: Option<Snapshot>,
 
     /// Changes made during this transaction (Command Pattern)
     changes: Vec<Change>,
@@ -116,12 +117,12 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    /// Create a new transaction with the given ID and read version
-    pub fn new(id: TransactionId, read_version: u64) -> Self {
+    /// Create a new transaction with the given ID and snapshot
+    pub fn new(id: TransactionId, snapshot: Option<Snapshot>) -> Self {
         Self {
             id,
             state: TransactionState::Active,
-            read_version,
+            snapshot,
             changes: Vec::new(),
             start_time: std::time::Instant::now(),
         }
@@ -137,9 +138,15 @@ impl Transaction {
         self.state
     }
 
+    /// Get the snapshot
+    pub fn snapshot(&self) -> Option<&Snapshot> {
+        self.snapshot.as_ref()
+    }
+
     /// Get the read version (snapshot timestamp)
+    /// Legacy: returns 0 or max_tx_id from snapshot
     pub fn read_version(&self) -> u64 {
-        self.read_version
+        self.snapshot.as_ref().map(|s| s.max_tx_id).unwrap_or(0)
     }
 
     /// Get all changes recorded in this transaction
@@ -227,7 +234,7 @@ mod tests {
     #[test]
     fn test_transaction_lifecycle() {
         let id = TransactionId::new();
-        let mut txn = Transaction::new(id, 100);
+        let mut txn = Transaction::new(id, None);
 
         assert_eq!(txn.state(), TransactionState::Active);
         assert!(txn.state().is_active());
@@ -241,7 +248,7 @@ mod tests {
     #[test]
     fn test_cannot_commit_twice() {
         let id = TransactionId::new();
-        let mut txn = Transaction::new(id, 100);
+        let mut txn = Transaction::new(id, None);
 
         txn.commit().unwrap();
         assert!(txn.commit().is_err());
@@ -250,7 +257,7 @@ mod tests {
     #[test]
     fn test_rollback_clears_changes() {
         let id = TransactionId::new();
-        let mut txn = Transaction::new(id, 100);
+        let mut txn = Transaction::new(id, None);
 
         let change = Change::InsertRow {
             table: "test".to_string(),
@@ -267,7 +274,7 @@ mod tests {
     #[test]
     fn test_cannot_record_change_after_commit() {
         let id = TransactionId::new();
-        let mut txn = Transaction::new(id, 100);
+        let mut txn = Transaction::new(id, None);
 
         txn.commit().unwrap();
 

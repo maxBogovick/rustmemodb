@@ -1,7 +1,17 @@
 use super::{DbError, Result, DataType, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 pub type Row = Vec<Value>;
+
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    pub tx_id: u64,
+    pub active: Arc<HashSet<u64>>,
+    pub aborted: Arc<HashSet<u64>>,
+    pub max_tx_id: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Column {

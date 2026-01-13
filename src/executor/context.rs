@@ -1,5 +1,5 @@
 use crate::storage::{InMemoryStorage, PersistenceManager};
-use crate::storage::table::Snapshot;
+use crate::core::Snapshot;
 use crate::transaction::{TransactionId, TransactionManager};
 use std::sync::{Arc};
 use tokio::sync::Mutex;

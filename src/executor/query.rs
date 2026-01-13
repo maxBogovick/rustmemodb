@@ -129,20 +129,28 @@ impl QueryExecutor {
         Ok(result_rows)
     }
 
-    /// Execute join operation (Nested Loop Join)
+    /// Execute join operation
     async fn execute_join(
         &self,
         join: &crate::planner::logical_plan::JoinNode,
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
+        use crate::planner::logical_plan::JoinType;
+
+        // Try Hash Join for Equi-Joins (Inner and Left only for now)
+        if matches!(join.join_type, JoinType::Inner | JoinType::Left) {
+            if let Some((left_key_expr, right_key_expr)) = self.extract_join_keys(&join.on, &join.left.schema(), &join.right.schema()) {
+                return self.execute_hash_join(join, left_key_expr, right_key_expr, ctx).await;
+            }
+        }
+
+        // Fallback to Nested Loop Join
         let left_rows = self.execute_plan(&join.left, ctx).await?;
         let right_rows = self.execute_plan(&join.right, ctx).await?;
         let schema = &join.schema; // Schema of the join result
 
         let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
         let mut result = Vec::new();
-
-        use crate::planner::logical_plan::JoinType;
 
         match join.join_type {
             JoinType::Inner | JoinType::Cross => {
@@ -203,14 +211,151 @@ impl QueryExecutor {
                 }
             }
             JoinType::Full => {
-                // TODO: Full Outer Join implementation
-                // Requires tracking matched rows from both sides
                 return Err(DbError::UnsupportedOperation("Full Outer Join not yet implemented".into()));
             }
         }
 
         Ok(result)
     }
+
+    /// Execute Hash Join (O(N+M))
+    async fn execute_hash_join(
+        &self,
+        join: &crate::planner::logical_plan::JoinNode,
+        left_key_expr: Expr,
+        right_key_expr: Expr,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<Vec<Row>> {
+        use crate::planner::logical_plan::JoinType;
+
+        let left_rows = self.execute_plan(&join.left, ctx).await?;
+        let right_rows = self.execute_plan(&join.right, ctx).await?;
+        
+        // Build Phase (Build hash map from RIGHT table)
+        // Map: JoinKey -> Vec<Row>
+        let mut build_map = std::collections::HashMap::new();
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        
+        for row in right_rows {
+            let key_val = eval_ctx.evaluate(&right_key_expr, &row, join.right.schema()).await?;
+            if key_val.is_null() {
+                continue; // Nulls never match in SQL joins
+            }
+            let key = JoinKey(key_val);
+            build_map.entry(key).or_insert_with(Vec::new).push(row);
+        }
+
+        // Probe Phase (Scan LEFT table)
+        let mut result = Vec::new();
+        let right_width = join.right.schema().column_count();
+
+        for left_row in left_rows {
+            let key_val = eval_ctx.evaluate(&left_key_expr, &left_row, join.left.schema()).await?;
+            let key = JoinKey(key_val);
+
+            if let Some(matches) = build_map.get(&key) {
+                for right_row in matches {
+                    let mut combined_row = left_row.clone();
+                    combined_row.extend(right_row.clone());
+                    result.push(combined_row);
+                }
+            } else if join.join_type == JoinType::Left {
+                // No match for Left Join -> emit row with NULLs
+                let mut combined_row = left_row.clone();
+                combined_row.extend(vec![Value::Null; right_width]);
+                result.push(combined_row);
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Extract join keys from ON clause if it's a simple equality
+    fn extract_join_keys(&self, on: &Expr, left_schema: &Schema, right_schema: &Schema) -> Option<(Expr, Expr)> {
+        use crate::parser::ast::BinaryOp;
+        
+        if let Expr::BinaryOp { left, op: BinaryOp::Eq, right } = on {
+            // Try (Left=Left, Right=Right)
+            if let (Some(l), Some(r)) = (
+                self.resolve_expr_to_schema(left, left_schema),
+                self.resolve_expr_to_schema(right, right_schema)
+            ) {
+                return Some((l, r));
+            }
+            
+            // Try Swap (Left=Right, Right=Left)
+            if let (Some(l), Some(r)) = (
+                self.resolve_expr_to_schema(right, left_schema),
+                self.resolve_expr_to_schema(left, right_schema)
+            ) {
+                return Some((l, r));
+            }
+        }
+        None
+    }
+
+    /// Check if expr belongs to schema and return a normalized expr (e.g. stripping qualifiers if needed)
+    fn resolve_expr_to_schema(&self, expr: &Expr, schema: &Schema) -> Option<Expr> {
+        match expr {
+            Expr::Column(name) => {
+                if schema.find_column_index(name).is_some() {
+                    Some(expr.clone())
+                } else {
+                    None
+                }
+            },
+            Expr::CompoundIdentifier(parts) => {
+                let name = parts.join(".");
+                if schema.find_column_index(&name).is_some() {
+                    return Some(expr.clone());
+                }
+                // Try treating the last part as the column name if exact match failed
+                // This handles "t1.id" matching "id" in t1's schema
+                if let Some(col_name) = parts.last() {
+                    if schema.find_column_index(col_name).is_some() {
+                        return Some(Expr::Column(col_name.clone()));
+                    }
+                }
+                None
+            },
+            Expr::Literal(_) => Some(expr.clone()),
+            _ => None, // Only support simple columns/literals as keys for now
+        }
+    }
+}
+
+/// Wrapper for Value to implement strict Hash/Eq for joins
+#[derive(Debug, Clone)]
+struct JoinKey(Value);
+
+impl std::hash::Hash for JoinKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+
+impl PartialEq for JoinKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
+            // Strict type equality required for Hash Map lookups
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Text(a), Value::Text(b)) => a == b,
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for JoinKey {}
+
+// End of QueryExecutor extension
+impl QueryExecutor {
+    // ... rest of the impl block ... (placeholder to attach to)
+    // Actually we need to replace the existing execute_join
+    // So this block is just a container for the replacement logic.
+
 
     /// Execute table scan
     async fn execute_scan(
