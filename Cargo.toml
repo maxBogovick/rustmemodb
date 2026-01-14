@@ -1,6 +1,6 @@
 [package]
 name = "rustmemodb"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Maxim Bogovic <bogovick@gmail.com>"]
 license = "MIT OR Apache-2.0"

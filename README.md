@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/rustmemodb.svg)](https://crates.io/crates/rustmemodb)
 [![Documentation](https://docs.rs/rustmemodb/badge.svg)](https://docs.rs/rustmemodb)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/yourname/rustmemodb/ci.yml)](https://github.com/yourname/rustmemodb/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/maxBogovick/rustmemodb/ci.yml)](https://github.com/maxBogovick/rustmemodb/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **The logic-first, in-memory SQL engine designed for high-performance testing and rapid prototyping.**
@@ -334,7 +334,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustmemodb = "0.1.1"
+rustmemodb = "0.1.2"
 ```
 
 ---
@@ -344,7 +344,7 @@ rustmemodb = "0.1.1"
 We are building the best testing database for the Rust ecosystem.
 
 *   **Found a bug?** Open an issue.
-*   **Want to build a feature?** Check `docs/DEVELOPER_GUIDE.md`.
+*   **Want to build a feature?** Check [developer guide](documentations/DEVELOPER_GUIDE.md).
 
 ## 📄 License
 
