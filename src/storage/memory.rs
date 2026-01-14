@@ -181,6 +181,25 @@ impl InMemoryStorage {
         }
         Ok(total_freed)
     }
+
+    /// Fork the storage (Copy-On-Write)
+    /// Creates a new storage instance that shares the underlying data structures
+    /// with the current one. Writes to the new storage will not affect the old one,
+    /// and vice versa, thanks to persistent data structures (im crate).
+    pub async fn fork(&self) -> Result<Self> {
+        let mut new_tables = HashMap::new();
+
+        for (name, table_handle) in &self.tables {
+            let table = table_handle.read().await;
+            // Table::clone() is now O(1) due to im::OrdMap
+            let new_table = table.clone();
+            new_tables.insert(name.clone(), Arc::new(RwLock::new(new_table)));
+        }
+
+        Ok(Self {
+            tables: new_tables,
+        })
+    }
 }
 
 impl Default for InMemoryStorage {

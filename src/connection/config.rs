@@ -113,25 +113,35 @@ impl ConnectionConfig {
 
     /// Parse from connection string
     ///
-    /// Format: "rustmemodb://username:password@host:port/database"
+    /// Supports the following formats:
+    /// - `rustmemodb://username:password@host:port/database`
+    /// - `postgres://username:password@host:port/database`
+    /// - `postgresql://username:password@host:port/database`
+    /// - `mysql://username:password@host:port/database`
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let config = ConnectionConfig::from_url(
-    ///     "rustmemodb://admin:secret@localhost:5432/mydb"
+    ///     "postgres://admin:secret@localhost:5432/mydb"
     /// )?;
     /// ```
     pub fn from_url(url: &str) -> Result<Self, String> {
-        // Simple URL parsing (use url crate in production)
-        if !url.starts_with("rustmemodb://") {
-            return Err("URL must start with 'rustmemodb://'".to_string());
-        }
-
-        let url = &url["rustmemodb://".len()..];
+        let (protocol, rest) = if let Some(rest) = url.strip_prefix("rustmemodb://") {
+            ("rustmemodb", rest)
+        } else if let Some(rest) = url.strip_prefix("postgres://") {
+            ("postgres", rest)
+        } else if let Some(rest) = url.strip_prefix("postgresql://") {
+            ("postgres", rest)
+        } else if let Some(rest) = url.strip_prefix("mysql://") {
+            ("mysql", rest)
+        } else {
+            return Err("URL must start with 'rustmemodb://', 'postgres://', 'postgresql://' or 'mysql://'".to_string());
+        };
 
         // Parse username:password@host:port/database
-        let parts: Vec<&str> = url.split('@').collect();
+        // Note: This is a simplified parser. For production, use a proper URL parser.
+        let parts: Vec<&str> = rest.split('@').collect();
         if parts.len() != 2 {
             return Err("Invalid URL format".to_string());
         }
@@ -154,7 +164,10 @@ impl ConnectionConfig {
         let port = if host_port.len() > 1 {
             host_port[1].parse().map_err(|_| "Invalid port".to_string())?
         } else {
-            5432
+            match protocol {
+                "mysql" => 3306,
+                _ => 5432, // Default for postgres and rustmemodb
+            }
         };
 
         let database = host_parts[1];
@@ -245,6 +258,36 @@ mod tests {
     }
 
     #[test]
+    fn test_from_url_postgres() {
+        let config = ConnectionConfig::from_url(
+            "postgres://alice:secret@db.example.com:5432/production"
+        ).unwrap();
+        assert_eq!(config.username, "alice");
+        assert_eq!(config.port, 5432);
+
+        let config = ConnectionConfig::from_url(
+            "postgresql://bob:pass@localhost/mydb"
+        ).unwrap();
+        assert_eq!(config.username, "bob");
+        assert_eq!(config.port, 5432); // Default port
+    }
+
+    #[test]
+    fn test_from_url_mysql() {
+        let config = ConnectionConfig::from_url(
+            "mysql://charlie:key@mysql.example.com:3306/legacy"
+        ).unwrap();
+        assert_eq!(config.username, "charlie");
+        assert_eq!(config.port, 3306);
+
+        let config = ConnectionConfig::from_url(
+            "mysql://dave:word@127.0.0.1/test"
+        ).unwrap();
+        assert_eq!(config.username, "dave");
+        assert_eq!(config.port, 3306); // Default port
+    }
+
+    #[test]
     fn test_from_url_default_port() {
         let config = ConnectionConfig::from_url(
             "rustmemodb://user:pass@localhost/testdb"
@@ -256,7 +299,7 @@ mod tests {
     #[test]
     fn test_invalid_url() {
         assert!(ConnectionConfig::from_url("invalid://url").is_err());
-        assert!(ConnectionConfig::from_url("rustmemodb://noat").is_err());
+        assert!(ConnectionConfig::from_url("http://noat").is_err());
     }
 
     #[test]

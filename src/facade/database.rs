@@ -384,6 +384,40 @@ impl InMemoryDB {
         
         self.storage.vacuum_all_tables(min_active, &snapshot.aborted).await
     }
+
+    /// Fork the database to create an isolated copy.
+    ///
+    /// This is an O(1) operation (Copy-On-Write).
+    /// The new database instance shares the underlying data with the parent until modifications occur.
+    /// Active transactions in the parent are treated as aborted in the child.
+    pub async fn fork(&self) -> Result<Self> {
+        let new_storage = self.storage.fork().await?;
+        let new_txn_manager = self.transaction_manager.fork().await;
+        
+        // Clone catalog (metadata)
+        let new_catalog = self.catalog.clone();
+
+        // Re-create pipeline (stateless)
+        let mut pipeline = ExecutorPipeline::new();
+        pipeline.register(Box::new(BeginExecutor));
+        pipeline.register(Box::new(CommitExecutor));
+        pipeline.register(Box::new(RollbackExecutor));
+        pipeline.register(Box::new(CreateTableExecutor));
+        pipeline.register(Box::new(DropTableExecutor));
+        pipeline.register(Box::new(InsertExecutor));
+        pipeline.register(Box::new(DeleteExecutor::new()));
+        pipeline.register(Box::new(UpdateExecutor::new()));
+        pipeline.register(Box::new(QueryExecutor::new(new_catalog.clone())));
+
+        Ok(Self {
+            parser: SqlParserAdapter::new(),
+            storage: new_storage,
+            catalog: new_catalog,
+            executor_pipeline: pipeline,
+            transaction_manager: Arc::new(new_txn_manager),
+            persistence: None, // Forks are ephemeral
+        })
+    }
 }
 
 impl Default for InMemoryDB {

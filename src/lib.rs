@@ -9,6 +9,7 @@ pub mod facade;
 pub mod connection;
 pub mod transaction;
 pub mod json;
+pub mod interface;
 mod parser;
 mod planner;
 mod executor;
@@ -18,8 +19,9 @@ mod evaluator;
 
 // Re-export main types for convenience
 pub use facade::InMemoryDB;
-pub use core::{Result, DbError, Value, DataType};
+pub use core::{Result, DbError, Value, DataType, Row};
 pub use result::QueryResult;
+pub use interface::{DatabaseClient, DatabaseFactory};
 
 // Re-export persistence types
 pub use storage::{DurabilityMode, PersistenceManager, WalEntry};
@@ -110,7 +112,11 @@ impl Client {
 
     /// Connect using a connection string
     ///
-    /// Format: `rustmemodb://username:password@host:port/database`
+    /// Supports the following formats:
+    /// - `rustmemodb://username:password@host:port/database`
+    /// - `postgres://username:password@host:port/database`
+    /// - `postgresql://username:password@host:port/database`
+    /// - `mysql://username:password@host:port/database`
     ///
     /// # Examples
     ///
@@ -118,7 +124,7 @@ impl Client {
     /// # use rustmemodb::Client;
     /// # tokio_test::block_on(async {
     /// let client = Client::connect_url(
-    ///     "rustmemodb://admin:adminpass@localhost:5432/mydb"
+    ///     "postgres://admin:adminpass@localhost:5432/mydb"
     /// ).await?;
     /// # Ok::<(), rustmemodb::core::DbError>(())
     /// # });
@@ -127,6 +133,26 @@ impl Client {
         let config = ConnectionConfig::from_url(url)
             .map_err(DbError::ParseError)?;
         let pool = ConnectionPool::new(config).await?;
+        Ok(Self { pool })
+    }
+
+    /// Create an isolated client with its own in-memory database instance.
+    ///
+    /// This is ideal for unit tests, ensuring that parallel tests do not interfere with each other.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use rustmemodb::Client;
+    /// # tokio_test::block_on(async {
+    /// let client = Client::connect_local("admin", "adminpass").await?;
+    /// // This client is completely isolated from other clients
+    /// # Ok::<(), rustmemodb::core::DbError>(())
+    /// # });
+    /// ```
+    pub async fn connect_local(username: &str, password: &str) -> Result<Self> {
+        let config = ConnectionConfig::new(username, password);
+        let pool = ConnectionPool::new_isolated(config).await?;
         Ok(Self { pool })
     }
 
@@ -224,6 +250,65 @@ impl Client {
     pub fn auth_manager(&self) -> &std::sync::Arc<AuthManager> {
         self.pool.auth_manager()
     }
+
+    /// Create a lightweight, isolated fork of the current database.
+    ///
+    /// This uses Copy-On-Write (COW) mechanics, so it is an O(1) operation
+    /// regardless of database size. It is perfect for test isolation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use rustmemodb::Client;
+    /// # tokio_test::block_on(async {
+    /// let master = Client::connect_local("admin", "pass").await?;
+    /// master.execute("CREATE TABLE test (id INT)").await?;
+    ///
+    /// // Create two independent forks
+    /// let test1 = master.fork().await?;
+    /// let test2 = master.fork().await?;
+    ///
+    /// test1.execute("INSERT INTO test VALUES (1)").await?;
+    /// test2.execute("INSERT INTO test VALUES (2)").await?;
+    ///
+    /// // Master is untouched
+    /// let count = master.query("SELECT * FROM test").await?.row_count();
+    /// assert_eq!(count, 0);
+    /// # Ok::<(), rustmemodb::core::DbError>(())
+    /// # });
+    /// ```
+    pub async fn fork(&self) -> Result<Self> {
+        let new_pool = self.pool.fork().await?;
+        Ok(Self { pool: new_pool })
+    }
+}
+
+#[async_trait::async_trait]
+impl interface::DatabaseClient for Client {
+    async fn query(&self, sql: &str) -> Result<QueryResult> {
+        self.query(sql).await
+    }
+
+    async fn execute(&self, sql: &str) -> Result<QueryResult> {
+        self.execute(sql).await
+    }
+
+    async fn ping(&self) -> Result<()> {
+        // Simple ping implementation: execute a lightweight query
+        self.execute("SELECT 1").await.map(|_| ())
+    }
+}
+
+/// Default factory for creating RustMemDB clients
+pub struct RustMemDbFactory;
+
+#[async_trait::async_trait]
+impl interface::DatabaseFactory for RustMemDbFactory {
+    type Client = Client;
+
+    async fn connect(&self, url: &str) -> Result<Self::Client> {
+        Client::connect_url(url).await
+    }
 }
 
 #[cfg(test)]
@@ -268,7 +353,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_from_url() {
         let client = Client::connect_url(
-            "rustmemodb://admin:adminpass@localhost:5432/testdb"
+            "postgres://admin:adminpass@localhost:5432/testdb"
         ).await.unwrap();
 
         assert!(client.stats().await.total_connections > 0);

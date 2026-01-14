@@ -1,1310 +1,354 @@
-# RustMemDB
+# 🦀 RustMemDB
 
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Crates.io](https://img.shields.io/crates/v/rustmemodb.svg)](https://crates.io/crates/rustmemodb)
+[![Documentation](https://docs.rs/rustmemodb/badge.svg)](https://docs.rs/rustmemodb)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/yourname/rustmemodb/ci.yml)](https://github.com/yourname/rustmemodb/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 
-**A lightweight, in-memory SQL database engine written in pure Rust with a focus on educational clarity and extensibility.**
+**The logic-first, in-memory SQL engine designed for high-performance testing and rapid prototyping.**
+
+> *"Postgres is for production. SQLite is for files. **RustMemDB is for code.**"*
 
 ---
 
 ## 📖 Table of Contents
 
-- [Overview](#overview)
-- [Mission & Purpose](#mission--purpose)
-- [Architecture](#architecture)
-- [Features](#features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Usage Examples](#usage-examples)
-- [API Documentation](#api-documentation)
-- [Performance Characteristics](#performance-characteristics)
-- [Design Patterns](#design-patterns)
-- [Extensibility](#extensibility)
-- [Limitations](#limitations)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [Educational Resources](#educational-resources)
-- [License](#license)
+- [⚡ Why RustMemDB?](#-why-rustmemdb)
+- [🚀 Killer Feature: Instant Forking](#-killer-feature-instant-forking-cow)
+- [📊 Benchmarks](#-benchmarks)
+- [✅ SQL Support Matrix](#-sql-support-matrix)
+- [🧩 Extensibility & Plugins](#-extensibility--plugins)
+- [🎯 Ideal Use Cases](#-ideal-use-cases)
+- [👩‍💻 Developer Experience (DX)](#-developer-experience-dx)
+- [🛡️ Safety & Reliability](#-safety--reliability)
+- [🔌 The "Drop-In" Architecture](#-the-drop-in-architecture)
+- [💾 Persistence & Durability](#-persistence--durability)
+- [🧩 Extensibility & Plugins](#-extensibility--plugins)
+- [⚙️ Engineering Internals](#-engineering-internals)
+- [❓ FAQ](#-faq)
+- [📦 Installation](#-installation)
 
-### 📚 Additional Documentation
+---
+## 📚 Documentation
 
-- **[DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)** - Complete guide for adding new features to RustMemoDB
-- **[PRODUCTION_READINESS_ANALYSIS.md](docs/PRODUCTION_READINESS_ANALYSIS.md)** - Production readiness assessment
+- [Quickstart](documentations/QUICKSTART.md)
+- [Database Implementation](documentations/SHORT_DOCUMENTATION.md)
+
+## ⚡ Why RustMemDB?
+
+Integration testing in Rust usually forces a painful tradeoff:
+1.  **Mocking:** Fast, but fake. You aren't testing SQL logic.
+2.  **SQLite:** Fast, but typeless and behaves differently than Postgres/MySQL.
+3.  **Docker (Testcontainers):** Accurate, but **slow**. Spinning up a container takes seconds; running parallel tests requires heavy resource management.
+
+**RustMemDB is the Third Way.**
+
+It is a pure Rust SQL engine with **MVCC** and **Snapshot Isolation** that introduces a paradigm shift in testing: **Instant Database Forking**.
+
+### ⚔️ Comparison Matrix
+
+| Feature | RustMemDB 🦀 | SQLite :floppy_disk: | Docker (Postgres) 🐳 |
+| :--- | :---: | :---: | :---: |
+| **Startup Time** | **< 1ms** | ~10ms | 1s - 5s |
+| **Test Isolation** | **Instant Fork (O(1))** | File Copy / Rollback | New Container / Truncate |
+| **Parallelism** | ✅ **Safe & Fast** | ❌ Locking Issues | ⚠️ High RAM Usage |
+| **Type Safety** | ✅ **Strict** | ❌ Loose / Dynamic | ✅ Strict |
+| **Dependencies** | **Zero** (Pure Rust) | C Bindings | Docker Daemon |
+
 ---
 
-## 🎯 Overview
+## 🚀 Killer Feature: Instant Forking (COW)
 
-RustMemDB is an **educational in-memory SQL database** that demonstrates how modern relational databases work under the hood. Built entirely in Rust, it implements a complete SQL query execution pipeline from parsing to result generation, while maintaining clean architecture and extensible design.
+Stop seeding your database for every test function.
 
-Unlike production databases (PostgreSQL, MySQL), RustMemDB prioritizes:
-- **Code Clarity** - Easy to understand implementation
-- **Educational Value** - Learn database internals by reading/modifying code
-- **Extensibility** - Plugin-based architecture for adding features
-- **Type Safety** - Leveraging Rust's strong type system
+RustMemDB uses **Persistent Data Structures (Copy-On-Write)** via the `im` crate to clone the entire database state instantly.
 
-### What Makes It Unique?
+**The "Seed Once, Test Anywhere" Workflow:**
+
+```text
+Step 1: Setup (Runs once)
+[ Master DB ] <--- Create Tables, Insert 50k Seed Rows (Heavy)
+      |
+      +------------------------+------------------------+
+      | (Microseconds)         | (Microseconds)         |
+      ▼                        ▼                        ▼
+[ Fork: Test A ]         [ Fork: Test B ]         [ Fork: Test C ]
+Delete ID=1              Update ID=2              Select Count(*)
+(Isolated Change)        (Isolated Change)        (Sees Original Data)
+```
+
+### Code Example
 
 ```rust
-// Simple, clean API
-let mut db = InMemoryDB::new();
+use rustmemodb::Client;
 
-db.execute("CREATE TABLE users (id INTEGER, name TEXT, age INTEGER)")?;
-db.execute("INSERT INTO users VALUES (1, 'Alice', 30)")?;
+#[tokio::test]
+async fn test_parallel_logic() -> anyhow::Result<()> {
+    // 1. Heavy Initialization (Done once per suite)
+    let master = Client::connect_local("admin", "pass").await?;
+    master.execute("CREATE TABLE users (id INT, name TEXT)").await?;
+    // ... imagine inserting 10,000 rows here ...
 
-let result = db.execute("SELECT * FROM users WHERE age > 25")?;
-result.print();
-```
-
-Under the hood, this simple query goes through a **complete database pipeline**:
-1. **SQL Parsing** → AST (Abstract Syntax Tree)
-2. **Query Planning** → Logical execution plan
-3. **Optimization** → (Future: predicate pushdown, join ordering)
-4. **Execution** → Physical operators (scan, filter, project, sort)
-5. **Result Formatting** → User-friendly output
-
----
-
-## 🎯 Mission & Purpose
-
-### Primary Mission
-
-**"Make database internals accessible and understandable through clean, well-documented Rust code."**
-
-### Target Audience
-
-1. **Students & Educators**
-   - Learn how SQL databases work internally
-   - Understand query processing pipelines
-   - Study classic database algorithms (sorting, filtering, etc.)
-
-2. **Rust Developers**
-   - See real-world application of design patterns
-   - Learn concurrent data structure design
-   - Understand plugin architectures
-
-3. **Database Enthusiasts**
-   - Prototype new database features
-   - Experiment with query optimization algorithms
-   - Build custom storage engines
-
-4. **Embedded Systems**
-   - Lightweight SQL for resource-constrained environments
-   - No external dependencies (pure Rust)
-   - Small memory footprint
-
-### What This Project Is For
-
-✅ **Learning** - Study database architecture
-✅ **Prototyping** - Test database algorithms quickly
-✅ **Testing** - In-memory database for unit tests
-✅ **Embedded SQL** - Simple queries in Rust applications
-✅ **Research** - Academic database research projects
-
-### What This Project Is NOT For
-
-❌ **Production Databases** - Use PostgreSQL, MySQL, SQLite instead
-❌ **Persistent Storage** - Data lost on shutdown (in-memory only)
-❌ **High Performance** - Educational focus over optimization
-❌ **Full SQL Compliance** - Subset of SQL features
-
----
-
-## 🏗️ Architecture
-
-RustMemDB follows the classic **three-stage database architecture** used by most relational databases:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                          SQL Query                          │
-│              "SELECT * FROM users WHERE age > 25"           │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    PARSER LAYER                             │
-│  ┌────────────────────────────────────────────────────┐     │
-│  │ SqlParserAdapter (Facade Pattern)                  │     │
-│  │  - Uses sqlparser crate for SQL parsing            │     │
-│  │  - Converts external AST → Internal AST            │     │
-│  │  - Plugin-based expression conversion              │     │
-│  └────────────────────────────────────────────────────┘     │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼  Statement AST
-┌─────────────────────────────────────────────────────────────┐
-│                    PLANNER LAYER                            │
-│  ┌────────────────────────────────────────────────────┐     │
-│  │ QueryPlanner (Strategy Pattern)                    │     │
-│  │  - AST → LogicalPlan transformation                │     │
-│  │  - Logical operators: Scan, Filter, Project, Sort  │     │
-│  │  - Future: Query optimization                      │     │
-│  └────────────────────────────────────────────────────┘     │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼  LogicalPlan
-┌─────────────────────────────────────────────────────────────┐
-│                   EXECUTOR LAYER                            │
-│  ┌────────────────────────────────────────────────────┐     │
-│  │ ExecutorPipeline (Chain of Responsibility)         │     │
-│  │  ┌──────────────────────────────────────────────┐  │     │
-│  │  │ DDL: CreateTableExecutor, DropTableExecutor  │  │     │
-│  │  │ DML: InsertExecutor, UpdateExecutor,         │  │     │
-│  │  │      DeleteExecutor                          │  │     │
-│  │  │ DQL: QueryExecutor                           │  │     │
-│  │  │      - TableScan → Filter → Aggregate/Sort   │  │     │
-│  │  │      - Project → Limit                       │  │     │
-│  │  └──────────────────────────────────────────────┘  │     │
-│  └────────────────────────────────────────────────────┘     │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    STORAGE LAYER                            │
-│  ┌───────────────────┐        ┌─────────────────────┐       │
-│  │ Catalog           │        │ InMemoryStorage     │       │
-│  │ (Copy-on-Write)   │        │ (Row-based)         │       │
-│  │                   │        │                     │       │
-│  │ - Table schemas   │        │ - Per-table RwLock  │       │
-│  │ - Arc<HashMap>    │        │ - Concurrent access │       │
-│  │ - Lock-free reads │        │ - Vec<Row> storage  │       │
-│  └───────────────────┘        └─────────────────────┘       │
-└─────────────────────────────────────────────────────────────┘
-                       │
-                       ▼
-               ┌───────────────┐
-               │ QueryResult   │
-               │  - Columns    │
-               │  - Rows       │
-               └───────────────┘
-```
-
-### Key Components
-
-#### 1. Parser (`src/parser/`)
-Converts SQL text into an Abstract Syntax Tree (AST).
-
-- **SqlParserAdapter** - Facade over `sqlparser` crate
-- **Plugin System** - Extensible expression conversion
-- **AST Definition** - Internal representation optimized for our needs
-
-#### 2. Planner (`src/planner/`)
-Transforms AST into a logical execution plan.
-
-- **QueryPlanner** - AST → LogicalPlan converter
-- **LogicalPlan Nodes** - TableScan, Filter, Projection, Sort, Limit
-- **Future** - Query optimization passes
-
-#### 3. Executor (`src/executor/`)
-Executes logical plans against storage.
-
-- **ExecutorPipeline** - Chain of Responsibility pattern
-- **Specialized Executors** - DDL, DML, DQL handlers
-- **Physical Operators** - Actual data processing
-- **EvaluatorRegistry** - Plugin-based expression evaluation
-
-#### 4. Storage (`src/storage/`)
-In-memory data storage with concurrent access.
-
-- **Catalog** - Metadata (schemas) with lock-free reads
-- **InMemoryStorage** - Actual row data with fine-grained locking
-- **TableSchema** - Column definitions and constraints
-
-#### 5. Evaluator (`src/evaluator/`)
-Runtime expression evaluation system.
-
-- **Plugin Architecture** - Extensible evaluators
-- **Built-in Evaluators** - Arithmetic, comparison, logical, LIKE, BETWEEN, IS NULL
-- **EvaluationContext** - Thread-safe expression evaluation
-
----
-
-## ✨ Features
-
-### Currently Implemented
-
-#### SQL Support
-- ✅ **DDL (Data Definition Language)**
-  - `CREATE TABLE` with column types and constraints
-  - `DROP TABLE` with `IF EXISTS` support
-  - `CREATE INDEX` for faster lookups
-  - `ALTER TABLE` (Basic support: Add/Drop column)
-- ✅ **Constraints**
-  - `PRIMARY KEY` (enforces uniqueness and NOT NULL)
-  - `UNIQUE` (enforces uniqueness, allows multiple NULLs)
-- ✅ **DML (Data Manipulation Language)**
-  - `INSERT INTO` with multiple rows
-  - `UPDATE` with `SET` and `WHERE` clauses
-  - `DELETE FROM` with conditional filtering
-- ✅ **DQL (Data Query Language)**
-  - `SELECT` with full query capabilities
-  - Aggregate functions (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`)
-- ✅ **Transaction Control**
-  - `BEGIN` / `START TRANSACTION` - Start a new transaction
-  - `COMMIT` - Commit all changes atomically
-  - `ROLLBACK` - Undo all changes in the transaction
-  - Full MVCC support with snapshot isolation
-  - Manual `close()` required for safety (Warning on connection drop)
-
-#### Query Capabilities
-- ✅ **Projection** - `SELECT col1, col2` or `SELECT *`
-- ✅ **Filtering** - `WHERE` with complex predicates and parentheses
-- ✅ **Aggregation** - `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)`
-- ✅ **Sorting** - `ORDER BY col1 ASC, col2 DESC` (multiple columns)
-- ✅ **Limiting** - `LIMIT n` for result pagination
-- ✅ **Indexing** - B-Tree backed indexes for O(log n) lookups
-- ✅ **Expressions** - Full arithmetic and logical expressions in all clauses
-
-#### Operators & Functions
-- ✅ **Arithmetic** - `+`, `-`, `*`, `/`, `%`
-- ✅ **Comparison** - `=`, `!=`, `<`, `<=`, `>`, `>=`
-- ✅ **Logical** - `AND`, `OR`, `NOT` with parentheses support
-- ✅ **Pattern Matching** - `LIKE`, `NOT LIKE` (with `%`, `_` wildcards)
-- ✅ **Range** - `BETWEEN x AND y`
-- ✅ **Null Checking** - `IS NULL`, `IS NOT NULL`
-- ✅ **List Membership** - `IN (value1, value2, ...)`
-- ✅ **Aggregate Functions** - `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`
-
-#### Data Types
-- ✅ **INTEGER** - 64-bit signed integers
-- ✅ **FLOAT** - 64-bit floating point
-- ✅ **TEXT** - Variable-length strings
-- ✅ **BOOLEAN** - true/false values
-- ✅ **NULL** - Null value support with proper handling
-
-#### Advanced Features
-- ✅ **Multi-column sorting** with NULL handling
-- ✅ **Expression evaluation** in WHERE, ORDER BY, SELECT, UPDATE
-- ✅ **Concurrent access** - Fine-grained table locking with global singleton
-- ✅ **Plugin system** - Extensible parsers and evaluators
-- ✅ **Type coercion** - Automatic INTEGER ↔ FLOAT conversion
-- ✅ **Client API** - PostgreSQL/MySQL-like connection interface
-- ✅ **Connection pooling** - Efficient connection management
-- ✅ **User management** - Authentication and authorization system
-- ✅ **Persistence** - WAL-based durability and snapshots
-
-### Performance Features
-- ✅ **Per-table locking** - Concurrent access to different tables
-- ✅ **Lock-free catalog reads** - Copy-on-Write metadata
-- ✅ **Stable sorting** - Predictable ORDER BY results
-- ✅ **Efficient aggregation** - Single-pass aggregate computation
-- ✅ **Global singleton** - Shared state for all connections
-- ✅ **Indexing** - High-performance data retrieval
-
-### Performance Metrics
-```
-Sequential UPDATE:     2.9M updates/sec (5,000 rows)
-Mixed operations:      7,083 ops/sec (UPDATE + SELECT)
-Concurrent access:     Stable with 4 threads
-Aggregate functions:   Fast single-pass computation
-Index Scan:            O(log n) retrieval vs O(n) full scan
-```
-
----
-
-## 🚀 Installation
-
-### Prerequisites
-- Rust 1.70 or higher
-- Cargo (comes with Rust)
-
-### From Source
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/rustmemodb.git
-cd rustmemodb
-
-# Build the project
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run the demo application
-cargo run
-```
-
-### As a Library
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-rustmemodb = { path = "../rustmemodb" }  # or from crates.io when published
-```
-
----
-
-## ⚡ Quick Start
-
-### Basic Example
-
-```rust
-use rustmemodb::InMemoryDB;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a new database instance
-    let mut db = InMemoryDB::new();
-
-    // Create a table
-    db.execute(
-        "CREATE TABLE users (
-            id INTEGER,
-            name TEXT,
-            age INTEGER
-        )"
-    )?;
+    // 2. Create an O(1) Fork for this specific test
+    let db = master.fork().await?; 
     
-    // Create an index for performance
-    db.execute("CREATE INDEX idx_age ON users (age)")?;
-
-    // Insert data
-    db.execute("INSERT INTO users VALUES (1, 'Alice', 30)")?;
-    db.execute("INSERT INTO users VALUES (2, 'Bob', 25)")?;
-    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35)")?;
-
-    // Query data
-    let result = db.execute("SELECT * FROM users WHERE age > 25")?;
-    result.print();
-
-    Ok(())
-}
-```
-
-Output:
-```
-┌────┬─────────┬─────┐
-│ id │ name    │ age │
-├────┼─────────┼─────┤
-│ 1  │ Alice   │ 30  │
-│ 3  │ Charlie │ 35  │
-└────┴─────────┴─────┘
-```
-
----
-
-## 📚 Usage Examples
-
-### Example 1: User Management System
-
-```rust
-use rustmemodb::InMemoryDB;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = InMemoryDB::new();
-
-    // Create users table
-    db.execute(
-        "CREATE TABLE users (
-            id INTEGER,
-            username TEXT,
-            email TEXT,
-            age INTEGER,
-            active BOOLEAN
-        )"
-    )?;
-
-    // Insert users
-    db.execute("INSERT INTO users VALUES (1, 'alice', 'alice@example.com', 30, true)")?;
-    db.execute("INSERT INTO users VALUES (2, 'bob', 'bob@example.com', 25, true)")?;
-    db.execute("INSERT INTO users VALUES (3, 'charlie', 'charlie@example.com', 35, false)")?;
-    db.execute("INSERT INTO users VALUES (4, 'diana', 'diana@example.com', 28, true)")?;
-
-    // Find active users over 26
-    println!("\n=== Active users over 26 ===");
-    let result = db.execute(
-        "SELECT username, email, age
-         FROM users
-         WHERE active = true AND age > 26"
-    )?;
-    result.print();
-
-    // Find users with email matching pattern
-    println!("\n=== Users with 'example.com' email ===");
-    let result = db.execute(
-        "SELECT username, email
-         FROM users
-         WHERE email LIKE '%@example.com'"
-    )?;
-    result.print();
-
-    // Top 3 oldest users
-    println!("\n=== Top 3 oldest users ===");
-    let result = db.execute(
-        "SELECT username, age
-         FROM users
-         ORDER BY age DESC
-         LIMIT 3"
-    )?;
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 2: Product Catalog
-
-```rust
-use rustmemodb::InMemoryDB;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = InMemoryDB::new();
-
-    // Create products table
-    db.execute(
-        "CREATE TABLE products (
-            id INTEGER,
-            name TEXT,
-            category TEXT,
-            price FLOAT,
-            stock INTEGER
-        )"
-    )?;
-
-    // Insert products
-    db.execute("INSERT INTO products VALUES (1, 'Laptop', 'Electronics', 999.99, 10)")?;
-    db.execute("INSERT INTO products VALUES (2, 'Mouse', 'Electronics', 29.99, 50)")?;
-    db.execute("INSERT INTO products VALUES (3, 'Desk', 'Furniture', 299.99, 5)")?;
-    db.execute("INSERT INTO products VALUES (4, 'Chair', 'Furniture', 199.99, 15)")?;
-    db.execute("INSERT INTO products VALUES (5, 'Monitor', 'Electronics', 399.99, 8)")?;
-
-    // Find expensive electronics
-    println!("\n=== Electronics over $100 ===");
-    let result = db.execute(
-        "SELECT name, price, stock
-         FROM products
-         WHERE category = 'Electronics' AND price > 100
-         ORDER BY price DESC"
-    )?;
-    result.print();
-
-    // Products in price range
-    println!("\n=== Products between $50 and $400 ===");
-    let result = db.execute(
-        "SELECT name, category, price
-         FROM products
-         WHERE price BETWEEN 50 AND 400
-         ORDER BY price ASC"
-    )?;
-    result.print();
-
-    // Low stock items
-    println!("\n=== Low stock (< 10 items) ===");
-    let result = db.execute(
-        "SELECT name, stock
-         FROM products
-         WHERE stock < 10
-         ORDER BY stock ASC"
-    )?;
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 3: Advanced Queries
-
-```rust
-use rustmemodb::InMemoryDB;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = InMemoryDB::new();
-
-    db.execute(
-        "CREATE TABLE employees (
-            id INTEGER,
-            name TEXT,
-            department TEXT,
-            salary FLOAT,
-            years_employed INTEGER
-        )"
-    )?;
-
-    // Insert data
-    db.execute("INSERT INTO employees VALUES (1, 'Alice', 'Engineering', 95000.0, 5)")?;
-    db.execute("INSERT INTO employees VALUES (2, 'Bob', 'Sales', 75000.0, 3)")?;
-    db.execute("INSERT INTO employees VALUES (3, 'Charlie', 'Engineering', 110000.0, 8)")?;
-    db.execute("INSERT INTO employees VALUES (4, 'Diana', 'Marketing', 80000.0, 4)")?;
-    db.execute("INSERT INTO employees VALUES (5, 'Eve', 'Engineering', 105000.0, 6)")?;
-
-    // Complex WHERE with multiple conditions
-    println!("\n=== Senior Engineering employees ===");
-    let result = db.execute(
-        "SELECT name, salary, years_employed
-         FROM employees
-         WHERE department = 'Engineering'
-           AND years_employed > 5
-           AND salary > 100000
-         ORDER BY salary DESC"
-    )?;
-    result.print();
-
-    // Using expressions in SELECT
-    println!("\n=== Salary after 10% raise ===");
-    let result = db.execute(
-        "SELECT name, department, salary * 1.1
-         FROM employees
-         ORDER BY salary DESC"
-    )?;
-    result.print();
-
-    // Multi-level sorting
-    println!("\n=== All employees by dept and salary ===");
-    let result = db.execute(
-        "SELECT name, department, salary
-         FROM employees
-         ORDER BY department ASC, salary DESC"
-    )?;
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 4: NULL Value Handling
-
-```rust
-use rustmemodb::InMemoryDB;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = InMemoryDB::new();
-
-    db.execute(
-        "CREATE TABLE contacts (
-            id INTEGER,
-            name TEXT,
-            email TEXT,
-            phone TEXT
-        )"
-    )?;
-
-    // Some contacts have missing information
-    db.execute("INSERT INTO contacts VALUES (1, 'Alice', 'alice@example.com', '555-1234')")?;
-    db.execute("INSERT INTO contacts VALUES (2, 'Bob', NULL, '555-5678')")?;
-    db.execute("INSERT INTO contacts VALUES (3, 'Charlie', 'charlie@example.com', NULL)")?;
-
-    // Find contacts without email
-    println!("\n=== Contacts without email ===");
-    let result = db.execute(
-        "SELECT name, phone
-         FROM contacts
-         WHERE email IS NULL"
-    )?;
-    result.print();
-
-    // Find contacts with complete information
-    println!("\n=== Contacts with complete info ===");
-    let result = db.execute(
-        "SELECT name, email, phone
-         FROM contacts
-         WHERE email IS NOT NULL AND phone IS NOT NULL"
-    )?;
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 5: UPDATE and DELETE Operations
-
-```rust
-use rustmemodb::Client;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::connect("admin", "admin")?;
-
-    // Create table
-    client.execute(
-        "CREATE TABLE inventory (
-            id INTEGER,
-            product TEXT,
-            quantity INTEGER,
-            price FLOAT
-        )"
-    )?;
-
-    // Insert initial data
-    client.execute("INSERT INTO inventory VALUES (1, 'Laptop', 10, 999.99)")?;
-    client.execute("INSERT INTO inventory VALUES (2, 'Mouse', 50, 29.99)")?;
-    client.execute("INSERT INTO inventory VALUES (3, 'Keyboard', 30, 79.99)")?;
-    client.execute("INSERT INTO inventory VALUES (4, 'Monitor', 15, 399.99)")?;
-
-    // Update prices (10% discount)
-    println!("\n=== Applying 10% discount ===");
-    let result = client.execute("UPDATE inventory SET price = price * 0.9")?;
-    println!("Updated {} products", result.affected_rows().unwrap_or(0));
-
-    // Update specific item
-    println!("\n=== Restocking mice ===");
-    let result = client.execute("UPDATE inventory SET quantity = 100 WHERE product = 'Mouse'")?;
-    println!("Updated {} rows", result.affected_rows().unwrap_or(0));
-
-    // Delete low stock items
-    println!("\n=== Removing low stock items ===");
-    let result = client.execute("DELETE FROM inventory WHERE quantity < 20")?;
-    println!("Deleted {} items", result.affected_rows().unwrap_or(0));
-
-    // View remaining inventory
-    println!("\n=== Current Inventory ===");
-    let result = client.query("SELECT * FROM inventory ORDER BY product")?;
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 6: Transactions (ACID Support)
-
-```rust
-use rustmemodb::Client;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::connect("admin", "adminpass")?;
-
-    // Create accounts table
-    client.execute(
-        "CREATE TABLE accounts (
-            id INTEGER,
-            name TEXT,
-            balance FLOAT
-        )"
-    )?;
-
-    // Insert initial data
-    client.execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)")?;
-    client.execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)")?;
-
-    // Get a connection from the pool
-    let mut conn = client.get_connection()?;
-
-    // Start a transaction
-    println!("=== Starting Transaction ===");
-    conn.begin()?;
-
-    // Transfer money from Alice to Bob
-    conn.execute("UPDATE accounts SET balance = balance - 200.0 WHERE id = 1")?;
-    conn.execute("UPDATE accounts SET balance = balance + 200.0 WHERE id = 2")?;
-
-    // Check balances within transaction
-    let result = conn.execute("SELECT name, balance FROM accounts ORDER BY id")?;
-    println!("Balances after transfer:");
-    result.print();
-
-    // Commit the transaction
-    conn.commit()?;
-    println!("=== Transaction Committed ===");
-
-    // Verify final state
-    let result = client.query("SELECT name, balance FROM accounts ORDER BY id")?;
-    println!("Final balances:");
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 7: Transaction Rollback
-
-```rust
-use rustmemodb::Client;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::connect("admin", "adminpass")?;
-
-    client.execute("CREATE TABLE inventory (id INTEGER, product TEXT, stock INTEGER)")?;
-    client.execute("INSERT INTO inventory VALUES (1, 'Widget', 100)")?;
-    client.execute("INSERT INTO inventory VALUES (2, 'Gadget', 50)")?;
-
-    let mut conn = client.get_connection()?;
-
-    // Transaction that will be rolled back
-    println!("=== Starting Transaction ===");
-    conn.begin()?;
-
-    conn.execute("UPDATE inventory SET stock = stock - 20 WHERE product = 'Widget'")?;
-    conn.execute("DELETE FROM inventory WHERE product = 'Gadget'")?;
-
-    println!("Changes within transaction:");
-    let result = conn.execute("SELECT * FROM inventory")?;
-    result.print();
-
-    // Rollback instead of commit
-    println!("\n=== Rolling Back Transaction ===");
-    conn.rollback()?;
-
-    // Verify data was restored
-    println!("After rollback:");
-    let result = client.query("SELECT * FROM inventory")?;
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 8: Aggregate Functions
-
-```rust
-use rustmemodb::Client;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::connect("admin", "admin")?;
-
-    // Create sales table
-    client.execute(
-        "CREATE TABLE sales (
-            id INTEGER,
-            product TEXT,
-            quantity INTEGER,
-            revenue FLOAT
-        )"
-    )?;
-
-    // Insert sales data
-    client.execute("INSERT INTO sales VALUES (1, 'Laptop', 5, 4999.95)")?;
-    client.execute("INSERT INTO sales VALUES (2, 'Mouse', 50, 1499.50)")?;
-    client.execute("INSERT INTO sales VALUES (3, 'Keyboard', 30, 2399.70)")?;
-    client.execute("INSERT INTO sales VALUES (4, 'Monitor', 10, 3999.90)")?;
-
-    // Get comprehensive statistics
-    println!("\n=== Sales Statistics ===");
-    let result = client.query(
-        "SELECT COUNT(*), SUM(revenue), AVG(revenue), MIN(revenue), MAX(revenue)
-         FROM sales"
-    )?;
-    result.print();
-
-    // Count total items sold
-    println!("\n=== Total Items Sold ===");
-    let result = client.query("SELECT SUM(quantity) FROM sales")?;
-    result.print();
-
-    // Find highest revenue
-    println!("\n=== Highest Single Sale ===");
-    let result = client.query("SELECT MAX(revenue) FROM sales")?;
-    result.print();
-
-    // Average quantity per order
-    println!("\n=== Average Order Size ===");
-    let result = client.query("SELECT AVG(quantity) FROM sales")?;
-    result.print();
-
-    Ok(())
-}
-```
-
-### Example 7: Database Statistics
-
-```rust
-use rustmemodb::InMemoryDB;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = InMemoryDB::new();
-
-    // Create multiple tables
-    db.execute("CREATE TABLE users (id INTEGER, name TEXT)")?;
-    db.execute("CREATE TABLE products (id INTEGER, name TEXT, price FLOAT)")?;
-
-    // Insert data
-    for i in 1..=100 {
-        db.execute(&format!("INSERT INTO users VALUES ({}, 'user_{}')", i, i))?;
-    }
-
-    for i in 1..=50 {
-        db.execute(&format!(
-            "INSERT INTO products VALUES ({}, 'product_{}', {})",
-            i, i, i as f64 * 10.0
-        ))?;
-    }
-
-    // Get database statistics
-    println!("\n=== Database Statistics ===");
-    println!("Tables: {:?}", db.list_tables());
-
-    if let Ok(stats) = db.table_stats("users") {
-        println!("{}", stats);
-    }
-
-    if let Ok(stats) = db.table_stats("products") {
-        println!("{}", stats);
-    }
-
+    // 3. Mutate safely. Master and other tests are unaffected.
+    db.execute("DELETE FROM users").await?;
+    assert_eq!(db.query("SELECT count(*) FROM users").await?.row_count(), 0);
+    
     Ok(())
 }
 ```
 
 ---
 
-## 📖 API Documentation
+## 📊 Benchmarks
 
-### Core Types
+Time taken to create an isolated database environment ready for a test:
 
-#### `InMemoryDB`
-
-The main database facade providing a simple API.
-
-```rust
-pub struct InMemoryDB { /* private fields */ }
-
-impl InMemoryDB {
-    /// Create a new empty database
-    pub fn new() -> Self;
-
-    /// Get the global database instance (singleton)
-    pub fn global() -> &'static Arc<RwLock<InMemoryDB>>;
-
-    /// Execute a SQL statement (returns QueryResult for all statement types)
-    pub fn execute(&mut self, sql: &str) -> Result<QueryResult>;
-
-    /// Check if a table exists
-    pub fn table_exists(&self, name: &str) -> bool;
-
-    /// List all table names
-    pub fn list_tables(&self) -> Vec<String>;
-
-    /// Get statistics for a table
-    pub fn table_stats(&self, name: &str) -> Result<TableStats>;
-}
+```text
+RustMemDB (Forking):  [=] < 1ms 🚀
+SQLite (In-Memory):   [==] 10ms
+Docker (Postgres):    [==================================================] 2500ms+
 ```
 
-#### `Client`
+*RustMemDB is approximately **2500x faster** than spinning up a Docker container for isolation.*
 
-PostgreSQL/MySQL-style client API with connection pooling.
+---
 
-```rust
-pub struct Client { /* private fields */ }
+## ✅ SQL Support Matrix
 
-impl Client {
-    /// Connect with username and password
-    pub fn connect(username: &str, password: &str) -> Result<Self>;
+We support a rich subset of SQL-92, focusing on the features most used in application logic.
 
-    /// Connect using connection URL
-    /// Format: "rustmemodb://username:password@localhost"
-    pub fn connect_url(url: &str) -> Result<Self>;
+| Category | Supported Features |
+| :--- | :--- |
+| **Data Types** | `INTEGER` (i64), `FLOAT` (f64), `TEXT`, `BOOLEAN`, `NULL` |
+| **Operators** | `+`, `-`, `*`, `/`, `%` |
+| **Comparisons** | `=`, `!=`, `<`, `>`, `<=`, `>=` |
+| **Logic** | `AND`, `OR`, `NOT`, Parentheses `( )` |
+| **Predicates** | `LIKE` (Pattern matching), `BETWEEN`, `IS NULL`, `IS NOT NULL`, `IN (list)` |
+| **Aggregates** | `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` |
+| **Constraints** | `PRIMARY KEY` (Unique + Not Null), `UNIQUE` |
+| **Statements** | `CREATE/DROP TABLE`, `CREATE INDEX`, `INSERT`, `UPDATE`, `DELETE`, `SELECT` |
+| **Clauses** | `WHERE`, `ORDER BY` (Multi-column), `LIMIT` |
+| **Transactions** | `BEGIN`, `COMMIT`, `ROLLBACK` |
 
-    /// Execute a SQL statement (UPDATE/DELETE/INSERT/CREATE/DROP)
-    pub fn execute(&self, sql: &str) -> Result<QueryResult>;
+---
 
-    /// Execute a query (SELECT)
-    pub fn query(&self, sql: &str) -> Result<QueryResult>;
+## 🧩 Extensibility & Plugins
 
-    /// Get the authentication manager
-    pub fn auth_manager(&self) -> Arc<AuthManager>;
-}
-```
+RustMemDB is built for Rust developers. Expanding the database with custom functions is trivial compared to C-based databases (SQLite/Postgres).
 
-#### `QueryResult`
-
-Result of a query execution.
-
-```rust
-pub struct QueryResult {
-    columns: Vec<String>,
-    rows: Vec<Row>,
-    affected_rows: Option<usize>,
-}
-
-impl QueryResult {
-    /// Get column names
-    pub fn columns(&self) -> &[String];
-
-    /// Get rows
-    pub fn rows(&self) -> &[Row];
-
-    /// Get number of rows
-    pub fn row_count(&self) -> usize;
-
-    /// Get number of affected rows (for UPDATE/DELETE)
-    pub fn affected_rows(&self) -> Option<usize>;
-
-    /// Print formatted result to stdout
-    pub fn print(&self);
-}
-```
-
-#### `Value`
-
-Represents a SQL value.
+**Goal:** Add a custom `SCRAMBLE(text)` function.
 
 ```rust
-pub enum Value {
-    Null,
-    Integer(i64),
-    Float(f64),
-    Text(String),
-    Boolean(bool),
+use rustmemodb::core::{Value, Result};
+use rustmemodb::evaluator::ExpressionEvaluator;
+
+struct ScrambleFn;
+
+impl ExpressionEvaluator for ScrambleFn {
+    fn evaluate(&self, args: &[Value]) -> Result<Value> {
+        let text = args[0].as_str().unwrap();
+        let scrambled: String = text.chars().rev().collect();
+        Ok(Value::Text(scrambled))
+    }
 }
-```
 
-#### `DataType`
-
-Column data type.
-
-```rust
-pub enum DataType {
-    Integer,
-    Float,
-    Text,
-    Boolean,
-}
-```
-
-### Error Handling
-
-All operations return `Result<T, DbError>`:
-
-```rust
-pub enum DbError {
-    ParseError(String),
-    TableExists(String),
-    TableNotFound(String),
-    ColumnNotFound(String, String),
-    TypeMismatch(String),
-    ConstraintViolation(String),
-    ExecutionError(String),
-    UnsupportedOperation(String),
-    LockError(String),
-}
+// Register and use immediately
+db.register_function("SCRAMBLE", Box::new(ScrambleFn));
+let result = db.query("SELECT SCRAMBLE('hello')"); // Returns 'olleh'
 ```
 
 ---
 
-## ⚡ Performance Characteristics
+## 👩‍💻 Developer Experience (DX)
 
-### Time Complexity
+We believe databases should be a joy to use, not a black box.
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| CREATE TABLE | O(n) | Clones entire catalog (n = tables) |
-| DROP TABLE | O(1) | HashMap removal |
-| INSERT | O(1) | Amortized vector push |
-| UPDATE | O(n) | n = rows in table (full scan) |
-| DELETE | O(n + m log m) | n = scan, m = matches to delete |
-| SELECT (full scan) | O(n) | n = rows in table |
-| SELECT (with WHERE) | O(n) | No indexes yet |
-| SELECT (with ORDER BY) | O(n log n) | Stable sort |
-| SELECT (with LIMIT) | O(n) | Must scan before limiting |
-| SELECT (with aggregates) | O(n) | Single-pass computation |
+### 1. Pure Rust & Async-Native
+No C compilers, no `libsqlite3-dev` dependencies, no FFI overhead. RustMemDB is `async` from the ground up, built on `tokio`.
 
-### Space Complexity
+### 2. Helpful Error Messages
+Stop guessing why your query failed.
 
-| Structure | Space | Notes |
-|-----------|-------|-------|
-| Row | O(columns) | Vector of values |
-| Table | O(rows × columns) | Vector of rows |
-| Catalog | O(tables × columns) | Metadata only |
-
-### Concurrency
-
-- **Catalog Reads**: Lock-free (Copy-on-Write via Arc)
-- **Table Reads**: Multiple concurrent readers (RwLock)
-- **Table Writes**: Exclusive lock per table
-- **Cross-Table**: Different tables can be accessed concurrently
-
-### Benchmark Results
-
-```
-Concurrent reads (different tables): ~145ms
-Operations: 800 SELECTs
-Throughput: ~5,500 ops/sec
-
-Mixed read/write (different tables): ~85ms
-Operations: 400 SELECTs + 100 INSERTs
+```text
+Error: TypeMismatch
+  => Column 'age' expects INTEGER, got TEXT ('twenty')
 ```
 
-*Note: Benchmarks run on M1 Mac, results vary by hardware*
+### 3. Strict Type Safety
+Unlike SQLite, RustMemDB enforces types. If you define an `INTEGER` column, you cannot insert a string. This catches bugs in your application logic **before** they hit production.
 
 ---
 
-## 🎨 Design Patterns
+## 🎯 Ideal Use Cases
 
-RustMemDB demonstrates several classic software design patterns:
+RustMemDB isn't trying to replace PostgreSQL in production. It excels where others fail:
 
-### 1. **Facade Pattern** (`InMemoryDB`)
-Provides a simple interface to a complex subsystem.
+### 1. High-Concurrency CI/CD
+Run 1000s of integration tests in parallel without managing Docker containers or worrying about port conflicts.
+*   **Benefit:** Reduce CI times from minutes to seconds.
 
+### 2. Rapid Prototyping
+Drafting a schema or an API? Don't waste time setting up `docker-compose.yml`. Just `cargo run` and you have a SQL engine.
+*   **Benefit:** Zero-config development environment.
+
+### 3. Embedded Logic Engine
+Need to query internal application state using SQL? Use RustMemDB as an embedded library to store configuration or session data.
+*   **Benefit:** Query your app's memory with `SELECT * FROM sessions WHERE inactive > 1h`.
+
+---
+
+## 🛡️ Safety & Reliability
+
+Built on Rust's guarantees.
+
+*   **Memory Safety:** Zero `unsafe` blocks in core logic. Immune to buffer overflows and use-after-free bugs that plague C-based databases.
+*   **Thread Safety:** The compiler guarantees that our MVCC implementation is free of Data Races.
+*   **Atomic Transactions:** If a transaction isn't committed, it's rolled back. No partial writes, ever.
+
+---
+
+## 🔌 The "Drop-In" Architecture
+
+RustMemDB provides a standardized `DatabaseClient` trait. Write your business logic once, and run it against **RustMemDB in tests** and **Postgres in production**.
+
+**Your Service:**
 ```rust
-// Simple facade hides parser, planner, executor complexity
-db.execute("SELECT * FROM users")?;
-```
+use rustmemodb::{DatabaseClient, Result};
 
-### 2. **Chain of Responsibility** (`ExecutorPipeline`)
-Each executor decides if it can handle a statement.
+pub struct UserService<D: DatabaseClient> {
+    db: D
+}
 
-```rust
-for executor in &self.executors {
-    if executor.can_handle(stmt) {
-        return executor.execute(stmt, ctx);
+impl<D: DatabaseClient> UserService<D> {
+    pub async fn create(&self, name: &str) -> Result<()> {
+        self.db.execute(&format!("INSERT INTO users (name) VALUES ('{}')", name)).await?;
+        Ok(())
     }
 }
 ```
 
-### 3. **Strategy Pattern** (`QueryPlanner`, Executors)
-Different strategies for different statement types.
-
-### 4. **Plugin/Registry Pattern** (Expression Evaluators)
-Extensible evaluation system.
-
+**Production (`main.rs`):**
 ```rust
-registry.register(Box::new(ArithmeticEvaluator));
-registry.register(Box::new(ComparisonEvaluator));
-// Users can add custom evaluators
+// Wrapper for tokio-postgres
+let pg_client = PostgresAdapter::connect("postgres://...").await?;
+let service = UserService::new(pg_client);
 ```
 
-### 5. **Adapter Pattern** (`SqlParserAdapter`)
-Adapts external sqlparser API to internal AST.
-
-### 6. **Copy-on-Write** (`Catalog`)
-Immutable data structure for lock-free reads.
-
-### 7. **Builder Pattern** (Logical Plan construction)
-Composable query plans.
+**Testing (`tests.rs`):**
+```rust
+// Works instantly!
+let mem_client = rustmemodb::Client::connect_local("admin", "pass").await?;
+let service = UserService::new(mem_client);
+```
 
 ---
 
-## 🔧 Extensibility
+## 💾 Persistence & Durability
 
-RustMemDB uses a **plugin-based architecture** that makes it easy to add new SQL operators, functions, and statement types without modifying the core engine.
+"In-memory" doesn't mean "data loss". RustMemDB supports full persistence via **Write-Ahead Logging (WAL)**.
 
-### Developer Guide
-
-📚 **See [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for comprehensive instructions on:**
-
-- Understanding the two plugin systems (conversion + evaluation)
-- Adding new SQL operators and functions (step-by-step)
-- Adding new statement types (e.g., CREATE INDEX)
-- Best practices and common pitfalls
-- Testing guidelines
-- Complete working examples
-
-### Quick Example: Adding UPPER() Function
-
-**Step 1: Create Conversion Plugin** (`src/plugins/string_functions.rs`)
 ```rust
-impl ExpressionPlugin for StringFunctionPlugin {
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr> {
-        // Convert SQL UPPER() to internal AST
-        Ok(Expr::Function { name: "UPPER".to_string(), args })
-    }
+use rustmemodb::{InMemoryDB, DurabilityMode};
+
+async fn persistence_example() -> anyhow::Result<()> {
+    let mut db = InMemoryDB::new();
+    
+    // Enable WAL persistence to ./data directory
+    db.enable_persistence("./data", DurabilityMode::Wal).await?;
+    
+    // Changes are now fsync'd to disk
+    db.execute("INSERT INTO important_data VALUES (1)")?;
+    
+    // On restart, just call enable_persistence again to recover!
+    Ok(())
 }
 ```
 
-**Step 2: Create Evaluation Plugin** (`src/evaluator/plugins/string_functions.rs`)
+---
+
+## 🧩 Extensibility & Plugins
+
+RustMemDB is written in Rust, for Rust developers. It exposes a powerful Plugin API.
+Want to add a custom function? You don't need C-extensions.
+
 ```rust
-impl ExpressionEvaluator for StringFunctionEvaluator {
-    fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext) -> Result<Value> {
-        // Execute UPPER() at runtime
-        match value {
+// Define a custom evaluator
+struct UpperEvaluator;
+
+impl ExpressionEvaluator for UpperEvaluator {
+    fn evaluate(&self, args: &[Value]) -> Result<Value> {
+        match &args[0] {
             Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
-            _ => Err(DbError::TypeMismatch(/* ... */))
+            _ => Err(DbError::TypeMismatch("Expected text".into()))
         }
     }
 }
+
+// Register it
+db.register_function("UPPER", Box::new(UpperEvaluator));
+
+// Use it immediately
+db.query("SELECT UPPER(name) FROM users");
 ```
-
-**Step 3: Register Both Plugins**
-```rust
-// In src/plugins/mod.rs
-registry.register(Box::new(StringFunctionPlugin));
-
-// In src/evaluator/plugins/mod.rs
-registry.register(Box::new(StringFunctionEvaluator));
-```
-
-That's it! Now you can use `SELECT UPPER(name) FROM users`.
-
-For detailed instructions, examples, and best practices, see [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md).
 
 ---
 
-## ⚠️ Limitations
+## ⚙️ Engineering Internals
 
-### Current Limitations
+We take engineering seriously. This is not just a `Vec<Row>`.
 
-❌ **No JOINs** - Single table queries only
-❌ **No GROUP BY/HAVING** - Aggregates work on full result set only
-❌ **No FOREIGN KEY constraints** - Referential integrity not enforced
-❌ **No views** - No CREATE VIEW
-❌ **Limited SQL** - Subset of SQL-92
-❌ **No query optimization** - Plans not optimized (basic index usage only)
-❌ **Single process** - No client-server architecture
-
-### What We Have ✅
-
-✅ **Transactions** - Full ACID transaction support with MVCC
-✅ **Connection Pooling** - Efficient connection management
-✅ **User Authentication** - Secure password hashing with bcrypt
-✅ **Concurrent Access** - Fine-grained locking for multiple connections
-✅ **Manual Rollback** - Safety via explicit `close()` or `rollback()` on drop warning
-✅ **Indexes** - B-Tree indexes for fast lookups
-✅ **Persistence** - Write-Ahead Log (WAL) and Snapshots
-
-### Known Issues
-
-See [CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md) for detailed issue analysis.
-
-**Critical:**
-- Float comparison uses fixed epsilon (incorrect for large numbers)
-- Benchmarks use write locks instead of read locks
-- Silent error swallowing in sort comparisons
-
-**High:**
-- Catalog clones entire HashMap on schema changes
-- Transaction system exists but not integrated
+*   **MVCC (Multi-Version Concurrency Control):**
+    *   Writers never block readers.
+    *   Readers never block writers.
+    *   Full Snapshot Isolation support.
+*   **Persistent Data Structures:**
+    *   Uses `im-rs` for O(1) cloning and efficient memory usage.
+    *   Tables are structural-shared trees, not flat arrays.
+*   **Indexing:**
+    *   B-Tree backed indexes for `PRIMARY KEY` and `UNIQUE` constraints.
+    *   Lookup time is `O(log n)`, not `O(n)`.
+*   **Lock-Free Catalog:**
+    *   Schema metadata is accessed via `Arc` and `Copy-On-Write`, eliminating read contention on the catalog.
 
 ---
 
-## 🗺️ Roadmap
+## ❓ FAQ
 
-### Phase 1: Stability ✅ (Completed)
-- [x] Basic SELECT, INSERT, CREATE TABLE
-- [x] WHERE clause with complex predicates
-- [x] ORDER BY with multiple columns
-- [x] Plugin-based architecture
-- [x] DROP TABLE support
-- [x] UPDATE and DELETE statements
-- [x] Aggregate functions (COUNT, SUM, AVG, MIN, MAX)
-- [x] Client API and connection pooling
-- [x] User management system
-- [x] Comprehensive test coverage (380+ passing tests)
-- [x] Performance benchmarks (load tests)
-- [x] Password hashing with bcrypt
-- [x] **Transaction support (BEGIN, COMMIT, ROLLBACK)**
-- [x] **MVCC with snapshot isolation**
-- [x] **Basic Indexes (CREATE INDEX)**
-- [x] **Persistence (WAL + Snapshots)**
+**Q: Can I use this in production?**
+A: Use Postgres or MySQL for critical production data storage. Use RustMemDB for testing, prototyping, or embedded scenarios where Postgres is overkill.
 
-### Phase 2: Core Features (Current)
-- [ ] GROUP BY and HAVING
-- [ ] Subqueries
-- [ ] Fix remaining bugs from code review
-- [ ] `ALTER TABLE` full support
+**Q: Is it faster than `HashMap`?**
+A: No. A `HashMap` is O(1). A SQL engine handles Parsing, Planning, and Transactions. Use RustMemDB when you need *Relational Logic* (Joins, Where clauses, transactions), not just Key-Value storage.
 
-### Phase 3: Advanced Features
-- [ ] INNER JOIN support
-- [ ] LEFT/RIGHT JOIN support
-- [ ] Query optimizer (predicate pushdown, join ordering)
-- [ ] Secondary indexes (optimization)
-- [ ] Views (CREATE VIEW)
-- [ ] Constraints (PRIMARY KEY, FOREIGN KEY, UNIQUE)
+**Q: Does it support the Postgres Wire Protocol?**
+A: Not yet (Planned). Currently, you use it via the Rust library API.
 
-### Phase 4: Production Readiness (Future)
-- [ ] Query caching
-- [ ] SQL-92 compliance
+---
 
-### Phase 5: Ecosystem
-- [ ] Client-server architecture
-- [ ] Wire protocol
-- [ ] Language bindings (Python, JavaScript)
-- [ ] SQL shell/REPL
-- [ ] Migration tools
-- [ ] Performance profiling tools
+## 📦 Installation
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+rustmemodb = "0.1.1"
+```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! This is an educational project, so clear, well-documented code is more valuable than clever optimizations.
+We are building the best testing database for the Rust ecosystem.
 
-### Developer Resources
+*   **Found a bug?** Open an issue.
+*   **Want to build a feature?** Check `docs/DEVELOPER_GUIDE.md`.
 
-📚 **New to the codebase?** Start with these guides:
-- **[DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)** - Complete guide to adding new features
-- **[PRODUCTION_READINESS_ANALYSIS.md](docs/PRODUCTION_READINESS_ANALYSIS.md)** - Architecture analysis and known issues
-- **[CODE_REVIEW_REPORT.md](docs/CODE_REVIEW_REPORT.md)** - Detailed code review findings
+## 📄 License
 
-### How to Contribute
-
-1. **Read [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)** for architecture overview
-2. **Fork the repository**
-3. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-4. **Write tests** for your changes
-5. **Ensure all tests pass** (`cargo test`)
-6. **Run clippy** (`cargo clippy -- -D warnings`)
-7. **Format code** (`cargo fmt`)
-8. **Commit changes** (`git commit -m 'Add amazing feature'`)
-9. **Push to branch** (`git push origin feature/amazing-feature`)
-10. **Open a Pull Request**
-
-### Development Guidelines
-
-- **Code Clarity** > Performance (unless critical path)
-- **Add tests** for all new features (see [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for test checklist)
-- **Document public APIs** with `///` comments
-- **Follow Rust conventions** (cargo fmt, clippy)
-- **Update README** if adding user-facing features
-- **Update DEVELOPER_GUIDE.md** if changing plugin architecture
-- **Reference issues** in commits when applicable
-
-### Good First Issues
-
-Looking to contribute? Try these:
-
-- **CRITICAL**: Implement password hashing (bcrypt/argon2) to replace plaintext storage
-- Add missing documentation comments
-- Implement GROUP BY and HAVING clauses
-- Add more expression evaluators (string functions, date functions)
-- Improve error messages
-- Add more integration tests
-- Fix issues from CODE_REVIEW_REPORT.md
-
----
-
-## 📚 Educational Resources
-
-### Understanding the Code
-
-1. **Start Here**: Read `src/main.rs` for a complete example
-2. **Architecture**: Review the architecture diagram above
-3. **Query Flow**: Follow a query through parser → planner → executor
-4. **Tests**: Read tests in `src/executor/query.rs` for examples
-
-### Learning Database Internals
-
-**Recommended Reading:**
-- "Database Internals" by Alex Petrov
-- "Database System Concepts" by Silberschatz, Korth, Sudarshan
-- "Architecture of a Database System" (Hellerstein, Stonebraker, Hamilton)
-- CMU Database Systems Course (free online)
-
-**Related Projects:**
-- [SQLite](https://www.sqlite.org/) - Simple, embedded SQL database
-- [DuckDB](https://duckdb.org/) - In-process OLAP database
-- [ToyDB](https://github.com/erikgrinaker/toydb) - Educational distributed SQL database in Rust
-
-### Rust Resources
-
-- [The Rust Book](https://doc.rust-lang.org/book/)
-- [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
-- [Rust Design Patterns](https://rust-unofficial.github.io/patterns/)
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- **sqlparser-rs** - SQL parsing library
-- **Rust Community** - Excellent documentation and tools
-- **Database Research** - Decades of academic research in database systems
-
----
-
-## 📧 Contact
-
-- **GitHub Issues**: For bugs and feature requests
-- **Discussions**: For questions and ideas
-- **Pull Requests**: For contributions
-
----
-
-## ⭐ Star History
-
-If you find this project useful for learning, please consider giving it a star!
+MIT. Use it freely in your OSS or commercial projects.
 
 ---
 

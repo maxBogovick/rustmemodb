@@ -1,3 +1,4 @@
+use llm_utl::api::Scan;
 use crate::core::Result;
 use crate::facade::InMemoryDB;
 
@@ -13,6 +14,14 @@ mod executor;
 mod expression;
 mod plugins;
 mod evaluator;
+
+fn main2() {
+    Scan::current_dir()
+        .remove_comments()
+        .remove_doc_comments()
+        .allow_only(vec!("**/*.rs"))
+        .run().unwrap();
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {

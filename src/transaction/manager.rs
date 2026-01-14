@@ -199,6 +199,30 @@ impl TransactionManager {
             duration: txn.duration(),
         }))
     }
+
+    /// Fork the transaction manager
+    /// Creates a new manager that inherits the history (aborted transactions) but has a clean active state.
+    /// Active transactions in the parent are treated as aborted in the child to prevent uncommitted data leakage.
+    pub async fn fork(&self) -> Self {
+        let active_parent = self.active_ids.read().await;
+        let aborted_parent = self.aborted_ids.read().await;
+        let next_id = *self.next_transaction_id.read().await;
+
+        // In the fork, any transaction that was active in the parent is effectively "lost" (connection broken).
+        // We must mark them as aborted so their partial writes are ignored.
+        let mut new_aborted = (**aborted_parent).clone();
+        for active_id in (**active_parent).iter() {
+            new_aborted.insert(*active_id);
+        }
+
+        Self {
+            transactions: Arc::new(RwLock::new(HashMap::new())), // No active transactions in fork
+            active_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
+            aborted_ids: Arc::new(RwLock::new(Arc::new(new_aborted))),
+            global_version: Arc::new(RwLock::new(*self.global_version.read().await)),
+            next_transaction_id: Arc::new(RwLock::new(next_id)),
+        }
+    }
 }
 
 pub struct TransactionInfo {

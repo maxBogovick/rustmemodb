@@ -62,12 +62,17 @@ impl PooledConnection {
 }
 
 impl ConnectionPool {
-    /// Create a new connection pool
+    /// Create a new connection pool using the global database instance
     pub async fn new(config: ConnectionConfig) -> Result<Self> {
+        let db = Arc::clone(InMemoryDB::global());
+        Self::new_with_db(config, db).await
+    }
+
+    /// Create a new connection pool with a specific database instance
+    pub async fn new_with_db(config: ConnectionConfig, db: Arc<RwLock<InMemoryDB>>) -> Result<Self> {
         config.validate()
             .map_err(DbError::ExecutionError)?;
 
-        let db = Arc::clone(InMemoryDB::global());
         let available = Arc::new(Mutex::new(VecDeque::new()));
         let total_connections = Arc::new(Mutex::new(0));
         let next_id = Arc::new(Mutex::new(1));
@@ -84,6 +89,14 @@ impl ConnectionPool {
         pool.ensure_min_connections().await?;
 
         Ok(pool)
+    }
+
+    /// Create a new connection pool with an isolated database instance
+    ///
+    /// Useful for testing to ensure tests don't interfere with each other.
+    pub async fn new_isolated(config: ConnectionConfig) -> Result<Self> {
+        let db = Arc::new(RwLock::new(InMemoryDB::new()));
+        Self::new_with_db(config, db).await
     }
 
     /// Create a connection pool with custom authentication manager
@@ -211,6 +224,14 @@ impl ConnectionPool {
     /// Get the authentication manager
     pub fn auth_manager(&self) -> &Arc<AuthManager> {
         AuthManager::global()
+    }
+
+    /// Fork the connection pool (and the underlying database)
+    pub async fn fork(&self) -> Result<Self> {
+        let db = self.db.read().await;
+        let new_db = db.fork().await?;
+        
+        Self::new_with_db(self.config.clone(), Arc::new(RwLock::new(new_db))).await
     }
 }
 
