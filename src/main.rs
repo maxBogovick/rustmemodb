@@ -15,6 +15,7 @@ mod expression;
 mod plugins;
 mod evaluator;
 
+#[allow(dead_code)]
 fn main2() {
     Scan::current_dir()
         .remove_comments()
