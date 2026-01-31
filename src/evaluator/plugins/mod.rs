@@ -6,3 +6,4 @@ pub mod between;
 pub mod is_null;
 pub mod order_by;
 pub mod boolean;
+pub mod subquery;

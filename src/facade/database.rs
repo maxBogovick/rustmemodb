@@ -137,6 +137,9 @@ impl InMemoryDB {
                 if col.unique {
                     column = column.unique();
                 }
+                if let Some(ref fk) = col.references {
+                    column = column.references(fk.table.clone(), fk.column.clone());
+                }
                 column
             })
             .collect();
@@ -330,7 +333,6 @@ impl InMemoryDB {
         if let Some(tables) = tables {
             self.storage.restore_tables(tables).await?;
             self.rebuild_catalog().await?;
-            println!("Database recovered from persistence");
         }
 
         Ok(())

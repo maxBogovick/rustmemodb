@@ -365,6 +365,9 @@ impl JsonStorageAdapter {
             }
             crate::core::Value::Text(s) => JsonValue::String(s.clone()),
             crate::core::Value::Boolean(b) => JsonValue::Bool(*b),
+            crate::core::Value::Timestamp(t) => JsonValue::String(t.to_rfc3339()),
+            crate::core::Value::Date(d) => JsonValue::String(d.format("%Y-%m-%d").to_string()),
+            crate::core::Value::Uuid(u) => JsonValue::String(u.to_string()),
         }
     }
 }

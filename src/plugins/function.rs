@@ -1,4 +1,4 @@
-use super::{ExpressionPlugin, ExpressionConverter};
+use super::{ExpressionPlugin, ExpressionConverter, QueryConverter};
 use crate::core::Result;
 use crate::parser::ast::Expr;
 use sqlparser::ast as sql_ast;
@@ -14,7 +14,7 @@ impl ExpressionPlugin for FunctionPlugin {
         matches!(expr, sql_ast::Expr::Function(_))
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr> {
+    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
         match expr {
             sql_ast::Expr::Function(func) => {
                 let name = func.name.to_string().to_uppercase();
@@ -26,7 +26,7 @@ impl ExpressionPlugin for FunctionPlugin {
                         .map(|arg| {
                             match arg {
                                 sql_ast::FunctionArg::Unnamed(sql_ast::FunctionArgExpr::Expr(e)) => {
-                                    converter.convert(e)
+                                    converter.convert(e, query_converter)
                                 }
                                 sql_ast::FunctionArg::Unnamed(sql_ast::FunctionArgExpr::Wildcard) => {
                                     // For COUNT(*), AVG(*), etc.

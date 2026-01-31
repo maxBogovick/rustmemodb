@@ -1,9 +1,15 @@
 pub mod plugins;
 
 use crate::core::{Result, Row, Schema, Value};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, QueryStmt};
 
 use async_trait::async_trait;
+
+/// Trait for executing subqueries
+#[async_trait]
+pub trait SubqueryHandler: Send + Sync {
+    async fn execute(&self, query: &QueryStmt) -> Result<Vec<Row>>;
+}
 
 /// Trait для оценки выражений
 #[async_trait]
@@ -22,11 +28,13 @@ pub trait ExpressionEvaluator: Send + Sync {
 pub struct EvaluationContext<'a> {
     /// Реестр evaluators
     registry: &'a EvaluatorRegistry,
+    /// Обработчик подзапросов
+    pub subquery_handler: Option<&'a dyn SubqueryHandler>,
 }
 
 impl<'a> EvaluationContext<'a> {
-    pub fn new(registry: &'a EvaluatorRegistry) -> Self {
-        Self { registry }
+    pub fn new(registry: &'a EvaluatorRegistry, subquery_handler: Option<&'a dyn SubqueryHandler>) -> Self {
+        Self { registry, subquery_handler }
     }
 
     /// Вычислить выражение через подходящий evaluator
@@ -83,7 +91,6 @@ impl EvaluatorRegistry {
     }
 
     pub fn register(&mut self, evaluator: Box<dyn ExpressionEvaluator>) {
-        println!("🧮 Registered evaluator: {}", evaluator.name());
         self.evaluators.push(evaluator);
     }
 
@@ -94,6 +101,7 @@ impl EvaluatorRegistry {
         let mut registry = Self::new();
 
         // Автоматически регистрируем все evaluators
+        registry.register(Box::new(subquery::SubqueryEvaluator)); // Register subquery evaluator
         registry.register(Box::new(boolean::BooleanEvaluator));
         registry.register(Box::new(comparison::ComparisonEvaluator));
         registry.register(Box::new(arithmetic::ArithmeticEvaluator));

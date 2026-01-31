@@ -1,4 +1,4 @@
-use super::{ExpressionConverter, ExpressionPlugin};
+use super::{ExpressionConverter, ExpressionPlugin, QueryConverter};
 use crate::core::Result;
 use crate::parser::ast::Expr;
 use sqlparser::ast as sql_ast;
@@ -17,7 +17,7 @@ impl ExpressionPlugin for LikePlugin {
         )
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr> {
+    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
         match expr {
             sql_ast::Expr::Like {
                 negated,
@@ -33,8 +33,8 @@ impl ExpressionPlugin for LikePlugin {
                 }
 
                 Ok(Expr::Like {
-                    expr: Box::new(converter.convert(*expr)?),
-                    pattern: Box::new(converter.convert(*pattern)?),
+                    expr: Box::new(converter.convert(*expr, query_converter)?),
+                    pattern: Box::new(converter.convert(*pattern, query_converter)?),
                     negated,
                     case_insensitive: false,
                 })
@@ -54,8 +54,8 @@ impl ExpressionPlugin for LikePlugin {
                 }
 
                 Ok(Expr::Like {
-                    expr: Box::new(converter.convert(*expr)?),
-                    pattern: Box::new(converter.convert(*pattern)?),
+                    expr: Box::new(converter.convert(*expr, query_converter)?),
+                    pattern: Box::new(converter.convert(*pattern, query_converter)?),
                     negated,
                     case_insensitive: true,
                 })

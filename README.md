@@ -45,6 +45,25 @@ Integration testing in Rust usually forces a painful tradeoff:
 
 It is a pure Rust SQL engine with **MVCC** and **Snapshot Isolation** that introduces a paradigm shift in testing: **Instant Database Forking**.
 
+---
+
+## 🎮 Interactive CLI
+
+RustMemDB now includes a modern, terminal-based user interface (TUI) powered by `ratatui`.
+
+**Run it instantly:**
+```bash
+cargo run
+```
+
+**Features:**
+*   🖥️ **Split View**: SQL Editor + Result Table side-by-side.
+*   📝 **Smart Editor**: Multi-line input with **Autocomplete** (Keywords & Tables).
+*   📜 **Scrollable History**: View past query results.
+*   ⌨️ **Shortcuts**: `Ctrl+E` to execute, `Tab` for autocomplete, `Esc` to quit.
+
+---
+
 ### ⚔️ Comparison Matrix
 
 | Feature | RustMemDB 🦀 | SQLite :floppy_disk: | Docker (Postgres) 🐳 |
@@ -122,15 +141,15 @@ We support a rich subset of SQL-92, focusing on the features most used in applic
 
 | Category | Supported Features |
 | :--- | :--- |
-| **Data Types** | `INTEGER` (i64), `FLOAT` (f64), `TEXT`, `BOOLEAN`, `NULL` |
+| **Data Types** | `INTEGER`, `FLOAT`, `TEXT`, `BOOLEAN`, `NULL`, **`TIMESTAMP`**, **`DATE`**, **`UUID`** |
 | **Operators** | `+`, `-`, `*`, `/`, `%` |
 | **Comparisons** | `=`, `!=`, `<`, `>`, `<=`, `>=` |
 | **Logic** | `AND`, `OR`, `NOT`, Parentheses `( )` |
-| **Predicates** | `LIKE` (Pattern matching), `BETWEEN`, `IS NULL`, `IS NOT NULL`, `IN (list)` |
+| **Predicates** | `LIKE` (Pattern matching), `BETWEEN`, `IS NULL`, `IS NOT NULL`, `IN (list/subquery)`, `EXISTS` |
 | **Aggregates** | `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` |
-| **Constraints** | `PRIMARY KEY` (Unique + Not Null), `UNIQUE` |
+| **Constraints** | `PRIMARY KEY`, `UNIQUE`, **`FOREIGN KEY (REFERENCES)`** |
 | **Statements** | `CREATE/DROP TABLE`, `CREATE INDEX`, `INSERT`, `UPDATE`, `DELETE`, `SELECT` |
-| **Clauses** | `WHERE`, `ORDER BY` (Multi-column), `LIMIT` |
+| **Clauses** | `WHERE`, `ORDER BY` (Multi-column), `LIMIT`, **`FROM (subquery)`** |
 | **Transactions** | `BEGIN`, `COMMIT`, `ROLLBACK` |
 
 ---

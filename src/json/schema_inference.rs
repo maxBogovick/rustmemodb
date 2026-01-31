@@ -174,6 +174,9 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
     let mut has_float = false;
     let mut has_integer = false;
     let mut has_boolean = false;
+    let mut has_timestamp = false;
+    let mut has_date = false;
+    let mut has_uuid = false;
 
     for dtype in types {
         match dtype {
@@ -181,6 +184,9 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
             DataType::Float => has_float = true,
             DataType::Integer => has_integer = true,
             DataType::Boolean => has_boolean = true,
+            DataType::Timestamp => has_timestamp = true,
+            DataType::Date => has_date = true,
+            DataType::Uuid => has_uuid = true,
         }
     }
 
@@ -189,10 +195,28 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
         return DataType::Text;
     }
 
-    // If mixed boolean with numeric types, use TEXT
+    // Check for mixed types that force TEXT
+    // Boolean + Numeric -> Text
     if has_boolean && (has_integer || has_float) {
         return DataType::Text;
     }
+    
+    // Complex types mixed with anything else -> Text
+    // (Unless we want to support coercion like Date -> Timestamp, but simplicity first)
+    if has_timestamp && (has_integer || has_float || has_boolean || has_date || has_uuid) {
+        return DataType::Text;
+    }
+    if has_date && (has_integer || has_float || has_boolean || has_timestamp || has_uuid) {
+        return DataType::Text;
+    }
+    if has_uuid && (has_integer || has_float || has_boolean || has_timestamp || has_date) {
+        return DataType::Text;
+    }
+
+    // Single complex types
+    if has_timestamp { return DataType::Timestamp; }
+    if has_date { return DataType::Date; }
+    if has_uuid { return DataType::Uuid; }
 
     // Numeric type hierarchy
     if has_float {

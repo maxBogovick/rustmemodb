@@ -121,6 +121,36 @@ impl ComparisonEvaluator {
                 _ => unreachable!(),
             }),
 
+            (Value::Timestamp(a), Value::Timestamp(b)) => Ok(match op {
+                BinaryOp::Eq => a == b,
+                BinaryOp::NotEq => a != b,
+                BinaryOp::Lt => a < b,
+                BinaryOp::LtEq => a <= b,
+                BinaryOp::Gt => a > b,
+                BinaryOp::GtEq => a >= b,
+                _ => unreachable!(),
+            }),
+
+            (Value::Date(a), Value::Date(b)) => Ok(match op {
+                BinaryOp::Eq => a == b,
+                BinaryOp::NotEq => a != b,
+                BinaryOp::Lt => a < b,
+                BinaryOp::LtEq => a <= b,
+                BinaryOp::Gt => a > b,
+                BinaryOp::GtEq => a >= b,
+                _ => unreachable!(),
+            }),
+
+            (Value::Uuid(a), Value::Uuid(b)) => Ok(match op {
+                BinaryOp::Eq => a == b,
+                BinaryOp::NotEq => a != b,
+                BinaryOp::Lt => a < b,
+                BinaryOp::LtEq => a <= b,
+                BinaryOp::Gt => a > b,
+                BinaryOp::GtEq => a >= b,
+                _ => unreachable!(),
+            }),
+
             _ => Err(DbError::TypeMismatch(format!(
                 "Cannot compare {} with {}",
                 left.type_name(),

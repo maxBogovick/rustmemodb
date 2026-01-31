@@ -1,4 +1,4 @@
-use super::{ExpressionPlugin, ExpressionConverter};
+use super::{ExpressionPlugin, ExpressionConverter, QueryConverter};
 use crate::core::Result;
 use crate::parser::ast::Expr;
 use sqlparser::ast as sql_ast;
@@ -16,7 +16,7 @@ impl ExpressionPlugin for InListPlugin {
         matches!(expr, sql_ast::Expr::InList { .. })
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr> {
+    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
         match expr {
             sql_ast::Expr::InList {
                 expr,
@@ -25,11 +25,11 @@ impl ExpressionPlugin for InListPlugin {
             } => {
                 let converted_list = list
                     .into_iter()
-                    .map(|e| converter.convert(e))
+                    .map(|e| converter.convert(e, query_converter))
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(Expr::In {
-                    expr: Box::new(converter.convert(*expr)?),
+                    expr: Box::new(converter.convert(*expr, query_converter)?),
                     list: converted_list,
                     negated,
                 })

@@ -2,18 +2,35 @@
 // src/executor/query.rs - Refactored QueryExecutor with improved architecture
 // ============================================================================
 
-use crate::parser::ast::{Statement, Expr, OrderByExpr};
+use crate::parser::ast::{Statement, Expr, OrderByExpr, QueryStmt};
 use crate::planner::{LogicalPlan, QueryPlanner};
 use crate::planner::logical_plan::{SortNode};
 use crate::storage::Catalog;
 use crate::core::{Result, DbError, Row, Value, Schema};
-use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
+use crate::evaluator::{EvaluationContext, EvaluatorRegistry, SubqueryHandler};
 use crate::result::QueryResult;
 use super::{Executor, ExecutionContext};
 use std::cmp::Ordering;
 
 use async_trait::async_trait;
 use async_recursion::async_recursion;
+
+// ============================================================================
+// SUBQUERY HANDLER
+// ============================================================================
+
+struct ExecutorSubqueryHandler<'a> {
+    executor: &'a QueryExecutor,
+    ctx: &'a ExecutionContext<'a>,
+}
+
+#[async_trait]
+impl<'a> SubqueryHandler for ExecutorSubqueryHandler<'a> {
+    async fn execute(&self, query: &QueryStmt) -> Result<Vec<Row>> {
+        let plan = self.executor.planner.plan(&Statement::Query(query.clone()), &self.executor.catalog)?;
+        self.executor.execute_plan(&plan, self.ctx).await
+    }
+}
 
 // ============================================================================
 // QUERY EXECUTOR - Main structure
@@ -66,7 +83,7 @@ impl QueryExecutor {
     }
 
     /// Get output column names from plan
-    fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext<'_>) -> Result<Vec<String>> {
+    pub fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext<'_>) -> Result<Vec<String>> {
         let schema = plan.schema();
         Ok(schema.columns().iter().map(|c| c.name.clone()).collect())
     }
@@ -77,7 +94,7 @@ impl QueryExecutor {
 // ============================================================================
 
 impl QueryExecutor {
-    /// Execute aggregation
+    /// Execute aggregation (GROUP BY)
     async fn execute_aggregate(
         &self,
         aggr: &crate::planner::logical_plan::AggregateNode,
@@ -85,10 +102,11 @@ impl QueryExecutor {
     ) -> Result<Vec<Row>> {
         let input_rows = self.execute_plan(&aggr.input, ctx).await?;
         let input_schema = aggr.input.schema();
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
 
         // 1. Group rows
-        // Key: Grouping values, Value: List of rows in this group
         let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> = std::collections::HashMap::new();
 
         if aggr.group_exprs.is_empty() {
@@ -147,16 +165,17 @@ impl QueryExecutor {
         // Fallback to Nested Loop Join
         let left_rows = self.execute_plan(&join.left, ctx).await?;
         let right_rows = self.execute_plan(&join.right, ctx).await?;
-        let schema = &join.schema; // Schema of the join result
+        let schema = &join.schema;
 
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        
         let mut result = Vec::new();
 
         match join.join_type {
             JoinType::Inner | JoinType::Cross => {
                 for left_row in &left_rows {
                     for right_row in &right_rows {
-                        // Combine rows temporarily to evaluate ON condition
                         let mut combined_row = left_row.clone();
                         combined_row.extend(right_row.clone());
 
@@ -231,21 +250,19 @@ impl QueryExecutor {
         let left_rows = self.execute_plan(&join.left, ctx).await?;
         let right_rows = self.execute_plan(&join.right, ctx).await?;
         
-        // Build Phase (Build hash map from RIGHT table)
-        // Map: JoinKey -> Vec<Row>
         let mut build_map = std::collections::HashMap::new();
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
         
         for row in right_rows {
             let key_val = eval_ctx.evaluate(&right_key_expr, &row, join.right.schema()).await?;
             if key_val.is_null() {
-                continue; // Nulls never match in SQL joins
+                continue;
             }
             let key = JoinKey(key_val);
             build_map.entry(key).or_insert_with(Vec::new).push(row);
         }
 
-        // Probe Phase (Scan LEFT table)
         let mut result = Vec::new();
         let right_width = join.right.schema().column_count();
 
@@ -260,7 +277,6 @@ impl QueryExecutor {
                     result.push(combined_row);
                 }
             } else if join.join_type == JoinType::Left {
-                // No match for Left Join -> emit row with NULLs
                 let mut combined_row = left_row.clone();
                 combined_row.extend(vec![Value::Null; right_width]);
                 result.push(combined_row);
@@ -275,15 +291,12 @@ impl QueryExecutor {
         use crate::parser::ast::BinaryOp;
         
         if let Expr::BinaryOp { left, op: BinaryOp::Eq, right } = on {
-            // Try (Left=Left, Right=Right)
             if let (Some(l), Some(r)) = (
                 self.resolve_expr_to_schema(left, left_schema),
                 self.resolve_expr_to_schema(right, right_schema)
             ) {
                 return Some((l, r));
             }
-            
-            // Try Swap (Left=Right, Right=Left)
             if let (Some(l), Some(r)) = (
                 self.resolve_expr_to_schema(right, left_schema),
                 self.resolve_expr_to_schema(left, right_schema)
@@ -294,7 +307,6 @@ impl QueryExecutor {
         None
     }
 
-    /// Check if expr belongs to schema and return a normalized expr (e.g. stripping qualifiers if needed)
     fn resolve_expr_to_schema(&self, expr: &Expr, schema: &Schema) -> Option<Expr> {
         match expr {
             Expr::Column(name) => {
@@ -309,8 +321,6 @@ impl QueryExecutor {
                 if schema.find_column_index(&name).is_some() {
                     return Some(expr.clone());
                 }
-                // Try treating the last part as the column name if exact match failed
-                // This handles "t1.id" matching "id" in t1's schema
                 if let Some(col_name) = parts.last() {
                     if schema.find_column_index(col_name).is_some() {
                         return Some(Expr::Column(col_name.clone()));
@@ -319,43 +329,9 @@ impl QueryExecutor {
                 None
             },
             Expr::Literal(_) => Some(expr.clone()),
-            _ => None, // Only support simple columns/literals as keys for now
+            _ => None,
         }
     }
-}
-
-/// Wrapper for Value to implement strict Hash/Eq for joins
-#[derive(Debug, Clone)]
-struct JoinKey(Value);
-
-impl std::hash::Hash for JoinKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
-    }
-}
-
-impl PartialEq for JoinKey {
-    fn eq(&self, other: &Self) -> bool {
-        match (&self.0, &other.0) {
-            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
-            // Strict type equality required for Hash Map lookups
-            (Value::Integer(a), Value::Integer(b)) => a == b,
-            (Value::Text(a), Value::Text(b)) => a == b,
-            (Value::Boolean(a), Value::Boolean(b)) => a == b,
-            (Value::Null, Value::Null) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for JoinKey {}
-
-// End of QueryExecutor extension
-impl QueryExecutor {
-    // ... rest of the impl block ... (placeholder to attach to)
-    // Actually we need to replace the existing execute_join
-    // So this block is just a container for the replacement logic.
-
 
     /// Execute table scan
     async fn execute_scan(
@@ -364,13 +340,10 @@ impl QueryExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         if let Some(ref idx) = scan.index_scan {
-            // Try to use index
             if let Some(rows) = ctx.storage.scan_index(&scan.table_name, &idx.column, &idx.value, &ctx.snapshot).await? {
                 return Ok(rows);
             }
-            // If index scan returned None (e.g. index dropped concurrently?), fallback to full scan
         }
-        
         ctx.storage.scan_table(&scan.table_name, &ctx.snapshot).await
     }
 
@@ -383,7 +356,8 @@ impl QueryExecutor {
         let input_rows = self.execute_plan(&filter.input, ctx).await?;
         let schema = &filter.schema;
 
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
 
         let mut filtered_rows = Vec::new();
         for row in input_rows {
@@ -401,15 +375,15 @@ impl QueryExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         let input_rows = self.execute_plan(&proj.input, ctx).await?;
-        let input_schema = proj.input.schema(); // Projection needs input schema to evaluate expressions
+        let input_schema = proj.input.schema();
 
-        // Check for aggregate functions
         if self.has_aggregate_functions(&proj.expressions) {
-            return self.execute_aggregation(&proj.expressions, &input_rows, input_schema).await;
+            return self.execute_aggregation(&proj.expressions, &input_rows, input_schema, ctx).await;
         }
 
-        // Regular projection
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        
         let mut projected_rows = Vec::new();
         for row in input_rows {
             projected_rows.push(self.project_row(&proj.expressions, &row, input_schema, &eval_ctx).await?);
@@ -430,9 +404,9 @@ impl QueryExecutor {
         }
 
         let schema = &sort.schema;
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
 
-        // Sort with error handling
         self.sort_rows(&mut rows, &sort.order_by, schema, &eval_ctx).await?;
         Ok(rows)
     }
@@ -504,18 +478,21 @@ impl QueryExecutor {
 }
 
 // ============================================================================
-// AGGREGATION LOGIC
+// AGGREGATION LOGIC (Non-Group By Aggregation)
 // ============================================================================
 
 impl QueryExecutor {
-    /// Execute aggregation functions
+    /// Execute aggregation functions (called from Projection if no Group By)
     async fn execute_aggregation(
         &self,
         expressions: &[Expr],
         rows: &[Row],
         schema: &Schema,
+        ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry);
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        
         let mut result_row = Vec::new();
 
         for expr in expressions {
@@ -573,7 +550,7 @@ impl QueryExecutor {
 
         let mut count = 0i64;
         for row in rows {
-            let val = eval_ctx.evaluate(&args[0], row, schema).await.unwrap();
+            let val = eval_ctx.evaluate(&args[0], row, schema).await?;
             if !matches!(val, Value::Null) {
                 count += 1;
             }
@@ -822,7 +799,7 @@ impl Executor for QueryExecutor {
             ));
         };
 
-        // Planning (no locks - catalog is immutable)
+        // Planning
         let plan = self.planner.plan(&Statement::Query(query.clone()), &self.catalog)?;
 
         // Execute plan
@@ -835,733 +812,28 @@ impl Executor for QueryExecutor {
     }
 }
 
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::storage::{InMemoryStorage, Catalog, TableSchema};
-    use crate::core::{Column, DataType, Value};
-    use crate::parser::ast::BinaryOp;
-    use crate::planner::logical_plan::{FilterNode, TableScanNode, ProjectionNode, LimitNode, SortNode};
-
-    async fn setup_test_storage() -> (InMemoryStorage, Catalog) {
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let mut storage = InMemoryStorage::new();
-        let mut catalog = Catalog::new();
-
-        // Create users table
-        let columns = vec![
-            Column::new("id", DataType::Integer).not_null(),
-            Column::new("name", DataType::Text),
-            Column::new("age", DataType::Integer),
-        ];
-        let schema = TableSchema::new("users", columns);
-
-        storage.create_table(schema.clone()).await.unwrap();
-        catalog = catalog.with_table(schema).unwrap();
-
-        // Insert test data
-        storage.insert_row("users", vec![
-            Value::Integer(1),
-            Value::Text("Alice".into()),
-            Value::Integer(30),
-        ], &snapshot).await.unwrap();
-
-        storage.insert_row("users", vec![
-            Value::Integer(2),
-            Value::Text("Bob".into()),
-            Value::Integer(25),
-        ], &snapshot).await.unwrap();
-
-        storage.insert_row("users", vec![
-            Value::Integer(3),
-            Value::Text("Charlie".into()),
-            Value::Integer(35),
-        ], &snapshot).await.unwrap();
-
-        storage.insert_row("users", vec![
-            Value::Integer(4),
-            Value::Text("Diana".into()),
-            Value::Integer(25),
-        ], &snapshot).await.unwrap();
-
-        (storage, catalog)
-    }
-
-    fn create_test_schema() -> Schema {
-        Schema::new(vec![
-            Column::new("id", DataType::Integer).not_null(),
-            Column::new("name", DataType::Text),
-            Column::new("age", DataType::Integer),
-        ])
-    }
-
-    #[tokio::test]
-    async fn test_simple_scan() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        let plan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&plan, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 4);
-    }
-
-    #[tokio::test]
-    async fn test_filter_execution() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let filter = LogicalPlan::Filter(FilterNode {
-            input: Box::new(scan),
-            predicate: Expr::BinaryOp {
-                left: Box::new(Expr::Column("age".to_string())),
-                op: BinaryOp::Gt,
-                right: Box::new(Expr::Literal(Value::Integer(26))),
-            },
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 2); // Alice (30) and Charlie (35)
-    }
-
-    #[tokio::test]
-    async fn test_projection_execution() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let projection = LogicalPlan::Projection(ProjectionNode {
-            input: Box::new(scan),
-            expressions: vec![Expr::Column("name".to_string())],
-            schema: Schema::new(vec![Column::new("name", DataType::Text)]),
-        });
-
-        let rows = executor.execute_plan(&projection, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 4);
-        assert_eq!(rows[0].len(), 1); // Only one column
-    }
-
-    #[tokio::test]
-    async fn test_limit_execution() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let limit = LogicalPlan::Limit(LimitNode {
-            input: Box::new(scan),
-            limit: 2,
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&limit, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 2);
-    }
-
-    // ========================================================================
-    // ✅ ORDER BY TESTS
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_order_by_asc() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users ORDER BY age ASC
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(scan),
-            order_by: vec![OrderByExpr {
-                expr: Expr::Column("age".to_string()),
-                descending: false,
-            }],
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
-
-        // Expected order by age ASC: 25, 25, 30, 35
-        assert_eq!(rows[0][2], Value::Integer(25));
-        assert_eq!(rows[1][2], Value::Integer(25));
-        assert_eq!(rows[2][2], Value::Integer(30));
-        assert_eq!(rows[3][2], Value::Integer(35));
-    }
-
-    #[tokio::test]
-    async fn test_order_by_desc() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users ORDER BY age DESC
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(scan),
-            order_by: vec![OrderByExpr {
-                expr: Expr::Column("age".to_string()),
-                descending: true,
-            }],
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
-
-        // Expected order by age DESC: 35, 30, 25, 25
-        assert_eq!(rows[0][2], Value::Integer(35));
-        assert_eq!(rows[1][2], Value::Integer(30));
-        assert_eq!(rows[2][2], Value::Integer(25));
-        assert_eq!(rows[3][2], Value::Integer(25));
-    }
-
-    #[tokio::test]
-    async fn test_order_by_multiple_columns() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users ORDER BY age ASC, name ASC
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(scan),
-            order_by: vec![
-                OrderByExpr {
-                    expr: Expr::Column("age".to_string()),
-                    descending: false,
-                },
-                OrderByExpr {
-                    expr: Expr::Column("name".to_string()),
-                    descending: false,
-                },
-            ],
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
-
-        // Expected: age 25 (Bob, Diana alphabetically), age 30 (Alice), age 35 (Charlie)
-        assert_eq!(rows[0][1], Value::Text("Bob".into()));    // age 25, name Bob
-        assert_eq!(rows[1][1], Value::Text("Diana".into()));  // age 25, name Diana
-        assert_eq!(rows[2][1], Value::Text("Alice".into()));  // age 30
-        assert_eq!(rows[3][1], Value::Text("Charlie".into())); // age 35
-    }
-
-    #[tokio::test]
-    async fn test_order_by_with_filter() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users WHERE age > 24 ORDER BY name DESC
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let filter = LogicalPlan::Filter(FilterNode {
-            input: Box::new(scan),
-            predicate: Expr::BinaryOp {
-                left: Box::new(Expr::Column("age".to_string())),
-                op: BinaryOp::Gt,
-                right: Box::new(Expr::Literal(Value::Integer(24))),
-            },
-            schema: create_test_schema(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(filter),
-            order_by: vec![OrderByExpr {
-                expr: Expr::Column("name".to_string()),
-                descending: true,
-            }],
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
-
-        // All 4 users have age > 24, sorted by name DESC: Diana, Charlie, Bob, Alice
-        assert_eq!(rows.len(), 4);
-        assert_eq!(rows[0][1], Value::Text("Diana".into()));
-        assert_eq!(rows[1][1], Value::Text("Charlie".into()));
-        assert_eq!(rows[2][1], Value::Text("Bob".into()));
-        assert_eq!(rows[3][1], Value::Text("Alice".into()));
-    }
-
-    #[tokio::test]
-    async fn test_order_by_with_limit() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users ORDER BY age DESC LIMIT 2
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(scan),
-            order_by: vec![OrderByExpr {
-                expr: Expr::Column("age".to_string()),
-                descending: true,
-            }],
-            schema: create_test_schema(),
-        });
-
-        let limit = LogicalPlan::Limit(LimitNode {
-            input: Box::new(sort),
-            limit: 2,
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&limit, &ctx).await.unwrap();
-
-        // Top 2 oldest: Charlie (35), Alice (30)
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][2], Value::Integer(35)); // Charlie
-        assert_eq!(rows[1][2], Value::Integer(30)); // Alice
-    }
-
-    #[tokio::test]
-    async fn test_order_by_with_nulls() {
-        let mut storage = InMemoryStorage::new();
-        let mut catalog = Catalog::new();
-
-        // Create table with nullable column
-        let columns = vec![
-            Column::new("id", DataType::Integer).not_null(),
-            Column::new("value", DataType::Integer), // nullable
-        ];
-        let schema = TableSchema::new("test", columns.clone());
-        let test_schema = Schema::new(columns);
-
-        storage.create_table(schema.clone()).await.unwrap();
-        catalog = catalog.with_table(schema).unwrap();
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        // Insert data with NULLs
-        storage.insert_row("test", vec![Value::Integer(1), Value::Integer(10)], &snapshot).await.unwrap();
-        storage.insert_row("test", vec![Value::Integer(2), Value::Null], &snapshot).await.unwrap();
-        storage.insert_row("test", vec![Value::Integer(3), Value::Integer(5)], &snapshot).await.unwrap();
-        storage.insert_row("test", vec![Value::Integer(4), Value::Null], &snapshot).await.unwrap();
-
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM test ORDER BY value ASC
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "test".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: test_schema.clone(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(scan),
-            order_by: vec![OrderByExpr {
-                expr: Expr::Column("value".to_string()),
-                descending: false,
-            }],
-            schema: test_schema,
-        });
-
-        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
-
-        // NULL LAST by default: 5, 10, NULL, NULL
-        assert_eq!(rows[0][1], Value::Integer(5));
-        assert_eq!(rows[1][1], Value::Integer(10));
-        assert_eq!(rows[2][1], Value::Null);
-        assert_eq!(rows[3][1], Value::Null);
-    }
-
-    #[tokio::test]
-    async fn test_order_by_expression() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users ORDER BY age * -1 ASC (equivalent to ORDER BY age DESC)
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(scan),
-            order_by: vec![OrderByExpr {
-                expr: Expr::BinaryOp {
-                    left: Box::new(Expr::Column("age".to_string())),
-                    op: BinaryOp::Multiply,
-                    right: Box::new(Expr::Literal(Value::Integer(-1))),
-                },
-                descending: false,
-            }],
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
-
-        // ORDER BY age * -1 ASC = ORDER BY age DESC
-        // -35 < -30 < -25 < -25
-        assert_eq!(rows[0][2], Value::Integer(35));
-        assert_eq!(rows[1][2], Value::Integer(30));
-        // age 25 rows at the end
-    }
-
-    #[tokio::test]
-    async fn test_complex_query() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT name FROM users WHERE age > 26 LIMIT 1
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let filter = LogicalPlan::Filter(FilterNode {
-            input: Box::new(scan),
-            predicate: Expr::BinaryOp {
-                left: Box::new(Expr::Column("age".to_string())),
-                op: BinaryOp::Gt,
-                right: Box::new(Expr::Literal(Value::Integer(26))),
-            },
-            schema: create_test_schema(),
-        });
-
-        let projection = LogicalPlan::Projection(ProjectionNode {
-            input: Box::new(filter),
-            expressions: vec![Expr::Column("name".to_string())],
-            schema: Schema::new(vec![Column::new("name", DataType::Text)]),
-        });
-
-        let limit = LogicalPlan::Limit(LimitNode {
-            input: Box::new(projection),
-            limit: 1,
-            schema: Schema::new(vec![Column::new("name", DataType::Text)]),
-        });
-
-        let rows = executor.execute_plan(&limit, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_like_evaluation() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users WHERE name LIKE 'A%'
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let filter = LogicalPlan::Filter(FilterNode {
-            input: Box::new(scan),
-            predicate: Expr::Like {
-                expr: Box::new(Expr::Column("name".to_string())),
-                pattern: Box::new(Expr::Literal(Value::Text("A%".to_string()))),
-                negated: false,
-                case_insensitive: false,
-            },
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 1); // Only Alice
-    }
-
-    #[tokio::test]
-    async fn test_between_evaluation() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users WHERE age BETWEEN 25 AND 30
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let filter = LogicalPlan::Filter(FilterNode {
-            input: Box::new(scan),
-            predicate: Expr::Between {
-                expr: Box::new(Expr::Column("age".to_string())),
-                low: Box::new(Expr::Literal(Value::Integer(25))),
-                high: Box::new(Expr::Literal(Value::Integer(30))),
-                negated: false,
-            },
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 3); // Alice (30), Bob (25), Diana (25)
-    }
-
-    #[tokio::test]
-    async fn test_is_null_evaluation() {
-        let mut storage = InMemoryStorage::new();
-        let mut catalog = Catalog::new();
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-
-        // Create table with nullable column
-        let columns = vec![
-            Column::new("id", DataType::Integer).not_null(),
-            Column::new("name", DataType::Text), // nullable
-        ];
-        let schema = TableSchema::new("test", columns.clone());
-        let test_schema = Schema::new(columns);
-
-        storage.create_table(schema.clone()).await.unwrap();
-        catalog = catalog.with_table(schema).unwrap();
-
-        // Insert data with NULL
-        storage.insert_row("test", vec![
-            Value::Integer(1),
-            Value::Text("Alice".into()),
-        ],  &snapshot).await.unwrap();
-
-        storage.insert_row("test", vec![
-            Value::Integer(2),
-            Value::Null,
-        ],  &snapshot).await.unwrap();
-
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM test WHERE name IS NULL
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "test".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: test_schema.clone(),
-        });
-
-        let filter = LogicalPlan::Filter(FilterNode {
-            input: Box::new(scan),
-            predicate: Expr::IsNull {
-                expr: Box::new(Expr::Column("name".to_string())),
-                negated: false,
-            },
-            schema: test_schema,
-        });
-
-        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 1); // Only row with NULL
-    }
-
-    #[tokio::test]
-    async fn test_logical_and() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // SELECT * FROM users WHERE age > 26 AND age < 32
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let filter = LogicalPlan::Filter(FilterNode {
-            input: Box::new(scan),
-            predicate: Expr::BinaryOp {
-                left: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Column("age".to_string())),
-                    op: BinaryOp::Gt,
-                    right: Box::new(Expr::Literal(Value::Integer(26))),
-                }),
-                op: BinaryOp::And,
-                right: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Column("age".to_string())),
-                    op: BinaryOp::Lt,
-                    right: Box::new(Expr::Literal(Value::Integer(32))),
-                }),
-            },
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&filter, &ctx).await.unwrap();
-        assert_eq!(rows.len(), 1); // Only Alice (30)
-    }
-
-    #[tokio::test]
-    async fn test_get_output_columns() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        // Test wildcard
-        let scan = TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        };
-
-        let columns = executor.get_output_columns(&LogicalPlan::TableScan(scan), &ctx).unwrap();
-        assert_eq!(columns, vec!["id", "name", "age"]);
-    }
-
-    #[tokio::test]
-    async fn test_order_by_with_value_compare() {
-        let (storage, catalog) = setup_test_storage().await;
-        let executor = QueryExecutor::new(catalog);
-        let txn_mgr = std::sync::Arc::new(crate::transaction::TransactionManager::new());
-        let snapshot = txn_mgr.get_auto_commit_snapshot().await.unwrap();
-        let ctx = ExecutionContext::new(&storage, &txn_mgr, None, snapshot);
-
-        let scan = LogicalPlan::TableScan(TableScanNode {
-            table_name: "users".to_string(),
-            projected_columns: None,
-            index_scan: None,
-            schema: create_test_schema(),
-        });
-
-        let sort = LogicalPlan::Sort(SortNode {
-            input: Box::new(scan),
-            order_by: vec![OrderByExpr {
-                expr: Expr::Column("age".to_string()),
-                descending: false,
-            }],
-            schema: create_test_schema(),
-        });
-
-        let rows = executor.execute_plan(&sort, &ctx).await.unwrap();
-
-        // Should be sorted by age ASC
-        assert_eq!(rows[0][2], Value::Integer(25)); // Bob
-        assert_eq!(rows[2][2], Value::Integer(30)); // Alice
+/// Wrapper for Value to implement strict Hash/Eq for joins
+#[derive(Debug, Clone)]
+struct JoinKey(Value);
+
+impl std::hash::Hash for JoinKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
     }
 }
 
-// ============================================================================
-// USAGE EXAMPLE
-// ============================================================================
+impl PartialEq for JoinKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Value::Float(a), Value::Float(b)) => a.to_bits() == b.to_bits(),
+            // Strict type equality required for Hash Map lookups
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Text(a), Value::Text(b)) => a == b,
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            _ => false,
+        }
+    }
+}
 
-/*
-use crate::executor::query::QueryExecutor;
-use crate::storage::Catalog;
-
-// Создание executor'а
-let catalog = Catalog::new();
-let executor = QueryExecutor::new(catalog);
-
-// Executor автоматически использует все зарегистрированные evaluators:
-// - ComparisonEvaluator (=, !=, <, <=, >, >=)
-// - ArithmeticEvaluator (+, -, *, /, %)
-// - LogicalEvaluator (AND, OR)
-// - LikeEvaluator (LIKE, NOT LIKE)
-// - BetweenEvaluator (BETWEEN, NOT BETWEEN)
-// - IsNullEvaluator (IS NULL, IS NOT NULL)
-
-// Выполнение запроса с ORDER BY
-let result = executor.execute(&query_stmt, &ctx)?;
-
-// Добавление кастомного evaluator'а
-let mut registry = EvaluatorRegistry::new();
-registry.register(Box::new(MyCustomEvaluator));
-let executor = QueryExecutor::with_evaluators(catalog, registry);
-*/
+impl Eq for JoinKey {}

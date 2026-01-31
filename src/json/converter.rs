@@ -42,6 +42,27 @@ impl JsonToValueConverter {
             // String
             (JsonValue::String(s), DataType::Text) => Ok(Value::Text(s.clone())),
 
+            // Timestamp
+            (JsonValue::String(s), DataType::Timestamp) => {
+                let dt = chrono::DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| JsonError::TypeMismatch(format!("Invalid Timestamp: {}", e)))?;
+                Ok(Value::Timestamp(dt.with_timezone(&chrono::Utc)))
+            },
+
+            // Date
+            (JsonValue::String(s), DataType::Date) => {
+                let d = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                    .map_err(|e| JsonError::TypeMismatch(format!("Invalid Date: {}", e)))?;
+                Ok(Value::Date(d))
+            },
+
+            // UUID
+            (JsonValue::String(s), DataType::Uuid) => {
+                let u = uuid::Uuid::parse_str(s)
+                    .map_err(|e| JsonError::TypeMismatch(format!("Invalid UUID: {}", e)))?;
+                Ok(Value::Uuid(u))
+            },
+
             // Complex types (Array/Object) → serialize to JSON string
             (JsonValue::Array(_) | JsonValue::Object(_), DataType::Text) => {
                 Ok(Value::Text(json_value.to_string()))
@@ -313,6 +334,9 @@ fn format_value_for_sql(value: &Value) -> String {
         Value::Float(f) => f.to_string(),
         Value::Boolean(b) => b.to_string(),
         Value::Text(s) => format!("'{}'", escape_sql_string(s)),
+        Value::Timestamp(t) => format!("'{}'", t.to_rfc3339()),
+        Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
+        Value::Uuid(u) => format!("'{}'", u),
     }
 }
 

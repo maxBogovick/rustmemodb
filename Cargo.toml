@@ -39,6 +39,17 @@ async-recursion = "1.0"
 im = { version = "15.1", features = ["serde"] }
 llm-utl = "0.1.5"
 
+# Date and Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# CLI dependencies
+ratatui = "0.29.0"
+crossterm = "0.28.1"
+tui-textarea = "0.7.0"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tokio-postgres = "0.7"

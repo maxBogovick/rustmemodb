@@ -1,7 +1,8 @@
-use super::{DbError, Result, DataType, Value};
+use super::{DbError, Result, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::fmt;
 
 pub type Row = Vec<Value>;
 
@@ -13,6 +14,76 @@ pub struct Snapshot {
     pub max_tx_id: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DataType {
+    Integer,
+    Float,
+    Text,
+    Boolean,
+    Timestamp,
+    Date,
+    Uuid,
+}
+
+impl DataType {
+    pub fn is_compatible(&self, value: &Value) -> bool {
+        match (self, value) {
+            (_, Value::Null) => true,
+            (Self::Integer, Value::Integer(_)) => true,
+            (Self::Float, Value::Float(_)) => true,
+            (Self::Float, Value::Integer(_)) => true, // Allow Integer -> Float coercion
+            (Self::Text, Value::Text(_)) => true,
+            (Self::Boolean, Value::Boolean(_)) => true,
+            (Self::Timestamp, Value::Timestamp(_)) => true,
+            (Self::Date, Value::Date(_)) => true,
+            (Self::Uuid, Value::Uuid(_)) => true,
+            // Allow string parsing for complex types
+            (Self::Timestamp, Value::Text(_)) => true,
+            (Self::Date, Value::Text(_)) => true,
+            (Self::Uuid, Value::Text(_)) => true,
+            _ => false,
+        }
+    }
+
+    pub fn can_cast_to(&self, other: &DataType) -> bool {
+        match (self, other) {
+            (a, b) if a == b => true,
+            (Self::Integer, Self::Float) => true,
+            (Self::Integer, Self::Text) => true,
+            (Self::Float, Self::Text) => true,
+            (Self::Boolean, Self::Text) => true,
+            (Self::Timestamp, Self::Text) => true,
+            (Self::Date, Self::Text) => true,
+            (Self::Uuid, Self::Text) => true,
+            (Self::Text, Self::Uuid) => true,
+            (Self::Text, Self::Timestamp) => true,
+            (Self::Text, Self::Date) => true,
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Integer => write!(f, "INTEGER"),
+            Self::Float => write!(f, "FLOAT"),
+            Self::Text => write!(f, "TEXT"),
+            Self::Boolean => write!(f, "BOOLEAN"),
+            Self::Timestamp => write!(f, "TIMESTAMP"),
+            Self::Date => write!(f, "DATE"),
+            Self::Uuid => write!(f, "UUID"),
+        }
+    }
+}
+
+// Foreign Key Definition
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForeignKey {
+    pub table: String,
+    pub column: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Column {
     pub name: String,
@@ -20,6 +91,7 @@ pub struct Column {
     pub nullable: bool,
     pub primary_key: bool,
     pub unique: bool,
+    pub references: Option<ForeignKey>, // New field
 }
 
 impl Column {
@@ -30,6 +102,7 @@ impl Column {
             nullable: true,
             primary_key: false,
             unique: false,
+            references: None,
         }
     }
 
@@ -40,13 +113,21 @@ impl Column {
 
     pub fn primary_key(mut self) -> Self {
         self.primary_key = true;
-        self.nullable = false; // Primary keys imply NOT NULL
-        self.unique = true;    // Primary keys imply UNIQUE
+        self.nullable = false;
+        self.unique = true;
         self
     }
 
     pub fn unique(mut self) -> Self {
         self.unique = true;
+        self
+    }
+
+    pub fn references(mut self, table: impl Into<String>, column: impl Into<String>) -> Self {
+        self.references = Some(ForeignKey {
+            table: table.into(),
+            column: column.into(),
+        });
         self
     }
 
@@ -113,46 +194,24 @@ impl Schema {
         self.find_column_index(name).map(|idx| &self.columns[idx])
     }
 
-        pub fn column_count(&self) -> usize {
-
-            self.columns.len()
-
-        }
-
-    
-
-        pub fn merge(left: &Schema, right: &Schema) -> Self {
-
-            let mut columns = left.columns.clone();
-
-            columns.extend(right.columns.clone());
-
-            Self { columns }
-
-        }
-
-    
-
-        pub fn qualify_columns(&self, table_name: &str) -> Self {
-
-            let columns = self.columns.iter().map(|col| {
-
-                let mut new_col = col.clone();
-
-                if !new_col.name.contains('.') {
-
-                    new_col.name = format!("{}.{}", table_name, col.name);
-
-                }
-
-                new_col
-
-            }).collect();
-
-            Self { columns }
-
-        }
-
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
     }
 
-    
+    pub fn merge(left: &Schema, right: &Schema) -> Self {
+        let mut columns = left.columns.clone();
+        columns.extend(right.columns.clone());
+        Self { columns }
+    }
+
+    pub fn qualify_columns(&self, table_name: &str) -> Self {
+        let columns = self.columns.iter().map(|col| {
+            let mut new_col = col.clone();
+            if !new_col.name.contains('.') {
+                new_col.name = format!("{}.{}", table_name, col.name);
+            }
+            new_col
+        }).collect();
+        Self { columns }
+    }
+}

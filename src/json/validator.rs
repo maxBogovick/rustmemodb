@@ -181,11 +181,14 @@ impl Default for QueryValidator {
 fn extract_table_names(statement: &Statement) -> Vec<String> {
     match statement {
         Statement::Query(query) => {
-            query.from.iter().map(|t| {
-                match &t.relation {
-                    crate::parser::ast::TableFactor::Table { name, .. } => name.clone(),
+            let mut tables = Vec::new();
+            for t in &query.from {
+                extract_table_names_from_factor(&t.relation, &mut tables);
+                for join in &t.joins {
+                    extract_table_names_from_factor(&join.relation, &mut tables);
                 }
-            }).collect()
+            }
+            tables
         }
         Statement::Insert(insert) => {
             vec![insert.table_name.clone()]
@@ -203,6 +206,18 @@ fn extract_table_names(statement: &Statement) -> Vec<String> {
             vec![drop.table_name.clone()]
         }
         _ => vec![],
+    }
+}
+
+fn extract_table_names_from_factor(factor: &crate::parser::ast::TableFactor, tables: &mut Vec<String>) {
+    match factor {
+        crate::parser::ast::TableFactor::Table { name, .. } => {
+            tables.push(name.clone());
+        }
+        crate::parser::ast::TableFactor::Derived { subquery, .. } => {
+            let sub_tables = extract_table_names(&Statement::Query(*subquery.clone()));
+            tables.extend(sub_tables);
+        }
     }
 }
 

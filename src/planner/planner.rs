@@ -276,6 +276,28 @@ impl QueryPlanner {
                     schema: qualified_schema,
                 }))
             }
+            TableFactor::Derived { subquery, alias } => {
+                let plan = self.plan_query(subquery, catalog)?;
+                
+                if let Some(alias_name) = alias {
+                    let input_schema = plan.schema().clone();
+                    let new_schema = input_schema.qualify_columns(alias_name);
+                    
+                    // Create identity projection with new schema names
+                    let expressions: Vec<Expr> = input_schema.columns()
+                        .iter()
+                        .map(|c| Expr::Column(c.name.clone()))
+                        .collect();
+                        
+                    Ok(LogicalPlan::Projection(ProjectionNode {
+                        input: Box::new(plan),
+                        expressions,
+                        schema: new_schema,
+                    }))
+                } else {
+                    Ok(plan)
+                }
+            }
         }
     }
 

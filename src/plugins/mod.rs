@@ -6,11 +6,17 @@ pub mod is_null;
 pub mod like;
 pub mod nested;
 pub mod function;
+pub mod subquery;
 mod boolean;
 
 use crate::core::Result;
 use crate::parser::ast::Expr;
 use sqlparser::ast as sql_ast;
+
+/// Trait for converting subqueries (to avoid circular dependency)
+pub trait QueryConverter {
+    fn convert_query(&self, query: sql_ast::Query) -> Result<crate::parser::ast::QueryStmt>;
+}
 
 /// Трейт для конвертации SQL выражения в наш AST
 pub trait ExpressionPlugin: Send + Sync {
@@ -21,7 +27,7 @@ pub trait ExpressionPlugin: Send + Sync {
     fn can_handle(&self, expr: &sql_ast::Expr) -> bool;
 
     /// Конвертировать SQL выражение в наш Expr
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr>;
+    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr>;
 }
 
 /// Реестр плагинов для выражений
@@ -38,7 +44,6 @@ impl ExpressionPluginRegistry {
 
     /// Зарегистрировать плагин
     pub fn register(&mut self, plugin: Box<dyn ExpressionPlugin>) {
-        println!("📦 Registered expression plugin: {}", plugin.name());
         self.plugins.push(plugin);
     }
 
@@ -47,7 +52,7 @@ impl ExpressionPluginRegistry {
         let mut registry = Self::new();
 
         // Автоматически регистрируем все плагины
-        // Nested должен быть первым, чтобы обрабатывать скобки
+        registry.register(Box::new(subquery::SubqueryPlugin)); // Check subqueries first
         registry.register(Box::new(nested::NestedPlugin));
         registry.register(Box::new(function::FunctionPlugin));
         registry.register(Box::new(like::LikePlugin));
@@ -94,7 +99,7 @@ impl ExpressionConverter {
     }
 
     /// Конвертировать выражение используя плагины
-    pub fn convert(&self, expr: sql_ast::Expr) -> Result<Expr> {
+    pub fn convert(&self, expr: sql_ast::Expr, query_converter: &dyn QueryConverter) -> Result<Expr> {
         // Базовые случаи (всегда обрабатываются напрямую)
         match &expr {
             sql_ast::Expr::Identifier(ident) => {
@@ -107,12 +112,32 @@ impl ExpressionConverter {
             sql_ast::Expr::Value(val) => {
                 return Ok(Expr::Literal(self.convert_value(&val.value)?));
             }
+            sql_ast::Expr::Subquery(query) => {
+                let subquery = query_converter.convert_query(*query.clone())?;
+                return Ok(Expr::Subquery(Box::new(subquery)));
+            }
+            sql_ast::Expr::InSubquery { expr, subquery, negated } => {
+                let left = self.convert(*expr.clone(), query_converter)?;
+                let sub = query_converter.convert_query(*subquery.clone())?;
+                return Ok(Expr::InSubquery {
+                    expr: Box::new(left),
+                    subquery: Box::new(sub),
+                    negated: *negated,
+                });
+            }
+            sql_ast::Expr::Exists { subquery, negated } => {
+                let sub = query_converter.convert_query(*subquery.clone())?;
+                return Ok(Expr::Exists {
+                    subquery: Box::new(sub),
+                    negated: *negated,
+                });
+            }
             _ => {}
         }
 
         // Попытка обработать через плагины
         if let Some(plugin) = self.registry.find_plugin(&expr) {
-            return plugin.convert(expr, self);
+            return plugin.convert(expr, self, query_converter);
         }
 
         // Не найдено подходящего плагина

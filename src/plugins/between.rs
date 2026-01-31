@@ -1,4 +1,4 @@
-use super::{ExpressionPlugin, ExpressionConverter};
+use super::{ExpressionPlugin, ExpressionConverter, QueryConverter};
 use crate::core::Result;
 use crate::parser::ast::Expr;
 use sqlparser::ast as sql_ast;
@@ -14,7 +14,7 @@ impl ExpressionPlugin for BetweenPlugin {
         matches!(expr, sql_ast::Expr::Between { .. })
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr> {
+    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
         match expr {
             sql_ast::Expr::Between {
                 expr,
@@ -22,9 +22,9 @@ impl ExpressionPlugin for BetweenPlugin {
                 low,
                 high,
             } => Ok(Expr::Between {
-                expr: Box::new(converter.convert(*expr)?),
-                low: Box::new(converter.convert(*low)?),
-                high: Box::new(converter.convert(*high)?),
+                expr: Box::new(converter.convert(*expr, query_converter)?),
+                low: Box::new(converter.convert(*low, query_converter)?),
+                high: Box::new(converter.convert(*high, query_converter)?),
                 negated,
             }),
             _ => unreachable!("BetweenPlugin called with non-BETWEEN expression"),

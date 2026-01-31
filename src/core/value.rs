@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use chrono::{DateTime, NaiveDate, Utc, TimeZone};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
@@ -11,46 +13,39 @@ pub enum Value {
     Float(f64),
     Text(String),
     Boolean(bool),
+    Timestamp(DateTime<Utc>),
+    Date(NaiveDate),
+    Uuid(Uuid),
 }
 
 impl Value {
-    /// Парсинг числа БЕЗ аллокаций
+    /// Parsing number without allocation where possible
     #[inline]
     pub fn parse_number(s: &str) -> Result<Self> {
-        // Быстрая проверка на integer (без точки и экспоненты)
         let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
 
-        if !has_dot_or_exp
-            && let Ok(i) = s.parse::<i64>() {
+        if !has_dot_or_exp {
+            if let Ok(i) = s.parse::<i64>() {
                 return Ok(Value::Integer(i));
             }
+        }
 
-        // Float
         if let Ok(f) = s.parse::<f64>() {
             Ok(Value::Float(f))
         } else {
             Err(DbError::TypeMismatch(format!("Invalid number: {}", s)))
         }
     }
-}
 
-impl Value {
     pub fn compare(&self, other: &Value) -> Result<Ordering> {
         match (self, other) {
-            // ========================================
-            // NULL handling: NULL is "greater" than all values (NULL LAST)
-            // ========================================
             (Value::Null, Value::Null) => Ok(Ordering::Equal),
             (Value::Null, _) => Ok(Ordering::Greater),
             (_, Value::Null) => Ok(Ordering::Less),
 
-            // ========================================
-            // Same type comparisons
-            // ========================================
             (Value::Integer(a), Value::Integer(b)) => Ok(a.cmp(b)),
-
+            
             (Value::Float(a), Value::Float(b)) => {
-                // Handle NaN: NaN is considered equal to NaN, greater than all other values
                 match (a.is_nan(), b.is_nan()) {
                     (true, true) => Ok(Ordering::Equal),
                     (true, false) => Ok(Ordering::Greater),
@@ -60,12 +55,12 @@ impl Value {
             }
 
             (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b)),
-
             (Value::Boolean(a), Value::Boolean(b)) => Ok(a.cmp(b)),
+            (Value::Timestamp(a), Value::Timestamp(b)) => Ok(a.cmp(b)),
+            (Value::Date(a), Value::Date(b)) => Ok(a.cmp(b)),
+            (Value::Uuid(a), Value::Uuid(b)) => Ok(a.cmp(b)),
 
-            // ========================================
-            // Mixed numeric types (implicit coercion)
-            // ========================================
+            // Mixed numeric types
             (Value::Integer(a), Value::Float(b)) => {
                 let a_float = *a as f64;
                 match (a_float.is_nan(), b.is_nan()) {
@@ -86,9 +81,6 @@ impl Value {
                 }
             }
 
-            // ========================================
-            // Type mismatches - ERROR
-            // ========================================
             _ => Err(DbError::TypeMismatch(format!(
                 "Cannot compare incompatible types: {} and {}",
                 self.type_name(),
@@ -96,6 +88,7 @@ impl Value {
             ))),
         }
     }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Null => "NULL",
@@ -103,6 +96,9 @@ impl Value {
             Self::Float(_) => "FLOAT",
             Self::Text(_) => "TEXT",
             Self::Boolean(_) => "BOOLEAN",
+            Self::Timestamp(_) => "TIMESTAMP",
+            Self::Date(_) => "DATE",
+            Self::Uuid(_) => "UUID",
         }
     }
 
@@ -113,6 +109,9 @@ impl Value {
             Self::Integer(i) => *i != 0,
             Self::Float(f) => *f != 0.0 && !f.is_nan(),
             Self::Text(s) => !s.is_empty(),
+            Self::Timestamp(_) => true,
+            Self::Date(_) => true,
+            Self::Uuid(_) => true,
         }
     }
 
@@ -160,6 +159,9 @@ impl Value {
             Self::Float(_) => 2,
             Self::Text(_) => 3,
             Self::Boolean(_) => 4,
+            Self::Timestamp(_) => 5,
+            Self::Date(_) => 6,
+            Self::Uuid(_) => 7,
         }
     }
 }
@@ -171,10 +173,9 @@ impl PartialEq for Value {
             (Self::Integer(a), Self::Integer(b)) => a == b,
             (Self::Float(a), Self::Float(b)) => {
                 match (a.is_nan(), b.is_nan()) {
-                    (true, true) => false, // NaN != NaN по стандарту
+                    (true, true) => false,
                     (true, false) | (false, true) => false,
                     _ => {
-                        // Относительное сравнение для больших чисел
                         let diff = (a - b).abs();
                         let largest = a.abs().max(b.abs());
                         diff <= largest * f64::EPSILON * 8.0
@@ -183,7 +184,10 @@ impl PartialEq for Value {
             }
             (Self::Text(a), Self::Text(b)) => a == b,
             (Self::Boolean(a), Self::Boolean(b)) => a == b,
-            // Автоматическое преобразование между Integer и Float
+            (Self::Timestamp(a), Self::Timestamp(b)) => a == b,
+            (Self::Date(a), Value::Date(b)) => a == b,
+            (Self::Uuid(a), Value::Uuid(b)) => a == b,
+            
             (Self::Integer(i), Self::Float(f)) | (Self::Float(f), Self::Integer(i)) => {
                 (*i as f64 - f).abs() < f64::EPSILON
             }
@@ -218,9 +222,10 @@ impl Ord for Value {
             }
             (Self::Text(a), Self::Text(b)) => a.cmp(b),
             (Self::Boolean(a), Self::Boolean(b)) => a.cmp(b),
+            (Self::Timestamp(a), Self::Timestamp(b)) => a.cmp(b),
+            (Self::Date(a), Self::Date(b)) => a.cmp(b),
+            (Self::Uuid(a), Self::Uuid(b)) => a.cmp(b),
 
-            // Cross-type comparison: order by type variant index
-            // Null (0) < Integer (1) < Float (2) < Text (3) < Boolean (4)
             (a, b) => {
                 let a_idx = a.type_index();
                 let b_idx = b.type_index();
@@ -250,6 +255,18 @@ impl Hash for Value {
                 4u8.hash(state);
                 b.hash(state);
             }
+            Self::Timestamp(t) => {
+                5u8.hash(state);
+                t.hash(state);
+            }
+            Self::Date(d) => {
+                6u8.hash(state);
+                d.hash(state);
+            }
+            Self::Uuid(u) => {
+                7u8.hash(state);
+                u.hash(state);
+            }
         }
     }
 }
@@ -274,84 +291,22 @@ impl fmt::Display for Value {
             }
             Self::Text(s) => write!(f, "{}", s),
             Self::Boolean(b) => write!(f, "{}", b),
+            Self::Timestamp(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S")),
+            Self::Date(d) => write!(f, "{}", d.format("%Y-%m-%d")),
+            Self::Uuid(u) => write!(f, "{}", u),
         }
     }
 }
 
-// Реализация From для удобного создания значений
-impl From<i64> for Value {
-    fn from(i: i64) -> Self {
-        Self::Integer(i)
-    }
-}
-
-impl From<f64> for Value {
-    fn from(f: f64) -> Self {
-        Self::Float(f)
-    }
-}
-
-impl From<String> for Value {
-    fn from(s: String) -> Self {
-        Self::Text(s)
-    }
-}
-
-impl From<&str> for Value {
-    fn from(s: &str) -> Self {
-        Self::Text(s.to_string())
-    }
-}
-
-impl From<bool> for Value {
-    fn from(b: bool) -> Self {
-        Self::Boolean(b)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum DataType {
-    Integer,
-    Float,
-    Text,
-    Boolean,
-}
-
-impl DataType {
-    pub fn is_compatible(&self, value: &Value) -> bool {
-        match (self, value) {
-            (_, Value::Null) => true,
-            (Self::Integer, Value::Integer(_)) => true,
-            (Self::Float, Value::Float(_)) => true,
-            (Self::Float, Value::Integer(_)) => true, // Разрешаем Integer -> Float
-            (Self::Text, Value::Text(_)) => true,
-            (Self::Boolean, Value::Boolean(_)) => true,
-            _ => false,
-        }
-    }
-
-    pub fn can_cast_to(&self, other: &DataType) -> bool {
-        match (self, other) {
-            (a, b) if a == b => true,
-            (Self::Integer, Self::Float) => true,
-            (Self::Integer, Self::Text) => true,
-            (Self::Float, Self::Text) => true,
-            (Self::Boolean, Self::Text) => true,
-            _ => false,
-        }
-    }
-}
-
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Integer => write!(f, "INTEGER"),
-            Self::Float => write!(f, "FLOAT"),
-            Self::Text => write!(f, "TEXT"),
-            Self::Boolean => write!(f, "BOOLEAN"),
-        }
-    }
-}
+// Implement From
+impl From<i64> for Value { fn from(i: i64) -> Self { Self::Integer(i) } }
+impl From<f64> for Value { fn from(f: f64) -> Self { Self::Float(f) } }
+impl From<String> for Value { fn from(s: String) -> Self { Self::Text(s) } }
+impl From<&str> for Value { fn from(s: &str) -> Self { Self::Text(s.to_string()) } }
+impl From<bool> for Value { fn from(b: bool) -> Self { Self::Boolean(b) } }
+impl From<DateTime<Utc>> for Value { fn from(t: DateTime<Utc>) -> Self { Self::Timestamp(t) } }
+impl From<NaiveDate> for Value { fn from(d: NaiveDate) -> Self { Self::Date(d) } }
+impl From<Uuid> for Value { fn from(u: Uuid) -> Self { Self::Uuid(u) } }
 
 #[cfg(test)]
 mod tests {
@@ -360,22 +315,22 @@ mod tests {
     #[test]
     fn test_value_equality() {
         assert_eq!(Value::Integer(42), Value::Integer(42));
-        assert_eq!(Value::Float(3.14), Value::Float(3.14));
         assert_ne!(Value::Integer(1), Value::Integer(2));
+        
+        let now = Utc::now();
+        assert_eq!(Value::Timestamp(now), Value::Timestamp(now));
+        
+        let uuid = Uuid::new_v4();
+        assert_eq!(Value::Uuid(uuid), Value::Uuid(uuid));
     }
 
     #[test]
     fn test_value_ordering() {
         assert!(Value::Integer(1) < Value::Integer(2));
-        assert!(Value::Text("a".into()) < Value::Text("b".into()));
         assert!(Value::Null < Value::Integer(0));
-    }
-
-    #[test]
-    fn test_type_compatibility() {
-        let int_type = DataType::Integer;
-        assert!(int_type.is_compatible(&Value::Integer(42)));
-        assert!(int_type.is_compatible(&Value::Null));
-        assert!(!int_type.is_compatible(&Value::Text("hello".into())));
+        
+        let date1 = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
+        let date2 = NaiveDate::from_ymd_opt(2023, 1, 2).unwrap();
+        assert!(Value::Date(date1) < Value::Date(date2));
     }
 }

@@ -1,4 +1,4 @@
-use super::{ExpressionPlugin, ExpressionConverter};
+use super::{ExpressionPlugin, ExpressionConverter, QueryConverter};
 use crate::core::Result;
 use crate::parser::ast::Expr;
 use sqlparser::ast as sql_ast;
@@ -28,12 +28,12 @@ impl ExpressionPlugin for ComparisonPlugin {
         }
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter) -> Result<Expr> {
+    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
         match expr {
             sql_ast::Expr::BinaryOp { left, op, right } => Ok(Expr::BinaryOp {
-                left: Box::new(converter.convert(*left)?),
+                left: Box::new(converter.convert(*left, query_converter)?),
                 op: converter.convert_binary_op(&op)?,
-                right: Box::new(converter.convert(*right)?),
+                right: Box::new(converter.convert(*right, query_converter)?),
             }),
             _ => unreachable!("ComparisonPlugin called with non-comparison expression"),
         }

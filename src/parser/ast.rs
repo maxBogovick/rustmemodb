@@ -1,4 +1,4 @@
-use crate::core::{Value, DataType};
+use crate::core::{Value, DataType, ForeignKey};
 
 /// Root statement type
 #[derive(Debug, Clone)]
@@ -70,6 +70,7 @@ pub struct ColumnDef {
     pub default: Option<Value>,
     pub primary_key: bool,
     pub unique: bool,
+    pub references: Option<ForeignKey>,
 }
 
 /// INSERT statement
@@ -82,7 +83,7 @@ pub struct InsertStmt {
 }
 
 /// SELECT query statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct QueryStmt {
     pub projection: Vec<SelectItem>,
     pub from: Vec<TableWithJoins>,
@@ -93,24 +94,25 @@ pub struct QueryStmt {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableWithJoins {
     pub relation: TableFactor,
     pub joins: Vec<Join>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TableFactor {
     Table { name: String, alias: Option<String> },
+    Derived { subquery: Box<QueryStmt>, alias: Option<String> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Join {
     pub relation: TableFactor,
     pub join_operator: JoinOperator,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum JoinOperator {
     Inner(JoinConstraint),
     LeftOuter(JoinConstraint),
@@ -119,19 +121,19 @@ pub enum JoinOperator {
     CrossJoin,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum JoinConstraint {
     On(Expr),
     None,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SelectItem {
     Wildcard,
     Expr { expr: Expr, alias: Option<String> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OrderByExpr {
     pub expr: Expr,
     pub descending: bool,
@@ -204,6 +206,22 @@ pub enum Expr {
     In {
         expr: Box<Expr>,
         list: Vec<Expr>,
+        negated: bool,
+    },
+
+    /// IN subquery check
+    InSubquery {
+        expr: Box<Expr>,
+        subquery: Box<QueryStmt>,
+        negated: bool,
+    },
+
+    /// Scalar subquery
+    Subquery(Box<QueryStmt>),
+
+    /// EXISTS check
+    Exists {
+        subquery: Box<QueryStmt>,
         negated: bool,
     },
 
@@ -295,6 +313,14 @@ impl fmt::Display for Expr {
                 write!(f, "{} {}IN ({})", expr, if *negated { "NOT " } else { "" }, list_str.join(", "))
 
             }
+
+            Expr::InSubquery { expr, subquery: _, negated } => {
+                write!(f, "{} {}IN (SUBQUERY)", expr, if *negated { "NOT " } else { "" })
+            }
+
+            Expr::Subquery(_) => write!(f, "(SUBQUERY)"),
+
+            Expr::Exists { subquery: _, negated } => write!(f, "{}EXISTS (SUBQUERY)", if *negated { "NOT " } else { "" }),
 
             Expr::IsNull { expr, negated } => {
 

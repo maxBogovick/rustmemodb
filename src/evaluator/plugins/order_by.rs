@@ -363,7 +363,7 @@ mod tests {
         let rows = create_test_rows();
         let sorter = OrderBySorter::new();
         let registry = EvaluatorRegistry::with_default_evaluators();
-        let eval_ctx = EvaluationContext::new(&registry);
+        let eval_ctx = EvaluationContext::new(&registry, None);
 
         let order_by = vec![OrderByExpr {
             expr: Expr::Column("age".to_string()),
@@ -385,7 +385,7 @@ mod tests {
         let rows = create_test_rows();
         let sorter = OrderBySorter::new();
         let registry = EvaluatorRegistry::with_default_evaluators();
-        let eval_ctx = EvaluationContext::new(&registry);
+        let eval_ctx = EvaluationContext::new(&registry, None);
 
         let order_by = vec![OrderByExpr {
             expr: Expr::Column("age".to_string()),
@@ -407,7 +407,7 @@ mod tests {
         let rows = create_test_rows();
         let sorter = OrderBySorter::new();
         let registry = EvaluatorRegistry::with_default_evaluators();
-        let eval_ctx = EvaluationContext::new(&registry);
+        let eval_ctx = EvaluationContext::new(&registry, None);
 
         // ORDER BY age ASC, name ASC
         let order_by = vec![
@@ -448,7 +448,7 @@ mod tests {
 
         let sorter = OrderBySorter::new();
         let registry = EvaluatorRegistry::with_default_evaluators();
-        let eval_ctx = EvaluationContext::new(&registry);
+        let eval_ctx = EvaluationContext::new(&registry, None);
 
         let order_by = vec![OrderByExpr {
             expr: Expr::Column("value".to_string()),
