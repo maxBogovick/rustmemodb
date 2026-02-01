@@ -260,7 +260,7 @@ impl<'a> App<'a> {
                     )));
                     
                     // Header
-                    let header: Vec<String> = result.columns().to_vec();
+                    let header: Vec<String> = result.columns().iter().map(|c| c.name.clone()).collect();
                     self.messages.push(Line::from(Span::styled(
                         format!("| {:?} |", header),
                         Style::default().add_modifier(Modifier::BOLD)

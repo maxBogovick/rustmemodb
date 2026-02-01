@@ -2,7 +2,7 @@
 // src/executor/query.rs - Refactored QueryExecutor with improved architecture
 // ============================================================================
 
-use crate::parser::ast::{Statement, Expr, OrderByExpr, QueryStmt};
+use crate::parser::ast::{Statement, Expr, QueryStmt, OrderByExpr};
 use crate::planner::{LogicalPlan, QueryPlanner};
 use crate::planner::logical_plan::{SortNode};
 use crate::storage::Catalog;
@@ -83,9 +83,9 @@ impl QueryExecutor {
     }
 
     /// Get output column names from plan
-    pub fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext<'_>) -> Result<Vec<String>> {
+    pub fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext<'_>) -> Result<Vec<crate::core::Column>> {
         let schema = plan.schema();
-        Ok(schema.columns().iter().map(|c| c.name.clone()).collect())
+        Ok(schema.columns().to_vec())
     }
 }
 
@@ -743,8 +743,8 @@ impl QueryExecutor {
             }
 
             for (i, order_expr) in order_by.iter().enumerate() {
-                let val_a = &keys_a[i];
-                let val_b = &keys_b[i];
+                let val_a: &Value = &keys_a[i];
+                let val_b: &Value = &keys_b[i];
 
                 let mut cmp = match val_a.compare(val_b) {
                     Ok(c) => c,

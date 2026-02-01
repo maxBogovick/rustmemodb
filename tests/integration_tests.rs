@@ -346,8 +346,8 @@ async fn test_projection_specific_columns() {
     let result = db.execute("SELECT name, age FROM users").await.unwrap();
 
     assert_eq!(result.columns().len(), 2);
-    assert_eq!(result.columns()[0], "name");
-    assert_eq!(result.columns()[1], "age");
+    assert_eq!(result.columns()[0].name, "name");
+    assert_eq!(result.columns()[1].name, "age");
 }
 
 #[tokio::test]

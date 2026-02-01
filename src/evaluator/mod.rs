@@ -15,6 +15,7 @@ pub trait SubqueryHandler: Send + Sync {
 #[async_trait]
 pub trait ExpressionEvaluator: Send + Sync {
     /// Имя evaluator'а
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
 
     /// Может ли evaluator обработать это выражение?

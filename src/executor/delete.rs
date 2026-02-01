@@ -71,7 +71,7 @@ impl DeleteExecutor {
         // Ensure no other table references the rows we are about to delete
         let all_tables = ctx.storage.list_tables();
         
-        for (del_idx, del_row) in &rows_to_delete {
+        for (_del_idx, del_row) in &rows_to_delete {
              for table_name in &all_tables {
                  // Skip self-reference check if we are deleting from the same table (unless we support self-ref constraints, which we should)
                  // But strictly speaking, if a row references itself, deleting it deletes the reference too, so it's fine?

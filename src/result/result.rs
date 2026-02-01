@@ -1,8 +1,8 @@
-use crate::core::Row;
+use crate::core::{Row, Column};
 
 #[derive(Debug, Clone)]
 pub struct QueryResult {
-    columns: Vec<String>,
+    columns: Vec<Column>,
     rows: Vec<Row>,
     affected_rows: Option<usize>, // For UPDATE/DELETE operations
 }
@@ -22,7 +22,7 @@ impl QueryResult {
         Self::empty()
     }
 
-    pub fn new(columns: Vec<String>, rows: Vec<Row>) -> Self {
+    pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Self {
         Self {
             columns,
             rows,
@@ -60,7 +60,7 @@ impl QueryResult {
         self.rows.is_empty()
     }
 
-    pub fn columns(&self) -> &[String] {
+    pub fn columns(&self) -> &[Column] {
         &self.columns
     }
 
@@ -88,7 +88,7 @@ impl QueryResult {
     }
 
     fn calculate_column_widths(&self) -> Vec<usize> {
-        let mut widths: Vec<usize> = self.columns.iter().map(|c| c.len()).collect();
+        let mut widths: Vec<usize> = self.columns.iter().map(|c| c.name.len()).collect();
 
         for row in &self.rows {
             for (i, value) in row.iter().enumerate() {
@@ -105,7 +105,7 @@ impl QueryResult {
         let header: Vec<String> = self.columns
             .iter()
             .enumerate()
-            .map(|(i, col)| format!("{:width$}", col, width = widths[i]))
+            .map(|(i, col)| format!("{:width$}", col.name, width = widths[i]))
             .collect();
 
         println!("{}", header.join(" | "));
@@ -155,6 +155,7 @@ impl<'a> IntoIterator for &'a QueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::DataType;
 
     #[test]
     fn test_empty_result() {
@@ -166,17 +167,21 @@ mod tests {
 
     #[test]
     fn test_new_result() {
-        let columns = vec!["id".to_string(), "name".to_string()];
+        let columns = vec![
+            Column::new("id", DataType::Integer),
+            Column::new("name", DataType::Text)
+        ];
         let rows = vec![];
         let result = QueryResult::new(columns.clone(), rows);
 
-        assert_eq!(result.columns(), &columns[..]);
+        assert_eq!(result.columns().len(), 2);
+        assert_eq!(result.columns()[0].name, "id");
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_accessors() {
-        let columns = vec!["col1".to_string()];
+        let columns = vec![Column::new("col1", DataType::Text)];
         let rows = vec![];
         let result = QueryResult::new(columns, rows);
 

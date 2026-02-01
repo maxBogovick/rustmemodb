@@ -1,4 +1,4 @@
-use crate::core::{Result, DbError, Column};
+use crate::core::{Result, DbError, Column, Schema, Value, DataType};
 use crate::storage::{InMemoryStorage, Catalog, TableSchema};
 use crate::storage::{PersistenceManager, DurabilityMode, WalEntry};
 use crate::parser::SqlParserAdapter;
@@ -12,6 +12,7 @@ use crate::executor::{BeginExecutor, CommitExecutor, RollbackExecutor};
 use crate::result::QueryResult;
 use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
 use crate::transaction::TransactionManager;
+use crate::planner::{QueryPlanner};
 use std::sync::{Arc};
 use tokio::sync::{RwLock, Mutex};
 use std::path::Path;
@@ -76,6 +77,31 @@ impl InMemoryDB {
         &mut self.storage
     }
 
+    /// Parse and plan a query without executing it, returning the output schema.
+    /// Useful for Describe messages in Postgres Wire Protocol.
+    pub fn plan_query(&self, sql: &str) -> Result<Schema> {
+        // Special case for version() - common during handshakes
+        if sql.to_uppercase().contains("VERSION()") {
+            return Ok(Schema::new(vec![Column::new("version", DataType::Text)]));
+        }
+
+        let statements = self.parser.parse(sql)?;
+
+        if statements.is_empty() {
+            return Err(DbError::ParseError("No statement found".into()));
+        }
+
+        let statement = &statements[0];
+        match statement {
+            Statement::Query(_) => {
+                let planner = QueryPlanner::new();
+                let plan = planner.plan(statement, &self.catalog)?;
+                Ok(plan.schema().clone())
+            }
+            _ => Ok(Schema::new(vec![])), // Non-query statements have no output schema (usually)
+        }
+    }
+
     pub async fn execute(&mut self, sql: &str) -> Result<QueryResult> {
         self.execute_with_transaction(sql, None).await
     }
@@ -85,6 +111,14 @@ impl InMemoryDB {
         sql: &str,
         transaction_id: Option<crate::transaction::TransactionId>,
     ) -> Result<QueryResult> {
+        // Special case for version()
+        if sql.to_uppercase().contains("VERSION()") {
+            return Ok(QueryResult::new(
+                vec![Column::new("version", DataType::Text)],
+                vec![vec![Value::Text("PostgreSQL 14.0 (RustMemDB MVP)".to_string())]]
+            ));
+        }
+
         let statements = self.parser.parse(sql)?;
 
         if statements.is_empty() {

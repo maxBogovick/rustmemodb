@@ -344,7 +344,7 @@ impl JsonStorageAdapter {
             for (i, column) in result.columns().iter().enumerate() {
                 let value = &row[i];
                 let json_value = self.sql_value_to_json(value);
-                obj.insert(column.clone(), json_value);
+                obj.insert(column.name.clone(), json_value);
             }
 
             documents.push(JsonValue::Object(obj));

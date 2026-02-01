@@ -21,6 +21,7 @@ pub trait QueryConverter {
 /// Трейт для конвертации SQL выражения в наш AST
 pub trait ExpressionPlugin: Send + Sync {
     /// Имя плагина для отладки
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
 
     /// Может ли плагин обработать это выражение?

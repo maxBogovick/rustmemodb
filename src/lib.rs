@@ -10,6 +10,7 @@ pub mod connection;
 pub mod transaction;
 pub mod json;
 pub mod interface;
+pub mod server;
 mod parser;
 mod planner;
 mod executor;
