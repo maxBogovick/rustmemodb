@@ -51,9 +51,16 @@ It is a pure Rust SQL engine with **MVCC** and **Snapshot Isolation** that intro
 
 RustMemDB now includes a modern, terminal-based user interface (TUI) powered by `ratatui`.
 
-**Run it instantly:**
+**Run the Interactive Terminal:**
 ```bash
+cargo run -- cli
+# Or simply (default):
 cargo run
+```
+
+**Run the Postgres Server:**
+```bash
+cargo run -- server --host 127.0.0.1 --port 5432
 ```
 
 **Features:**
@@ -343,7 +350,7 @@ A: Use Postgres or MySQL for critical production data storage. Use RustMemDB for
 A: No. A `HashMap` is O(1). A SQL engine handles Parsing, Planning, and Transactions. Use RustMemDB when you need *Relational Logic* (Joins, Where clauses, transactions), not just Key-Value storage.
 
 **Q: Does it support the Postgres Wire Protocol?**
-A: Not yet (Planned). Currently, you use it via the Rust library API.
+A: **Yes!** You can start the standalone server with `cargo run -- server`. It binds to `127.0.0.1:5432` by default and accepts connections from standard clients like `psql` or DBeaver.
 
 ---
 
