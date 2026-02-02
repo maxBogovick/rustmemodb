@@ -1,6 +1,7 @@
 use super::{Executor, ExecutionContext};
 use crate::core::{Result, Value, DbError};
 use crate::parser::ast::{DeleteStmt, Statement};
+use crate::planner::logical_plan::IndexOp;
 use crate::result::QueryResult;
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
 use crate::storage::WalEntry;
@@ -100,7 +101,7 @@ impl DeleteExecutor {
 
                              // Check if child table has this value in `column.name`
                              // Use index if available
-                             let exists = if let Some(rows) = ctx.storage.scan_index(table_name, &column.name, parent_val, &ctx.snapshot).await? {
+                             let exists = if let Some(rows) = ctx.storage.scan_index(table_name, &column.name, parent_val, &None, &IndexOp::Eq, &ctx.snapshot).await? {
                                  // Check if we found rows that are NOT the ones being deleted (if self-referencing)
                                  // If self-referencing, we need to check if the referencing row is also in `rows_to_delete`.
                                  // For now, let's implement strict RESTRICT which fails if ANY reference exists.

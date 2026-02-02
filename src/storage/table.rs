@@ -1,4 +1,5 @@
 use crate::core::{Column, DbError, Result, Row, Schema, Snapshot, Value};
+use crate::planner::logical_plan::IndexOp;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet};
 use im::{OrdMap, HashMap};
@@ -398,6 +399,68 @@ impl Table {
         self.indexes.insert(column_name.to_string(), index);
         self.schema.indexes.push(column_name.to_string());
         Ok(())
+    }
+
+    pub fn scan_index_op(
+        &self,
+        column_name: &str,
+        value: &Value,
+        end_value: &Option<Value>,
+        op: &IndexOp,
+        snapshot: &Snapshot
+    ) -> Option<Vec<Row>> {
+        let index = self.indexes.get(column_name)?;
+        
+        let ids: Vec<usize> = match op {
+            IndexOp::Eq => index.get(value).cloned().unwrap_or_default(),
+            IndexOp::Gt => {
+                use std::ops::Bound;
+                index.range((Bound::Excluded(value), Bound::Unbounded))
+                    .flat_map(|(_, v)| v)
+                    .cloned()
+                    .collect()
+            },
+            IndexOp::GtEq => {
+                use std::ops::Bound;
+                index.range((Bound::Included(value), Bound::Unbounded))
+                    .flat_map(|(_, v)| v)
+                    .cloned()
+                    .collect()
+            },
+            IndexOp::Lt => {
+                 use std::ops::Bound;
+                 index.range((Bound::Unbounded, Bound::Excluded(value)))
+                    .flat_map(|(_, v)| v)
+                    .cloned()
+                    .collect()
+            },
+            IndexOp::LtEq => {
+                 use std::ops::Bound;
+                 index.range((Bound::Unbounded, Bound::Included(value)))
+                    .flat_map(|(_, v)| v)
+                    .cloned()
+                    .collect()
+            },
+            IndexOp::Between => {
+                if let Some(end) = end_value {
+                    use std::ops::Bound;
+                    index.range((Bound::Included(value), Bound::Included(end)))
+                        .flat_map(|(_, v)| v)
+                        .cloned()
+                        .collect()
+                } else {
+                    return None;
+                }
+            }
+        };
+
+        let mut rows = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(row) = self.get_visible_row(id, snapshot) {
+                rows.push(row);
+            }
+        }
+        Some(rows)
     }
 
     pub fn get_index(&self, column_name: &str) -> Option<&OrdMap<Value, Vec<usize>>> {

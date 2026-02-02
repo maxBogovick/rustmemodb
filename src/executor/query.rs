@@ -340,7 +340,14 @@ impl QueryExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         if let Some(ref idx) = scan.index_scan {
-            if let Some(rows) = ctx.storage.scan_index(&scan.table_name, &idx.column, &idx.value, &ctx.snapshot).await? {
+            if let Some(rows) = ctx.storage.scan_index(
+                &scan.table_name,
+                &idx.column,
+                &idx.value,
+                &idx.end_value,
+                &idx.op,
+                &ctx.snapshot
+            ).await? {
                 return Ok(rows);
             }
         }

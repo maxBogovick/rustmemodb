@@ -1,6 +1,7 @@
 use super::{ExecutionContext, Executor};
 use crate::core::{Column, DbError, Result, Row, Value};
 use crate::parser::ast::{Expr, InsertStmt, Statement};
+use crate::planner::logical_plan::IndexOp;
 use crate::result::QueryResult;
 use crate::storage::WalEntry;
 
@@ -54,7 +55,7 @@ impl InsertExecutor {
 
                     // Check if value exists in referenced table
                     // Use index if available (highly recommended for FK targets)
-                    let exists = if let Some(rows) = ctx.storage.scan_index(&fk.table, &fk.column, val, &ctx.snapshot).await? {
+                    let exists = if let Some(rows) = ctx.storage.scan_index(&fk.table, &fk.column, val, &None, &IndexOp::Eq, &ctx.snapshot).await? {
                         !rows.is_empty()
                     } else {
                         // Fallback to full scan (slow!)

@@ -7,6 +7,7 @@ pub mod ddl;
 pub mod dml;
 pub mod query;
 pub mod transaction;
+pub mod explain;
 mod registry;
 
 pub use context::ExecutionContext;

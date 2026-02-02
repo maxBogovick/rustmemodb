@@ -39,6 +39,7 @@ pub struct TableScanNode {
 pub struct IndexScanInfo {
     pub column: String,
     pub value: Value,
+    pub end_value: Option<Value>,
     #[allow(dead_code)]
     pub op: IndexOp,
 }
@@ -46,6 +47,11 @@ pub struct IndexScanInfo {
 #[derive(Debug, Clone)]
 pub enum IndexOp {
     Eq,
+    Gt,
+    GtEq,
+    Lt,
+    LtEq,
+    Between,
 }
 
 #[derive(Debug, Clone)]

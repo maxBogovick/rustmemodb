@@ -12,9 +12,34 @@ pub enum Statement {
     Update(UpdateStmt),
     CreateIndex(CreateIndexStmt),
     AlterTable(AlterTableStmt),
+    CreateView(CreateViewStmt),
+    DropView(DropViewStmt),
+    Explain(ExplainStmt),
     Begin,
     Commit,
     Rollback,
+}
+
+/// CREATE VIEW statement
+#[derive(Debug, Clone)]
+pub struct CreateViewStmt {
+    pub name: String,
+    pub query: Box<QueryStmt>,
+    pub or_replace: bool,
+}
+
+/// DROP VIEW statement
+#[derive(Debug, Clone)]
+pub struct DropViewStmt {
+    pub name: String,
+    pub if_exists: bool,
+}
+
+/// EXPLAIN statement
+#[derive(Debug, Clone)]
+pub struct ExplainStmt {
+    pub statement: Box<Statement>,
+    pub analyze: bool, // Future: run and time it?
 }
 
 /// CREATE TABLE statement

@@ -73,12 +73,32 @@ impl SqlParserAdapter {
                 }
                 Ok(Statement::AlterTable(self.convert_alter_table(name, operations.into_iter().next().unwrap())?))
             }
+            sql_ast::Statement::CreateView { name, query, or_replace, .. } => {
+                let view_name = extract_table_name(&name)?;
+                let query_stmt = self.convert_query(*query)?;
+                Ok(Statement::CreateView(CreateViewStmt {
+                    name: view_name,
+                    query: Box::new(query_stmt),
+                    or_replace,
+                }))
+            }
             sql_ast::Statement::Drop { object_type, names, if_exists, .. } => {
-                if let sql_ast::ObjectType::Table = object_type {
-                    Ok(Statement::DropTable(self.convert_drop_table(names, if_exists)?))
-                } else {
-                    Err(DbError::UnsupportedOperation(format!(
-                        "Only DROP TABLE supported, got: {:?}",
+                match object_type {
+                    sql_ast::ObjectType::Table => {
+                        Ok(Statement::DropTable(self.convert_drop_table(names, if_exists)?))
+                    }
+                    sql_ast::ObjectType::View => {
+                        if names.len() != 1 {
+                             return Err(DbError::UnsupportedOperation("Only single view DROP supported".into()));
+                        }
+                        let view_name = extract_table_name(&names[0])?;
+                        Ok(Statement::DropView(DropViewStmt {
+                            name: view_name,
+                            if_exists,
+                        }))
+                    }
+                    _ => Err(DbError::UnsupportedOperation(format!(
+                        "Only DROP TABLE and DROP VIEW supported, got: {:?}",
                         object_type
                     )))
                 }
@@ -94,6 +114,12 @@ impl SqlParserAdapter {
             }
             sql_ast::Statement::Update { table, assignments, selection, .. } => {
                 Ok(Statement::Update(self.convert_update(table, assignments, selection)?))
+            }
+            sql_ast::Statement::Explain { statement, analyze, .. } => {
+                Ok(Statement::Explain(ExplainStmt {
+                    statement: Box::new(self.convert_statement(*statement)?),
+                    analyze,
+                }))
             }
             _ => Err(DbError::UnsupportedOperation(format!(
                 "Statement type not supported: {:?}",

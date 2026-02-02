@@ -1,5 +1,6 @@
 use super::{Table, TableSchema};
 use crate::core::{Column, DbError, Result, Row, Snapshot};
+use crate::planner::logical_plan::IndexOp;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -147,25 +148,19 @@ impl InMemoryStorage {
     }
 
     /// Scan a table using an index (MVCC)
-    pub async fn scan_index(&self, table_name: &str, column_name: &str, value: &crate::core::Value, snapshot: &Snapshot) -> Result<Option<Vec<Row>>> {
+    pub async fn scan_index(
+        &self, 
+        table_name: &str, 
+        column_name: &str, 
+        value: &crate::core::Value, 
+        end_value: &Option<crate::core::Value>,
+        op: &IndexOp,
+        snapshot: &Snapshot
+    ) -> Result<Option<Vec<Row>>> {
         let table_handle = self.get_table(table_name)?;
         let table = table_handle.read().await;
 
-        if let Some(index) = table.get_index(column_name) {
-            if let Some(ids) = index.get(value) {
-                let mut rows = Vec::with_capacity(ids.len());
-                for id in ids {
-                    if let Some(row) = table.get_visible_row(*id, snapshot) {
-                        rows.push(row);
-                    }
-                }
-                return Ok(Some(rows));
-            } else {
-                return Ok(Some(Vec::new())); // Index exists but no match
-            }
-        }
-
-        Ok(None) // Index does not exist
+        Ok(table.scan_index_op(column_name, value, end_value, op, snapshot))
     }
 
     /// Get all tables (for persistence snapshots)

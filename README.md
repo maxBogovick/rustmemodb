@@ -150,12 +150,12 @@ We support a rich subset of SQL-92, focusing on the features most used in applic
 | :--- | :--- |
 | **Data Types** | `INTEGER`, `FLOAT`, `TEXT`, `BOOLEAN`, `NULL`, **`TIMESTAMP`**, **`DATE`**, **`UUID`** |
 | **Operators** | `+`, `-`, `*`, `/`, `%` |
-| **Comparisons** | `=`, `!=`, `<`, `>`, `<=`, `>=` |
+| **Comparisons** | `=`, `!=`, `<`, `>`, `<=`, `>=` (Optimized Range Scans) |
 | **Logic** | `AND`, `OR`, `NOT`, Parentheses `( )` |
 | **Predicates** | `LIKE` (Pattern matching), `BETWEEN`, `IS NULL`, `IS NOT NULL`, `IN (list/subquery)`, `EXISTS` |
 | **Aggregates** | `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` |
 | **Constraints** | `PRIMARY KEY`, `UNIQUE`, **`FOREIGN KEY (REFERENCES)`** |
-| **Statements** | `CREATE/DROP TABLE`, `CREATE INDEX`, `INSERT`, `UPDATE`, `DELETE`, `SELECT` |
+| **Statements** | `CREATE/DROP TABLE`, `CREATE/DROP VIEW`, `CREATE INDEX`, `INSERT`, `UPDATE`, `DELETE`, `SELECT`, **`EXPLAIN`** |
 | **Clauses** | `WHERE`, `ORDER BY` (Multi-column), `LIMIT`, **`FROM (subquery)`** |
 | **Transactions** | `BEGIN`, `COMMIT`, `ROLLBACK` |
 

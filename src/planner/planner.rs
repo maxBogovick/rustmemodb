@@ -262,19 +262,47 @@ impl QueryPlanner {
     fn plan_table_factor(&self, factor: &TableFactor, catalog: &Catalog) -> Result<LogicalPlan> {
         match factor {
             TableFactor::Table { name, alias } => {
-                // Verify table exists
-                let schema = catalog.get_table(name)?.schema().clone();
-                let table_name = alias.as_ref().unwrap_or(name);
-                
-                // Qualify columns with table name/alias
-                let qualified_schema = schema.qualify_columns(table_name);
+                // Check if it's a view
+                if let Some(view_query) = catalog.get_view(name) {
+                    let plan = self.plan_query(view_query, catalog)?;
 
-                Ok(LogicalPlan::TableScan(TableScanNode {
-                    table_name: name.clone(),
-                    projected_columns: None,
-                    index_scan: None,
-                    schema: qualified_schema,
-                }))
+                    if let Some(alias_name) = alias {
+                        let input_schema = plan.schema().clone();
+                        let new_schema = input_schema.qualify_columns(alias_name);
+
+                        // Create identity projection with new schema names
+                        let expressions: Vec<Expr> = input_schema.columns()
+                            .iter()
+                            .map(|c| Expr::Column(c.name.clone()))
+                            .collect();
+
+                        Ok(LogicalPlan::Projection(ProjectionNode {
+                            input: Box::new(plan),
+                            expressions,
+                            schema: new_schema,
+                        }))
+                    } else {
+                        // If view name is used as alias implicitly
+                        // We should probably qualify columns with view name to match behavior of tables
+                        // But views might already have complex column names.
+                        // For MVP, just return plan.
+                        Ok(plan)
+                    }
+                } else {
+                    // Verify table exists
+                    let schema = catalog.get_table(name)?.schema().clone();
+                    let table_name = alias.as_ref().unwrap_or(name);
+
+                    // Qualify columns with table name/alias
+                    let qualified_schema = schema.qualify_columns(table_name);
+
+                    Ok(LogicalPlan::TableScan(TableScanNode {
+                        table_name: name.clone(),
+                        projected_columns: None,
+                        index_scan: None,
+                        schema: qualified_schema,
+                    }))
+                }
             }
             TableFactor::Derived { subquery, alias } => {
                 let plan = self.plan_query(subquery, catalog)?;
@@ -372,36 +400,80 @@ impl QueryPlanner {
     /// Try to use an index for the WHERE clause
     fn try_optimize_filter(&self, input: LogicalPlan, predicate: &Expr, catalog: &Catalog) -> Result<LogicalPlan> {
         // Only optimize if input is a simple TableScan
-        if let LogicalPlan::TableScan(ref scan) = input
-            && let Expr::BinaryOp { left, op, right } = predicate {
-                // Check for col = val
-                if let (Expr::Column(col_name), BinaryOp::Eq, Expr::Literal(val)) = (&**left, op, &**right) {
-                    let schema = catalog.get_table(&scan.table_name)?;
-                    if schema.is_indexed(col_name) {
-                        let mut new_scan = scan.clone();
-                        new_scan.index_scan = Some(IndexScanInfo {
-                            column: col_name.clone(),
-                            value: val.clone(),
-                            op: IndexOp::Eq,
-                        });
-                        return Ok(LogicalPlan::TableScan(new_scan));
+        if let LogicalPlan::TableScan(ref scan) = input {
+            let schema = catalog.get_table(&scan.table_name)?;
+            
+            match predicate {
+                Expr::BinaryOp { left, op, right } => {
+                    // Check for col op val
+                    if let (Expr::Column(col_name), Expr::Literal(val)) = (&**left, &**right) {
+                        if schema.is_indexed(col_name) {
+                            let index_op = match op {
+                                BinaryOp::Eq => Some(IndexOp::Eq),
+                                BinaryOp::Gt => Some(IndexOp::Gt),
+                                BinaryOp::GtEq => Some(IndexOp::GtEq),
+                                BinaryOp::Lt => Some(IndexOp::Lt),
+                                BinaryOp::LtEq => Some(IndexOp::LtEq),
+                                _ => None,
+                            };
+
+                            if let Some(op) = index_op {
+                                let mut new_scan = scan.clone();
+                                new_scan.index_scan = Some(IndexScanInfo {
+                                    column: col_name.clone(),
+                                    value: val.clone(),
+                                    end_value: None,
+                                    op,
+                                });
+                                return Ok(LogicalPlan::TableScan(new_scan));
+                            }
+                        }
+                    }
+
+                    // Check for val op col
+                    if let (Expr::Literal(val), Expr::Column(col_name)) = (&**left, &**right) {
+                        if schema.is_indexed(col_name) {
+                             let index_op = match op {
+                                 BinaryOp::Eq => Some(IndexOp::Eq),
+                                 BinaryOp::Gt => Some(IndexOp::Lt), // val > col <=> col < val
+                                 BinaryOp::GtEq => Some(IndexOp::LtEq),
+                                 BinaryOp::Lt => Some(IndexOp::Gt),
+                                 BinaryOp::LtEq => Some(IndexOp::GtEq),
+                                 _ => None,
+                             };
+
+                            if let Some(op) = index_op {
+                                let mut new_scan = scan.clone();
+                                new_scan.index_scan = Some(IndexScanInfo {
+                                    column: col_name.clone(),
+                                    value: val.clone(),
+                                    end_value: None,
+                                    op,
+                                });
+                                return Ok(LogicalPlan::TableScan(new_scan));
+                            }
+                        }
                     }
                 }
-                
-                // Check for val = col
-                if let (Expr::Literal(val), BinaryOp::Eq, Expr::Column(col_name)) = (&**left, op, &**right) {
-                    let schema = catalog.get_table(&scan.table_name)?;
-                    if schema.is_indexed(col_name) {
-                        let mut new_scan = scan.clone();
-                        new_scan.index_scan = Some(IndexScanInfo {
-                            column: col_name.clone(),
-                            value: val.clone(),
-                            op: IndexOp::Eq,
-                        });
-                        return Ok(LogicalPlan::TableScan(new_scan));
+                Expr::Between { expr, low, high, negated } => {
+                    if !*negated {
+                        if let (Expr::Column(col_name), Expr::Literal(low_val), Expr::Literal(high_val)) = (&**expr, &**low, &**high) {
+                            if schema.is_indexed(col_name) {
+                                let mut new_scan = scan.clone();
+                                new_scan.index_scan = Some(IndexScanInfo {
+                                    column: col_name.clone(),
+                                    value: low_val.clone(),
+                                    end_value: Some(high_val.clone()),
+                                    op: IndexOp::Between,
+                                });
+                                return Ok(LogicalPlan::TableScan(new_scan));
+                            }
+                        }
                     }
                 }
+                _ => {}
             }
+        }
 
         // Fallback: Add Filter node
         let schema = input.schema().clone();

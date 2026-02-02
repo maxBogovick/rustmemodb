@@ -8,9 +8,10 @@ use crate::executor::dml::InsertExecutor;
 use crate::executor::delete::DeleteExecutor;
 use crate::executor::update::UpdateExecutor;
 use crate::executor::query::QueryExecutor;
+use crate::executor::explain::ExplainExecutor;
 use crate::executor::{BeginExecutor, CommitExecutor, RollbackExecutor};
 use crate::result::QueryResult;
-use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt};
+use crate::parser::ast::{Statement, CreateTableStmt, DropTableStmt, CreateViewStmt, DropViewStmt};
 use crate::transaction::TransactionManager;
 use crate::planner::{QueryPlanner};
 use std::sync::{Arc};
@@ -59,6 +60,7 @@ impl InMemoryDB {
         pipeline.register(Box::new(UpdateExecutor::new()));
 
         pipeline.register(Box::new(QueryExecutor::new(catalog.clone())));
+        pipeline.register(Box::new(ExplainExecutor::new(catalog.clone())));
 
         Self {
             parser: SqlParserAdapter::new(),
@@ -76,6 +78,16 @@ impl InMemoryDB {
 
     pub(crate) fn storage_mut(&mut self) -> &mut InMemoryStorage {
         &mut self.storage
+    }
+
+    fn refresh_catalog_executors(&mut self) {
+        self.executor_pipeline.executors.retain(|e| {
+            let name = e.name();
+            name != "SELECT" && name != "EXPLAIN"
+        });
+
+        self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+        self.executor_pipeline.register(Box::new(ExplainExecutor::new(self.catalog.clone())));
     }
 
     /// Parse and plan a query without executing it, returning the output schema.
@@ -134,6 +146,12 @@ impl InMemoryDB {
             Statement::DropTable(drop) => {
                 return self.execute_drop_table(drop).await;
             }
+            Statement::CreateView(create_view) => {
+                return self.execute_create_view(create_view).await;
+            }
+            Statement::DropView(drop_view) => {
+                return self.execute_drop_view(drop_view).await;
+            }
             Statement::CreateIndex(create_index) => {
                 self.create_index(&create_index.table_name, &create_index.column).await?;
                 return Ok(QueryResult::empty());
@@ -149,19 +167,7 @@ impl InMemoryDB {
                 let schema = self.storage.get_schema(&alter.table_name).await?;
                 self.catalog = self.catalog.clone().without_table(&alter.table_name)?.with_table(schema)?;
 
-                // Re-register query executor with new catalog
-                self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
-                    crate::parser::ast::QueryStmt {
-                        projection: vec![],
-                        from: vec![],
-                        selection: None,
-                        group_by: vec![],
-                        having: None,
-                        order_by: vec![],
-                        limit: None,
-                    }
-                )));
-                self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+                self.refresh_catalog_executors();
 
                 return Ok(result);
             }
@@ -236,19 +242,7 @@ impl InMemoryDB {
         self.storage.create_table(schema.clone()).await?;
         self.catalog = self.catalog.clone().with_table(schema)?;
 
-        self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
-            crate::parser::ast::QueryStmt {
-                projection: vec![],
-                from: vec![],
-                selection: None,
-                group_by: vec![],
-                having: None,
-                order_by: vec![],
-                limit: None,
-            }
-        )));
-
-        self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+        self.refresh_catalog_executors();
         self.maybe_checkpoint().await?;
 
         Ok(QueryResult::empty())
@@ -281,22 +275,43 @@ impl InMemoryDB {
         self.storage.drop_table(&drop.table_name).await?;
         self.catalog = self.catalog.clone().without_table(&drop.table_name)?;
 
-        self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
-            crate::parser::ast::QueryStmt {
-                projection: vec![],
-                from: vec![],
-                selection: None,
-                group_by: vec![],
-                having: None,
-                order_by: vec![],
-                limit: None,
-            }
-        )));
-
-        self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+        self.refresh_catalog_executors();
         self.maybe_checkpoint().await?;
 
         Ok(QueryResult::empty())
+    }
+
+    async fn execute_create_view(&mut self, create: &CreateViewStmt) -> Result<QueryResult> {
+        // Validation: ensure query plans correctly
+        let _ = QueryPlanner::new().plan(&Statement::Query(*create.query.clone()), &self.catalog)?;
+
+        if self.catalog.view_exists(&create.name) && !create.or_replace {
+             return Err(DbError::ExecutionError(format!("View '{}' already exists", create.name)));
+        }
+        
+        if self.catalog.table_exists(&create.name) {
+             return Err(DbError::TableExists(create.name.clone()));
+        }
+
+        self.catalog = self.catalog.clone().with_view(create.name.clone(), *create.query.clone())?;
+        
+        // TODO: Add WAL support for Views
+        
+        self.refresh_catalog_executors();
+        Ok(QueryResult::empty())
+    }
+
+    async fn execute_drop_view(&mut self, drop: &DropViewStmt) -> Result<QueryResult> {
+         if !self.catalog.view_exists(&drop.name) {
+             if drop.if_exists {
+                 return Ok(QueryResult::empty());
+             }
+             return Err(DbError::ExecutionError(format!("View '{}' not found", drop.name)));
+         }
+
+         self.catalog = self.catalog.clone().without_view(&drop.name)?;
+         self.refresh_catalog_executors();
+         Ok(QueryResult::empty())
     }
 
     pub fn table_exists(&self, name: &str) -> bool {
@@ -332,19 +347,7 @@ impl InMemoryDB {
         let updated_schema = self.storage.get_schema(table_name).await?;
         self.catalog = self.catalog.clone().without_table(table_name)?.with_table(updated_schema)?;
 
-        self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
-            crate::parser::ast::QueryStmt {
-                projection: vec![],
-                from: vec![],
-                selection: None,
-                group_by: vec![],
-                having: None,
-                order_by: vec![],
-                limit: None,
-            }
-        )));
-
-        self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+        self.refresh_catalog_executors();
         self.maybe_checkpoint().await?;
 
         Ok(())
@@ -418,20 +421,7 @@ impl InMemoryDB {
 
         self.catalog = new_catalog;
 
-        self.executor_pipeline.executors.retain(|e| {
-            !e.can_handle(&Statement::Query(crate::parser::ast::QueryStmt {
-                projection: vec![],
-                from: vec![],
-                selection: None,
-                group_by: vec![],
-                having: None,
-                order_by: vec![],
-                limit: None,
-            }))
-        });
-
-        self.executor_pipeline
-            .register(Box::new(QueryExecutor::new(self.catalog.clone())));
+        self.refresh_catalog_executors();
 
         Ok(())
     }
