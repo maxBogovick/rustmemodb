@@ -63,7 +63,19 @@ impl JsonToValueConverter {
                 Ok(Value::Uuid(u))
             },
 
-            // Complex types (Array/Object) → serialize to JSON string
+            // JSON
+            (v, DataType::Json) => Ok(Value::Json(v.clone())),
+
+            // Array
+            (JsonValue::Array(arr), DataType::Array(inner_type)) => {
+                let mut values = Vec::new();
+                for v in arr {
+                    values.push(Self::convert(v, inner_type)?);
+                }
+                Ok(Value::Array(values))
+            },
+
+            // Complex types (Array/Object) → serialize to JSON string if target is TEXT
             (JsonValue::Array(_) | JsonValue::Object(_), DataType::Text) => {
                 Ok(Value::Text(json_value.to_string()))
             }
@@ -337,6 +349,12 @@ fn format_value_for_sql(value: &Value) -> String {
         Value::Timestamp(t) => format!("'{}'", t.to_rfc3339()),
         Value::Date(d) => format!("'{}'", d.format("%Y-%m-%d")),
         Value::Uuid(u) => format!("'{}'", u),
+        Value::Array(a) => {
+            // Format as ARRAY[...]
+            let elements: Vec<String> = a.iter().map(format_value_for_sql).collect();
+            format!("ARRAY[{}]", elements.join(", "))
+        }
+        Value::Json(j) => format!("'{}'", escape_sql_string(&j.to_string())),
     }
 }
 

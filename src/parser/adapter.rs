@@ -302,6 +302,31 @@ impl SqlParserAdapter {
             sql_ast::DataType::Date => Ok(DataType::Date),
             sql_ast::DataType::Uuid => Ok(DataType::Uuid),
 
+            sql_ast::DataType::Array(elem_def) => {
+                match elem_def {
+                    sql_ast::ArrayElemTypeDef::AngleBracket(inner) => {
+                        let inner_type = self.convert_data_type(inner)?;
+                        Ok(DataType::Array(Box::new(inner_type)))
+                    }
+                    sql_ast::ArrayElemTypeDef::SquareBracket(inner, _size) => {
+                        let inner_type = self.convert_data_type(inner)?;
+                        Ok(DataType::Array(Box::new(inner_type)))
+                    }
+                    sql_ast::ArrayElemTypeDef::Parenthesis(inner) => {
+                        let inner_type = self.convert_data_type(inner)?;
+                        Ok(DataType::Array(Box::new(inner_type)))
+                    }
+                    sql_ast::ArrayElemTypeDef::None => {
+                        // Default to array of text if type not specified? Or error?
+                        // Postgres allows just ARRAY keyword in some contexts, but usually with type.
+                        // Let's assume Text for now or error.
+                        Ok(DataType::Array(Box::new(DataType::Text)))
+                    }
+                }
+            }
+
+            sql_ast::DataType::JSON | sql_ast::DataType::JSONB => Ok(DataType::Json),
+
             _ => Err(DbError::TypeMismatch(format!(
                 "Unsupported data type: {:?}",
                 dt

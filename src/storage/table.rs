@@ -37,12 +37,114 @@ impl Table {
                 let _ = table.create_index(&column.name);
             }
         }
-        
+
         table
     }
 
     pub fn schema(&self) -> &TableSchema {
         &self.schema
+    }
+
+    pub fn add_column(&mut self, column: Column) -> Result<()> {
+        if self.schema.schema.find_column_index(&column.name).is_some() {
+            return Err(DbError::ExecutionError(format!("Column '{}' already exists", column.name)));
+        }
+
+        // Add column to schema
+        self.schema.schema.columns.push(column.clone());
+
+        // Update all existing rows with default value (or NULL)
+        // Since we use persistent data structures, we need to be careful about performance.
+        // Updating all rows is O(N).
+        // For MVP, we iterate and update.
+
+        let default_value = if let Some(ref def) = column.default {
+            def.clone()
+        } else {
+            Value::Null
+        };
+
+        // We need to update every row version in every row entry
+        // This is heavy.
+        let mut updates = Vec::new();
+        for (id, versions) in &self.rows {
+            let mut new_versions = Vec::with_capacity(versions.len());
+            for version in versions {
+                let mut new_row = version.row.clone();
+                new_row.push(default_value.clone());
+                new_versions.push(MvccRow {
+                    row: new_row,
+                    xmin: version.xmin,
+                    xmax: version.xmax,
+                });
+            }
+            updates.push((*id, new_versions));
+        }
+
+        for (id, new_versions) in updates {
+            self.rows.insert(id, new_versions);
+        }
+
+        Ok(())
+    }
+
+    pub fn drop_column(&mut self, column_name: &str) -> Result<()> {
+        let col_idx = self.schema.schema.find_column_index(column_name)
+            .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone()))?;
+
+        // Remove from schema
+        self.schema.schema.columns.remove(col_idx);
+
+        // Remove index if exists
+        if self.indexes.contains_key(column_name) {
+            self.indexes.remove(column_name);
+            if let Some(pos) = self.schema.indexes.iter().position(|x| x == column_name) {
+                self.schema.indexes.remove(pos);
+            }
+        }
+
+        // Update all rows
+        let mut updates = Vec::new();
+        for (id, versions) in &self.rows {
+            let mut new_versions = Vec::with_capacity(versions.len());
+            for version in versions {
+                let mut new_row = version.row.clone();
+                new_row.remove(col_idx);
+                new_versions.push(MvccRow {
+                    row: new_row,
+                    xmin: version.xmin,
+                    xmax: version.xmax,
+                });
+            }
+            updates.push((*id, new_versions));
+        }
+
+        for (id, new_versions) in updates {
+            self.rows.insert(id, new_versions);
+        }
+
+        Ok(())
+    }
+
+    pub fn rename_column(&mut self, old_name: &str, new_name: &str) -> Result<()> {
+        let col_idx = self.schema.schema.find_column_index(old_name)
+            .ok_or_else(|| DbError::ColumnNotFound(old_name.to_string(), self.schema.name.clone()))?;
+
+        if self.schema.schema.find_column_index(new_name).is_some() {
+            return Err(DbError::ExecutionError(format!("Column '{}' already exists", new_name)));
+        }
+
+        self.schema.schema.columns[col_idx].name = new_name.to_string();
+
+        // Rename index if exists
+        if let Some(index) = self.indexes.remove(old_name) {
+            self.indexes.insert(new_name.to_string(), index);
+            if let Some(pos) = self.schema.indexes.iter().position(|x| x == old_name) {
+                self.schema.indexes[pos] = new_name.to_string();
+            }
+        }
+
+        Ok(())
     }
 
     pub fn insert(&mut self, row: Row, snapshot: &Snapshot) -> Result<usize> {
@@ -61,7 +163,7 @@ impl Table {
         // im::OrdMap::update returns the new map
         self.rows.insert(id, vec![mvcc_row]);
         self.update_indexes(id, &row);
-        
+
         Ok(id)
     }
 
@@ -69,7 +171,7 @@ impl Table {
         // Since we need to mutate the vector inside the map, we need to handle this carefully with immutable maps.
         // im::OrdMap::get returns reference.
         // To modify, we effectively need to clone the vector (CoW), modify it, and re-insert.
-        
+
         if let Some(versions) = self.rows.get(&id) {
              let mut new_versions = versions.clone();
              if let Some(latest) = new_versions.last_mut() {
@@ -77,7 +179,7 @@ impl Table {
                     return Ok(false);
                 }
                 latest.xmax = Some(tx_id);
-                
+
                 // Update the map with the modified versions
                 self.rows.insert(id, new_versions);
                 return Ok(true);
@@ -89,12 +191,12 @@ impl Table {
     pub fn update(&mut self, id: usize, new_row: Row, snapshot: &Snapshot) -> Result<bool> {
         self.validate_row(&new_row)?;
         self.check_uniqueness(&new_row, Some(id), snapshot)?;
-        
+
         let row_to_index_add;
 
         if let Some(versions) = self.rows.get(&id) {
             let mut new_versions = versions.clone();
-            
+
             if let Some(latest) = new_versions.last_mut() {
                 if latest.xmax.is_some() {
                     return Ok(false);
@@ -103,7 +205,7 @@ impl Table {
             } else {
                 return Ok(false);
             }
-            
+
             let new_version = MvccRow {
                 row: new_row.clone(),
                 xmin: snapshot.tx_id,
@@ -111,7 +213,7 @@ impl Table {
             };
             new_versions.push(new_version);
             row_to_index_add = Some(new_row);
-            
+
             // Update map
             self.rows.insert(id, new_versions);
         } else {
@@ -169,7 +271,7 @@ impl Table {
             if column.primary_key || column.unique {
                 let value = &row[col_idx];
                 if matches!(value, Value::Null) {
-                    continue; 
+                    continue;
                 }
 
                 let index = self.indexes.get(&column.name).ok_or_else(|| {
@@ -203,13 +305,13 @@ impl Table {
         if snapshot.aborted.contains(&row.xmin) {
             return false;
         }
-        
+
         if let Some(xmax) = row.xmax {
             if snapshot.aborted.contains(&xmax) {
                 return true;
             }
             if self.is_committed(xmax, snapshot) {
-                return false; 
+                return false;
             }
             return true;
         }
@@ -256,7 +358,7 @@ impl Table {
     }
 
     pub fn row_count(&self) -> usize {
-        self.rows.len() 
+        self.rows.len()
     }
 
     fn validate_row(&self, row: &Row) -> Result<()> {
@@ -306,7 +408,7 @@ impl Table {
         // We need to iterate over indexes and update them.
         // im::HashMap iteration
         let mut updates = Vec::new();
-        
+
         for (col_name, index) in &self.indexes {
              if let Some(col_idx) = self.schema.schema().find_column_index(col_name) {
                 let value = row[col_idx].clone();
@@ -318,7 +420,7 @@ impl Table {
                 }
              }
         }
-        
+
         // Apply updates
         for (col_name, value, ids) in updates {
             if let Some(index) = self.indexes.get_mut(&col_name) {
@@ -338,7 +440,7 @@ impl Table {
 
         for (id, versions) in &self.rows {
             let initial_len = versions.len();
-            
+
             // Filter versions
             let new_versions: Vec<MvccRow> = versions.iter().filter(|version| {
                 if aborted.contains(&version.xmin) {
@@ -349,7 +451,7 @@ impl Table {
                         return true;
                     }
                     if xmax < min_active_tx_id {
-                        return false; 
+                        return false;
                     }
                 }
                 true
@@ -377,8 +479,8 @@ impl Table {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableSchema {
-    name: String,
-    schema: Schema,
+    pub name: String,
+    pub schema: Schema,
     pub indexes: Vec<String>,
 }
 

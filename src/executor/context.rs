@@ -1,5 +1,5 @@
 use crate::storage::{InMemoryStorage, PersistenceManager};
-use crate::core::Snapshot;
+use crate::core::{Snapshot, Value};
 use crate::transaction::{TransactionId, TransactionManager};
 use std::sync::{Arc};
 use tokio::sync::Mutex;
@@ -11,6 +11,7 @@ pub struct ExecutionContext<'a> {
     pub transaction_id: Option<TransactionId>,
     pub persistence: Option<&'a Arc<Mutex<PersistenceManager>>>,
     pub snapshot: Snapshot,
+    pub params: Vec<Value>,
 }
 
 impl<'a> ExecutionContext<'a> {
@@ -26,6 +27,7 @@ impl<'a> ExecutionContext<'a> {
             transaction_id: None,
             persistence,
             snapshot,
+            params: Vec::new(),
         }
     }
 
@@ -42,7 +44,13 @@ impl<'a> ExecutionContext<'a> {
             transaction_id: Some(transaction_id),
             persistence,
             snapshot,
+            params: Vec::new(),
         }
+    }
+
+    pub fn with_params(mut self, params: Vec<Value>) -> Self {
+        self.params = params;
+        self
     }
 
     pub fn is_in_transaction(&self) -> bool {

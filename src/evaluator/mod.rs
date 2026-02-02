@@ -31,11 +31,17 @@ pub struct EvaluationContext<'a> {
     registry: &'a EvaluatorRegistry,
     /// Обработчик подзапросов
     pub subquery_handler: Option<&'a dyn SubqueryHandler>,
+    /// Параметры запроса ($1, $2...)
+    pub params: &'a [Value],
 }
 
 impl<'a> EvaluationContext<'a> {
     pub fn new(registry: &'a EvaluatorRegistry, subquery_handler: Option<&'a dyn SubqueryHandler>) -> Self {
-        Self { registry, subquery_handler }
+        Self { registry, subquery_handler, params: &[] }
+    }
+
+    pub fn with_params(registry: &'a EvaluatorRegistry, subquery_handler: Option<&'a dyn SubqueryHandler>, params: &'a [Value]) -> Self {
+        Self { registry, subquery_handler, params }
     }
 
     /// Вычислить выражение через подходящий evaluator
@@ -63,6 +69,15 @@ impl<'a> EvaluationContext<'a> {
             }
             Expr::Literal(val) => {
                 return Ok(val.clone());
+            }
+            Expr::Parameter(idx) => {
+                // Parameters are 1-based in SQL ($1), but 0-based in array
+                if *idx == 0 || *idx > self.params.len() {
+                    return Err(crate::core::DbError::ExecutionError(format!(
+                        "Parameter index out of range: ${}", idx
+                    )));
+                }
+                return Ok(self.params[*idx - 1].clone());
             }
             _ => {}
         }

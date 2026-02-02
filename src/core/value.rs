@@ -16,6 +16,8 @@ pub enum Value {
     Timestamp(DateTime<Utc>),
     Date(NaiveDate),
     Uuid(Uuid),
+    Array(Vec<Value>),
+    Json(serde_json::Value),
 }
 
 impl Value {
@@ -81,6 +83,25 @@ impl Value {
                 }
             }
 
+            (Value::Array(a), Value::Array(b)) => {
+                // Lexicographical comparison for arrays
+                for (va, vb) in a.iter().zip(b.iter()) {
+                    let cmp = va.compare(vb)?;
+                    if cmp != Ordering::Equal {
+                        return Ok(cmp);
+                    }
+                }
+                Ok(a.len().cmp(&b.len()))
+            }
+
+            (Value::Json(a), Value::Json(b)) => {
+                // serde_json::Value doesn't implement Ord, so we convert to string for comparison
+                // This is not ideal but works for basic equality
+                let sa = a.to_string();
+                let sb = b.to_string();
+                Ok(sa.cmp(&sb))
+            }
+
             _ => Err(DbError::TypeMismatch(format!(
                 "Cannot compare incompatible types: {} and {}",
                 self.type_name(),
@@ -99,6 +120,8 @@ impl Value {
             Self::Timestamp(_) => "TIMESTAMP",
             Self::Date(_) => "DATE",
             Self::Uuid(_) => "UUID",
+            Self::Array(_) => "ARRAY",
+            Self::Json(_) => "JSON",
         }
     }
 
@@ -112,6 +135,8 @@ impl Value {
             Self::Timestamp(_) => true,
             Self::Date(_) => true,
             Self::Uuid(_) => true,
+            Self::Array(a) => !a.is_empty(),
+            Self::Json(_) => true,
         }
     }
 
@@ -162,6 +187,8 @@ impl Value {
             Self::Timestamp(_) => 5,
             Self::Date(_) => 6,
             Self::Uuid(_) => 7,
+            Self::Array(_) => 8,
+            Self::Json(_) => 9,
         }
     }
 }
@@ -187,7 +214,9 @@ impl PartialEq for Value {
             (Self::Timestamp(a), Self::Timestamp(b)) => a == b,
             (Self::Date(a), Value::Date(b)) => a == b,
             (Self::Uuid(a), Value::Uuid(b)) => a == b,
-            
+            (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::Json(a), Self::Json(b)) => a == b,
+
             (Self::Integer(i), Self::Float(f)) | (Self::Float(f), Self::Integer(i)) => {
                 (*i as f64 - f).abs() < f64::EPSILON
             }
@@ -225,6 +254,24 @@ impl Ord for Value {
             (Self::Timestamp(a), Self::Timestamp(b)) => a.cmp(b),
             (Self::Date(a), Self::Date(b)) => a.cmp(b),
             (Self::Uuid(a), Self::Uuid(b)) => a.cmp(b),
+            (Self::Array(a), Self::Array(b)) => {
+                for (va, vb) in a.iter().zip(b.iter()) {
+                    // Note: This unwrap is safe because we implement Ord for Value
+                    // but technically compare returns Result.
+                    // For Ord implementation we assume valid comparisons or panic.
+                    // In production code we should probably handle this better.
+                    let cmp = va.cmp(vb);
+                    if cmp != Ordering::Equal {
+                        return cmp;
+                    }
+                }
+                a.len().cmp(&b.len())
+            }
+            (Self::Json(a), Self::Json(b)) => {
+                let sa = a.to_string();
+                let sb = b.to_string();
+                sa.cmp(&sb)
+            }
 
             (a, b) => {
                 let a_idx = a.type_index();
@@ -267,6 +314,14 @@ impl Hash for Value {
                 7u8.hash(state);
                 u.hash(state);
             }
+            Self::Array(a) => {
+                8u8.hash(state);
+                a.hash(state);
+            }
+            Self::Json(j) => {
+                9u8.hash(state);
+                j.to_string().hash(state);
+            }
         }
     }
 }
@@ -294,6 +349,15 @@ impl fmt::Display for Value {
             Self::Timestamp(t) => write!(f, "{}", t.format("%Y-%m-%d %H:%M:%S")),
             Self::Date(d) => write!(f, "{}", d.format("%Y-%m-%d")),
             Self::Uuid(u) => write!(f, "{}", u),
+            Self::Array(a) => {
+                write!(f, "[")?;
+                for (i, v) in a.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "]")
+            }
+            Self::Json(j) => write!(f, "{}", j),
         }
     }
 }
@@ -307,6 +371,8 @@ impl From<bool> for Value { fn from(b: bool) -> Self { Self::Boolean(b) } }
 impl From<DateTime<Utc>> for Value { fn from(t: DateTime<Utc>) -> Self { Self::Timestamp(t) } }
 impl From<NaiveDate> for Value { fn from(d: NaiveDate) -> Self { Self::Date(d) } }
 impl From<Uuid> for Value { fn from(u: Uuid) -> Self { Self::Uuid(u) } }
+impl From<Vec<Value>> for Value { fn from(v: Vec<Value>) -> Self { Self::Array(v) } }
+impl From<serde_json::Value> for Value { fn from(v: serde_json::Value) -> Self { Self::Json(v) } }
 
 #[cfg(test)]
 mod tests {

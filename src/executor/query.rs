@@ -104,7 +104,7 @@ impl QueryExecutor {
         let input_schema = aggr.input.schema();
         
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
 
         // 1. Group rows
         let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> = std::collections::HashMap::new();
@@ -168,7 +168,7 @@ impl QueryExecutor {
         let schema = &join.schema;
 
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
         
         let mut result = Vec::new();
 
@@ -252,7 +252,7 @@ impl QueryExecutor {
         
         let mut build_map = std::collections::HashMap::new();
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
         
         for row in right_rows {
             let key_val = eval_ctx.evaluate(&right_key_expr, &row, join.right.schema()).await?;
@@ -357,7 +357,7 @@ impl QueryExecutor {
         let schema = &filter.schema;
 
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
 
         let mut filtered_rows = Vec::new();
         for row in input_rows {
@@ -382,7 +382,7 @@ impl QueryExecutor {
         }
 
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
         
         let mut projected_rows = Vec::new();
         for row in input_rows {
@@ -405,7 +405,7 @@ impl QueryExecutor {
 
         let schema = &sort.schema;
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
 
         self.sort_rows(&mut rows, &sort.order_by, schema, &eval_ctx).await?;
         Ok(rows)
@@ -491,7 +491,7 @@ impl QueryExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, Some(&subquery_handler));
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
         
         let mut result_row = Vec::new();
 

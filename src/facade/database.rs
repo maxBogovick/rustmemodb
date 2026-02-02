@@ -3,7 +3,7 @@ use crate::storage::{InMemoryStorage, Catalog, TableSchema};
 use crate::storage::{PersistenceManager, DurabilityMode, WalEntry};
 use crate::parser::SqlParserAdapter;
 use crate::executor::{ExecutorPipeline, ExecutionContext};
-use crate::executor::ddl::{CreateTableExecutor, DropTableExecutor};
+use crate::executor::ddl::{AlterTableExecutor, CreateTableExecutor, DropTableExecutor};
 use crate::executor::dml::InsertExecutor;
 use crate::executor::delete::DeleteExecutor;
 use crate::executor::update::UpdateExecutor;
@@ -52,6 +52,7 @@ impl InMemoryDB {
 
         pipeline.register(Box::new(CreateTableExecutor));
         pipeline.register(Box::new(DropTableExecutor));
+        pipeline.register(Box::new(AlterTableExecutor));
 
         pipeline.register(Box::new(InsertExecutor));
         pipeline.register(Box::new(DeleteExecutor::new()));
@@ -106,10 +107,11 @@ impl InMemoryDB {
         self.execute_with_transaction(sql, None).await
     }
 
-    pub async fn execute_with_transaction(
+    pub async fn execute_with_params(
         &mut self,
         sql: &str,
         transaction_id: Option<crate::transaction::TransactionId>,
+        params: Vec<Value>,
     ) -> Result<QueryResult> {
         // Special case for version()
         if sql.to_uppercase().contains("VERSION()") {
@@ -136,8 +138,32 @@ impl InMemoryDB {
                 self.create_index(&create_index.table_name, &create_index.column).await?;
                 return Ok(QueryResult::empty());
             }
-            Statement::AlterTable(_) => {
-                return Err(DbError::UnsupportedOperation("ALTER TABLE not implemented yet".into()));
+            Statement::AlterTable(alter) => {
+                // Execute ALTER TABLE via pipeline
+                // We need to update catalog after execution
+                let persistence_ref = self.persistence.as_ref();
+                let ctx = ExecutionContext::new(&self.storage, &self.transaction_manager, persistence_ref, self.transaction_manager.get_auto_commit_snapshot().await?);
+                let result = self.executor_pipeline.execute(&statements[0], &ctx).await?;
+
+                // Refresh catalog
+                let schema = self.storage.get_schema(&alter.table_name).await?;
+                self.catalog = self.catalog.clone().without_table(&alter.table_name)?.with_table(schema)?;
+
+                // Re-register query executor with new catalog
+                self.executor_pipeline.executors.retain(|e| !e.can_handle(&Statement::Query(
+                    crate::parser::ast::QueryStmt {
+                        projection: vec![],
+                        from: vec![],
+                        selection: None,
+                        group_by: vec![],
+                        having: None,
+                        order_by: vec![],
+                        limit: None,
+                    }
+                )));
+                self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
+
+                return Ok(result);
             }
             _ => {}
         }
@@ -147,13 +173,23 @@ impl InMemoryDB {
             // Get snapshot for transaction
             let snapshot = self.transaction_manager.get_snapshot(txn_id).await?;
             ExecutionContext::with_transaction(&self.storage, &self.transaction_manager, txn_id, persistence_ref, snapshot)
+                .with_params(params)
         } else {
             // Auto-commit: Use a fresh snapshot
             let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
             ExecutionContext::new(&self.storage, &self.transaction_manager, persistence_ref, snapshot)
+                .with_params(params)
         };
-        
+
         self.executor_pipeline.execute(&statements[0], &ctx).await
+    }
+
+    pub async fn execute_with_transaction(
+        &mut self,
+        sql: &str,
+        transaction_id: Option<crate::transaction::TransactionId>,
+    ) -> Result<QueryResult> {
+        self.execute_with_params(sql, transaction_id, vec![]).await
     }
 
     async fn execute_create_table(&mut self, create: &CreateTableStmt) -> Result<QueryResult> {
@@ -179,7 +215,7 @@ impl InMemoryDB {
             .collect();
 
         let mut schema = TableSchema::new(create.table_name.clone(), columns);
-        
+
         // Pre-populate indexes metadata for PK/Unique columns
         // This ensures the Catalog knows about these indexes immediately for query planning
         let columns_iter = schema.schema().columns().to_vec();
@@ -235,12 +271,12 @@ impl InMemoryDB {
 
         if let Some(ref persistence) = self.persistence
             && let Some(table) = table {
-                let mut persistence_guard = persistence.lock().await;
-                persistence_guard.log(&WalEntry::DropTable {
-                    name: drop.table_name.clone(),
-                    table,
-                })?;
-            }
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::DropTable {
+                name: drop.table_name.clone(),
+                table,
+            })?;
+        }
 
         self.storage.drop_table(&drop.table_name).await?;
         self.catalog = self.catalog.clone().without_table(&drop.table_name)?;
@@ -292,7 +328,7 @@ impl InMemoryDB {
         }
 
         self.storage.create_index(table_name, column_name).await?;
-        
+
         let updated_schema = self.storage.get_schema(table_name).await?;
         self.catalog = self.catalog.clone().without_table(table_name)?.with_table(updated_schema)?;
 
@@ -417,7 +453,7 @@ impl InMemoryDB {
         // If there are no active transactions, min_active is the next transaction ID (max_tx_id)
         // All committed transactions < max_tx_id are visible to everyone.
         let min_active = snapshot.active.iter().min().cloned().unwrap_or(snapshot.max_tx_id);
-        
+
         self.storage.vacuum_all_tables(min_active, &snapshot.aborted).await
     }
 
@@ -429,7 +465,7 @@ impl InMemoryDB {
     pub async fn fork(&self) -> Result<Self> {
         let new_storage = self.storage.fork().await?;
         let new_txn_manager = self.transaction_manager.fork().await;
-        
+
         // Clone catalog (metadata)
         let new_catalog = self.catalog.clone();
 
@@ -440,6 +476,7 @@ impl InMemoryDB {
         pipeline.register(Box::new(RollbackExecutor));
         pipeline.register(Box::new(CreateTableExecutor));
         pipeline.register(Box::new(DropTableExecutor));
+        pipeline.register(Box::new(AlterTableExecutor));
         pipeline.register(Box::new(InsertExecutor));
         pipeline.register(Box::new(DeleteExecutor::new()));
         pipeline.register(Box::new(UpdateExecutor::new()));

@@ -101,7 +101,7 @@ impl SimpleQueryHandler for QueryProcessor {
         if query.trim().is_empty() {
             return Ok(vec![Response::EmptyQuery]);
         }
-        let response = execute_query(self.db.clone(), query).await?;
+        let response = execute_query(self.db.clone(), query, vec![]).await?;
         Ok(vec![response])
     }
 }
@@ -131,15 +131,60 @@ impl ExtendedQueryHandler for QueryProcessor {
             return Ok(Response::EmptyQuery);
         }
 
-        if portal.parameter_len() > 0 {
-            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                "ERROR".to_string(),
-                "0A000".to_string(),
-                "Parameters not supported in RustMemDB MVP".to_string()
-            ))));
+        let mut params = Vec::new();
+        for i in 0..portal.parameter_len() {
+            if let Some(val) = portal.parameter::<String>(i, &Type::UNKNOWN)? {
+                // Convert pgwire value to our Value
+                // This is tricky because pgwire gives us raw bytes or text format
+                // For now, we assume text format and try to parse?
+                // Actually pgwire's `parameter` returns `Option<&T>` where T is generic?
+                // No, `portal.parameter` returns `Option<T>` based on type.
+                // But we don't know the type yet.
+                // Let's look at how pgwire handles parameters.
+                // Portal stores parameters as bytes.
+
+                // Simplified: We treat everything as Text for now and let the engine cast it.
+                // Or we need to inspect the type OID if available.
+                // In `portal.parameters`, we have the values.
+
+                // NOTE: pgwire 0.24 Portal struct:
+                // pub struct Portal<S> { ... parameters: Vec<Option<Bytes>>, ... }
+                // We need to access parameters.
+
+                // Since we can't easily get the type, we'll try to infer or pass as text.
+                // But `portal.parameter` requires a Type argument to decode.
+                // We can use `portal.parameter_types()` if available?
+
+                // Let's try to get raw bytes and convert to Value::Text or similar.
+                // Wait, `portal` has `parameter` method: `pub fn parameter<T>(&self, idx: usize, ty: &Type) -> Option<T>`
+                // We don't know T.
+
+                // Let's use a hack: Try to decode as String (Text).
+                // If it fails (e.g. binary format), we might be in trouble.
+                // But most drivers send parameters in Text format or Binary format.
+                // If Binary, we need to know the type.
+
+                // For MVP, let's assume Text format for parameters or try to decode as String.
+                // If we can't access raw bytes easily, we might need to rely on `pgwire`'s decoding.
+
+                // Let's try to decode as String.
+                if let Some(s) = portal.parameter::<String>(i, &Type::TEXT)? {
+                    params.push(Value::Text(s));
+                } else if let Some(n) = portal.parameter::<i64>(i, &Type::INT8)? {
+                    params.push(Value::Integer(n));
+                } else if let Some(b) = portal.parameter::<bool>(i, &Type::BOOL)? {
+                    params.push(Value::Boolean(b));
+                } else {
+                    // Fallback: try to get as String even if type is different?
+                    // Or just push Null?
+                    params.push(Value::Null);
+                }
+            } else {
+                params.push(Value::Null);
+            }
         }
 
-        execute_query(self.db.clone(), query).await
+        execute_query(self.db.clone(), query, params).await
     }
 
     async fn do_describe_statement<C>(
@@ -161,6 +206,8 @@ impl ExtendedQueryHandler for QueryProcessor {
         match db.plan_query(query) {
             Ok(schema) => {
                 let fields = create_field_infos(schema.columns());
+                // We also need to return parameter types if we can infer them.
+                // For now, return empty params.
                 Ok(DescribeStatementResponse::new(vec![], fields))
             }
             Err(e) => {
@@ -227,13 +274,13 @@ impl ExtendedQueryHandler for QueryProcessor {
     }
 }
 
-async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str) -> PgWireResult<Response<'a>> {
+async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec<Value>) -> PgWireResult<Response<'a>> {
     let mut db_guard = db.write().await;
-    println!("Executing query: {}", query);
+    println!("Executing query: {} with params: {:?}", query, params);
     if query.trim().is_empty() {
         return Ok(Response::EmptyQuery);
     }
-    match db_guard.execute(query).await {
+    match db_guard.execute_with_params(query, None, params).await {
         Ok(result) => {
             println!("Query successful, rows: {}", result.row_count());
             if result.rows().is_empty() {
@@ -293,6 +340,8 @@ fn create_field_infos(columns: &[Column]) -> Vec<FieldInfo> {
                 DataType::Timestamp => Type::TIMESTAMP,
                 DataType::Date => Type::DATE,
                 DataType::Uuid => Type::UUID,
+                DataType::Array(_) => Type::ANYARRAY, // Simplified
+                DataType::Json => Type::JSONB,
             };
             FieldInfo::new(col.name.clone(), None, None, pg_type, FieldFormat::Text)
         })
@@ -309,5 +358,16 @@ fn encode_value(encoder: &mut DataRowEncoder, value: &Value) -> PgWireResult<()>
         Value::Timestamp(t) => encoder.encode_field(&t.naive_utc()),
         Value::Date(d) => encoder.encode_field(d),
         Value::Uuid(u) => encoder.encode_field(&u.to_string()),
+        Value::Array(a) => {
+            // Encode array as string representation for now "{1,2,3}"
+            // pgwire doesn't have easy array encoder yet?
+            // Let's use text format.
+            let s = format!("{}", value);
+            encoder.encode_field(&s)
+        }
+        Value::Json(j) => {
+            let s = j.to_string();
+            encoder.encode_field(&s)
+        }
     }
 }

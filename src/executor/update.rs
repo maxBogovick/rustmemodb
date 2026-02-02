@@ -46,7 +46,7 @@ impl UpdateExecutor {
         let rows = ctx.storage.scan_table_with_ids(&update.table_name, &ctx.snapshot).await?;
 
         // Create evaluation context
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, None);
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, None, &ctx.params);
 
         // Find rows to update and compute new values
         let mut updates = Vec::new();

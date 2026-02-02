@@ -173,6 +173,9 @@ pub enum Expr {
     /// Literal value
     Literal(Value),
 
+    /// Parameter placeholder ($1, $2, etc.)
+    Parameter(usize),
+
     /// Binary operation (a + b, a = b, etc.)
     BinaryOp {
         left: Box<Expr>,
@@ -289,6 +292,8 @@ impl fmt::Display for Expr {
             Expr::CompoundIdentifier(parts) => write!(f, "{}", parts.join(".")),
 
             Expr::Literal(val) => write!(f, "{}", val),
+
+            Expr::Parameter(idx) => write!(f, "${}", idx),
 
             Expr::BinaryOp { left, op, right } => write!(f, "({} {} {})", left, op, right),
 

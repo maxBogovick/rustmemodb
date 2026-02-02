@@ -177,6 +177,8 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
     let mut has_timestamp = false;
     let mut has_date = false;
     let mut has_uuid = false;
+    let mut has_array = false;
+    let mut has_json = false;
 
     for dtype in types {
         match dtype {
@@ -187,6 +189,8 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
             DataType::Timestamp => has_timestamp = true,
             DataType::Date => has_date = true,
             DataType::Uuid => has_uuid = true,
+            DataType::Array(_) => has_array = true,
+            DataType::Json => has_json = true,
         }
     }
 
@@ -217,6 +221,8 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
     if has_timestamp { return DataType::Timestamp; }
     if has_date { return DataType::Date; }
     if has_uuid { return DataType::Uuid; }
+    if has_array { return DataType::Array(Box::new(DataType::Text)); } // Fallback to array of text
+    if has_json { return DataType::Json; }
 
     // Numeric type hierarchy
     if has_float {

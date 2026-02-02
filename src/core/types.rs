@@ -23,6 +23,8 @@ pub enum DataType {
     Timestamp,
     Date,
     Uuid,
+    Array(Box<DataType>),
+    Json,
 }
 
 impl DataType {
@@ -41,6 +43,13 @@ impl DataType {
             (Self::Timestamp, Value::Text(_)) => true,
             (Self::Date, Value::Text(_)) => true,
             (Self::Uuid, Value::Text(_)) => true,
+
+            (Self::Array(elem_type), Value::Array(arr)) => {
+                arr.iter().all(|v| elem_type.is_compatible(v))
+            }
+            (Self::Json, Value::Json(_)) => true,
+            (Self::Json, Value::Text(_)) => true, // Allow parsing JSON from text
+
             _ => false,
         }
     }
@@ -58,6 +67,8 @@ impl DataType {
             (Self::Text, Self::Uuid) => true,
             (Self::Text, Self::Timestamp) => true,
             (Self::Text, Self::Date) => true,
+            (Self::Text, Self::Json) => true,
+            (Self::Json, Self::Text) => true,
             _ => false,
         }
     }
@@ -73,6 +84,8 @@ impl fmt::Display for DataType {
             Self::Timestamp => write!(f, "TIMESTAMP"),
             Self::Date => write!(f, "DATE"),
             Self::Uuid => write!(f, "UUID"),
+            Self::Array(t) => write!(f, "{}[]", t),
+            Self::Json => write!(f, "JSONB"),
         }
     }
 }
@@ -92,6 +105,7 @@ pub struct Column {
     pub primary_key: bool,
     pub unique: bool,
     pub references: Option<ForeignKey>, // New field
+    pub default: Option<Value>
 }
 
 impl Column {
@@ -103,6 +117,7 @@ impl Column {
             primary_key: false,
             unique: false,
             references: None,
+            default: None,
         }
     }
 
@@ -157,7 +172,7 @@ impl Column {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schema {
-    columns: Vec<Column>,
+    pub(crate) columns: Vec<Column>,
 }
 
 impl Schema {

@@ -110,8 +110,16 @@ impl ExpressionConverter {
                 let parts: Vec<String> = idents.iter().map(|i| i.value.clone()).collect();
                 return Ok(Expr::CompoundIdentifier(parts));
             }
-            sql_ast::Expr::Value(val) => {
-                return Ok(Expr::Literal(self.convert_value(&val.value)?));
+            sql_ast::Expr::Value(val_with_span) => {
+                let val = &val_with_span.value;
+                if let sql_ast::Value::Placeholder(s) = val {
+                    // Handle $1, $2, etc.
+                    let idx_str = s.trim_start_matches('$');
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        return Ok(Expr::Parameter(idx));
+                    }
+                }
+                return Ok(Expr::Literal(self.convert_value(val)?));
             }
             sql_ast::Expr::Subquery(query) => {
                 let subquery = query_converter.convert_query(*query.clone())?;

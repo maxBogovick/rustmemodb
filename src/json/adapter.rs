@@ -368,6 +368,10 @@ impl JsonStorageAdapter {
             crate::core::Value::Timestamp(t) => JsonValue::String(t.to_rfc3339()),
             crate::core::Value::Date(d) => JsonValue::String(d.format("%Y-%m-%d").to_string()),
             crate::core::Value::Uuid(u) => JsonValue::String(u.to_string()),
+            crate::core::Value::Array(arr) => {
+                JsonValue::Array(arr.iter().map(|v| self.sql_value_to_json(v)).collect())
+            }
+            crate::core::Value::Json(j) => j.clone(),
         }
     }
 }

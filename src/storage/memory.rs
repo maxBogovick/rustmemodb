@@ -1,5 +1,5 @@
 use super::{Table, TableSchema};
-use crate::core::{DbError, Result, Row, Snapshot};
+use crate::core::{Column, DbError, Result, Row, Snapshot};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -35,6 +35,27 @@ impl InMemoryStorage {
             return Err(DbError::TableNotFound(table_name.to_string()));
         }
         Ok(())
+    }
+
+    /// Добавить колонку в таблицу
+    pub async fn add_column(&self, table_name: &str, column: Column) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+        let mut table = table_handle.write().await;
+        table.add_column(column)
+    }
+
+    /// Удалить колонку из таблицы
+    pub async fn drop_column(&self, table_name: &str, column_name: &str) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+        let mut table = table_handle.write().await;
+        table.drop_column(column_name)
+    }
+
+    /// Переименовать колонку
+    pub async fn rename_column(&self, table_name: &str, old_name: &str, new_name: &str) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+        let mut table = table_handle.write().await;
+        table.rename_column(old_name, new_name)
     }
 
     /// Получить handle на таблицу для конкурентного доступа
@@ -143,7 +164,7 @@ impl InMemoryStorage {
                 return Ok(Some(Vec::new())); // Index exists but no match
             }
         }
-        
+
         Ok(None) // Index does not exist
     }
 

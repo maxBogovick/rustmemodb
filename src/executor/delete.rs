@@ -46,7 +46,7 @@ impl DeleteExecutor {
         let rows = ctx.storage.scan_table_with_ids(&delete.table_name, &ctx.snapshot).await?;
 
         // Create evaluation context
-        let eval_ctx = EvaluationContext::new(&self.evaluator_registry, None);
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, None, &ctx.params);
 
         // Find rows to delete
         let mut rows_to_delete = Vec::new();
