@@ -32,7 +32,7 @@ impl ExecutorRegistry {
 
         // Автоматически регистрируем все executors
         registry.register(Box::new(CreateTableExecutor));
-        registry.register(Box::new(InsertExecutor));
+        registry.register(Box::new(InsertExecutor::new(catalog.clone())));
         registry.register(Box::new(QueryExecutor::new(catalog)));
 
         registry

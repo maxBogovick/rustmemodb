@@ -8,6 +8,7 @@ pub mod nested;
 pub mod function;
 pub mod subquery;
 mod boolean;
+pub mod json;
 
 use crate::core::Result;
 use crate::parser::ast::Expr;
@@ -63,6 +64,7 @@ impl ExpressionPluginRegistry {
         registry.register(Box::new(comparison::ComparisonPlugin));
         registry.register(Box::new(in_list::InListPlugin));
         registry.register(Box::new(boolean::BooleanPlugin));
+        registry.register(Box::new(json::JsonPlugin));
 
         registry
     }
@@ -141,6 +143,20 @@ impl ExpressionConverter {
                     negated: *negated,
                 });
             }
+            sql_ast::Expr::Cast { expr, data_type, .. } => {
+                let left = self.convert(*expr.clone(), query_converter)?;
+                let target_type = convert_sql_data_type(data_type)?;
+                return Ok(Expr::Cast {
+                    expr: Box::new(left),
+                    data_type: target_type,
+                });
+            }
+            sql_ast::Expr::Array(sql_ast::Array { elem, .. }) => {
+                 let list = elem.iter()
+                     .map(|e| self.convert(e.clone(), query_converter))
+                     .collect::<Result<Vec<_>>>()?;
+                 return Ok(Expr::Array(list));
+            }
             _ => {}
         }
 
@@ -210,6 +226,9 @@ impl ExpressionConverter {
             SqlOp::And => Ok(BinaryOp::And),
             SqlOp::Or => Ok(BinaryOp::Or),
 
+            SqlOp::Arrow => Ok(BinaryOp::Arrow),
+            SqlOp::LongArrow => Ok(BinaryOp::LongArrow),
+
             _ => Err(crate::core::DbError::UnsupportedOperation(format!(
                 "Unsupported binary operator: {:?}",
                 op
@@ -221,5 +240,29 @@ impl ExpressionConverter {
 impl Default for ExpressionConverter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn convert_sql_data_type(dt: &sql_ast::DataType) -> Result<crate::core::DataType> {
+    use crate::core::DataType;
+    match dt {
+        sql_ast::DataType::Int(_) | sql_ast::DataType::Integer(_) | sql_ast::DataType::BigInt(_) => Ok(DataType::Integer),
+        sql_ast::DataType::Float(_) | sql_ast::DataType::Double(_) | sql_ast::DataType::Real => Ok(DataType::Float),
+        sql_ast::DataType::Text | sql_ast::DataType::Varchar(_) | sql_ast::DataType::Char(_) | sql_ast::DataType::String(_) => Ok(DataType::Text),
+        sql_ast::DataType::Boolean | sql_ast::DataType::Bool => Ok(DataType::Boolean),
+        sql_ast::DataType::Timestamp(_, _) => Ok(DataType::Timestamp),
+        sql_ast::DataType::Date => Ok(DataType::Date),
+        sql_ast::DataType::Uuid => Ok(DataType::Uuid),
+        sql_ast::DataType::JSON | sql_ast::DataType::JSONB => Ok(DataType::Json),
+        sql_ast::DataType::Array(elem) => {
+             match elem {
+                 sql_ast::ArrayElemTypeDef::AngleBracket(inner) | sql_ast::ArrayElemTypeDef::SquareBracket(inner, _) | sql_ast::ArrayElemTypeDef::Parenthesis(inner) => {
+                     let t = convert_sql_data_type(inner)?;
+                     Ok(DataType::Array(Box::new(t)))
+                 }
+                 _ => Ok(DataType::Array(Box::new(DataType::Text)))
+             }
+        }
+        _ => Err(crate::core::DbError::TypeMismatch(format!("Unsupported type: {:?}", dt))),
     }
 }

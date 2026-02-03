@@ -11,7 +11,7 @@ pub struct Catalog {
     /// Arc позволяет cheap клонирование
     /// При изменении создаем новый HashMap (Copy-on-Write)
     tables: Arc<HashMap<String, TableSchema>>,
-    views: Arc<HashMap<String, QueryStmt>>,
+    views: Arc<HashMap<String, (QueryStmt, Vec<String>)>>,
 }
 
 impl Catalog {
@@ -46,13 +46,13 @@ impl Catalog {
     }
     
     /// Добавить представление
-    pub fn with_view(self, name: String, query: QueryStmt) -> Result<Self> {
+    pub fn with_view(self, name: String, query: QueryStmt, columns: Vec<String>) -> Result<Self> {
         if self.tables.contains_key(&name) {
              return Err(DbError::TableExists(name));
         }
         
         let mut new_views = (*self.views).clone();
-        new_views.insert(name, query);
+        new_views.insert(name, (query, columns));
         
         Ok(Self {
             tables: self.tables,
@@ -68,7 +68,7 @@ impl Catalog {
     }
     
     /// Получить определение представления
-    pub fn get_view(&self, name: &str) -> Option<&QueryStmt> {
+    pub fn get_view(&self, name: &str) -> Option<&(QueryStmt, Vec<String>)> {
         self.views.get(name)
     }
 

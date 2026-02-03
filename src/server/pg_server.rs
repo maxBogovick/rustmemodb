@@ -101,7 +101,7 @@ impl SimpleQueryHandler for QueryProcessor {
         if query.trim().is_empty() {
             return Ok(vec![Response::EmptyQuery]);
         }
-        let response = execute_query(self.db.clone(), query, vec![]).await?;
+        let response = execute_query(self.db.clone(), query, vec![], FieldFormat::Text).await?;
         Ok(vec![response])
     }
 }
@@ -132,59 +132,51 @@ impl ExtendedQueryHandler for QueryProcessor {
         }
 
         let mut params = Vec::new();
+        
+        // Infer parameter types to decode correctly
+        let db_arc = self.db.clone();
+        let db = db_arc.read().await;
+        let (_, param_types) = db.plan_query(query).await.unwrap_or((crate::core::Schema::new(vec![]), vec![]));
+        drop(db);
+
         for i in 0..portal.parameter_len() {
-            if let Some(val) = portal.parameter::<String>(i, &Type::UNKNOWN)? {
-                // Convert pgwire value to our Value
-                // This is tricky because pgwire gives us raw bytes or text format
-                // For now, we assume text format and try to parse?
-                // Actually pgwire's `parameter` returns `Option<&T>` where T is generic?
-                // No, `portal.parameter` returns `Option<T>` based on type.
-                // But we don't know the type yet.
-                // Let's look at how pgwire handles parameters.
-                // Portal stores parameters as bytes.
-
-                // Simplified: We treat everything as Text for now and let the engine cast it.
-                // Or we need to inspect the type OID if available.
-                // In `portal.parameters`, we have the values.
-
-                // NOTE: pgwire 0.24 Portal struct:
-                // pub struct Portal<S> { ... parameters: Vec<Option<Bytes>>, ... }
-                // We need to access parameters.
-
-                // Since we can't easily get the type, we'll try to infer or pass as text.
-                // But `portal.parameter` requires a Type argument to decode.
-                // We can use `portal.parameter_types()` if available?
-
-                // Let's try to get raw bytes and convert to Value::Text or similar.
-                // Wait, `portal` has `parameter` method: `pub fn parameter<T>(&self, idx: usize, ty: &Type) -> Option<T>`
-                // We don't know T.
-
-                // Let's use a hack: Try to decode as String (Text).
-                // If it fails (e.g. binary format), we might be in trouble.
-                // But most drivers send parameters in Text format or Binary format.
-                // If Binary, we need to know the type.
-
-                // For MVP, let's assume Text format for parameters or try to decode as String.
-                // If we can't access raw bytes easily, we might need to rely on `pgwire`'s decoding.
-
-                // Let's try to decode as String.
-                if let Some(s) = portal.parameter::<String>(i, &Type::TEXT)? {
-                    params.push(Value::Text(s));
-                } else if let Some(n) = portal.parameter::<i64>(i, &Type::INT8)? {
-                    params.push(Value::Integer(n));
-                } else if let Some(b) = portal.parameter::<bool>(i, &Type::BOOL)? {
-                    params.push(Value::Boolean(b));
-                } else {
-                    // Fallback: try to get as String even if type is different?
-                    // Or just push Null?
-                    params.push(Value::Null);
+            let dt = param_types.get(i).unwrap_or(&DataType::Unknown);
+            
+            let val = match dt {
+                DataType::Integer => {
+                    if let Some(n) = portal.parameter::<i64>(i, &Type::INT8)? {
+                        Value::Integer(n)
+                    } else {
+                        Value::Null
+                    }
                 }
-            } else {
-                params.push(Value::Null);
-            }
+                DataType::Float => {
+                    if let Some(n) = portal.parameter::<f64>(i, &Type::FLOAT8)? {
+                        Value::Float(n)
+                    } else {
+                        Value::Null
+                    }
+                }
+                DataType::Boolean => {
+                    if let Some(n) = portal.parameter::<bool>(i, &Type::BOOL)? {
+                        Value::Boolean(n)
+                    } else {
+                        Value::Null
+                    }
+                }
+                _ => {
+                    // Treat as Text (client sent string because we said TEXT in Describe)
+                    if let Some(s) = portal.parameter::<String>(i, &Type::TEXT)? {
+                        Value::Text(s)
+                    } else {
+                        Value::Null
+                    }
+                }
+            };
+            params.push(val);
         }
 
-        execute_query(self.db.clone(), query, params).await
+        execute_query(self.db.clone(), query, params, FieldFormat::Binary).await
     }
 
     async fn do_describe_statement<C>(
@@ -203,12 +195,18 @@ impl ExtendedQueryHandler for QueryProcessor {
         let db_arc = self.db.clone();
         let db = db_arc.read().await;
 
-        match db.plan_query(query) {
-            Ok(schema) => {
-                let fields = create_field_infos(schema.columns());
-                // We also need to return parameter types if we can infer them.
-                // For now, return empty params.
-                Ok(DescribeStatementResponse::new(vec![], fields))
+        match db.plan_query(query).await {
+            Ok((schema, params)) => {
+                let fields = create_field_infos(schema.columns(), FieldFormat::Binary);
+                let param_types = params.iter().map(|dt| match dt {
+                    DataType::Integer => Type::INT8,
+                    DataType::Float => Type::FLOAT8,
+                    DataType::Boolean => Type::BOOL,
+                    // Force other types to TEXT so client sends string representation
+                    // We parse them in InsertExecutor
+                    _ => Type::TEXT,
+                }).collect();
+                Ok(DescribeStatementResponse::new(param_types, fields))
             }
             Err(e) => {
                 eprintln!("Plan query error: {:?}", e);
@@ -237,9 +235,9 @@ impl ExtendedQueryHandler for QueryProcessor {
         let db_arc = self.db.clone();
         let db = db_arc.read().await;
 
-        match db.plan_query(query) {
-            Ok(schema) => {
-                let fields = create_field_infos(schema.columns());
+        match db.plan_query(query).await {
+            Ok((schema, _)) => {
+                let fields = create_field_infos(schema.columns(), FieldFormat::Binary);
                 Ok(DescribePortalResponse::new(fields))
             }
             Err(e) => {
@@ -274,7 +272,7 @@ impl ExtendedQueryHandler for QueryProcessor {
     }
 }
 
-async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec<Value>) -> PgWireResult<Response<'a>> {
+async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec<Value>, format: FieldFormat) -> PgWireResult<Response<'a>> {
     let mut db_guard = db.write().await;
     println!("Executing query: {} with params: {:?}", query, params);
     if query.trim().is_empty() {
@@ -285,7 +283,7 @@ async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec
             println!("Query successful, rows: {}", result.row_count());
             if result.rows().is_empty() {
                 if !result.columns().is_empty() {
-                    let fields = Arc::new(create_field_infos(result.columns()));
+                    let fields = Arc::new(create_field_infos(result.columns(), format));
                     return Ok(Response::Query(QueryResponse::new(fields, stream::iter(vec![]))));
                 }
 
@@ -302,13 +300,15 @@ async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec
                 return Ok(Response::Execution(tag));
             }
 
-            let fields = Arc::new(create_field_infos(result.columns()));
+            let fields_vec = create_field_infos(result.columns(), format);
+            let fields = Arc::new(fields_vec.clone());
             let mut results = Vec::with_capacity(result.row_count());
 
             for row in result.rows() {
                 let mut encoder = DataRowEncoder::new(fields.clone());
-                for val in row {
-                    encode_value(&mut encoder, val)?;
+                for (i, val) in row.iter().enumerate() {
+                    let field_format = fields_vec[i].format();
+                    encode_value(&mut encoder, val, field_format)?;
                 }
                 results.push(encoder.finish()?);
             }
@@ -328,27 +328,37 @@ async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec
     }
 }
 
-fn create_field_infos(columns: &[Column]) -> Vec<FieldInfo> {
+fn create_field_infos(columns: &[Column], default_format: FieldFormat) -> Vec<FieldInfo> {
     columns
         .iter()
         .map(|col| {
-            let pg_type = match col.data_type {
-                DataType::Integer => Type::INT8,
-                DataType::Float => Type::FLOAT8,
-                DataType::Text => Type::TEXT,
-                DataType::Boolean => Type::BOOL,
-                DataType::Timestamp => Type::TIMESTAMP,
-                DataType::Date => Type::DATE,
-                DataType::Uuid => Type::UUID,
-                DataType::Array(_) => Type::ANYARRAY, // Simplified
-                DataType::Json => Type::JSONB,
+            let (pg_type, format) = match col.data_type {
+                DataType::Integer => (Type::INT8, default_format),
+                DataType::Float => (Type::FLOAT8, default_format),
+                DataType::Text => (Type::TEXT, default_format),
+                DataType::Boolean => (Type::BOOL, default_format),
+                DataType::Timestamp => (Type::TIMESTAMP, default_format),
+                DataType::Date => (Type::DATE, default_format),
+                DataType::Uuid => (Type::UUID, default_format),
+                // Force TEXT type for complex types to allow reading as String in tests
+                DataType::Array(_) => (Type::TEXT, FieldFormat::Text),
+                DataType::Json => (Type::TEXT, FieldFormat::Text),
+                DataType::Unknown => (Type::UNKNOWN, FieldFormat::Text),
             };
-            FieldInfo::new(col.name.clone(), None, None, pg_type, FieldFormat::Text)
+            FieldInfo::new(col.name.clone(), None, None, pg_type, format)
         })
         .collect()
 }
 
-fn encode_value(encoder: &mut DataRowEncoder, value: &Value) -> PgWireResult<()> {
+fn encode_value(encoder: &mut DataRowEncoder, value: &Value, format: FieldFormat) -> PgWireResult<()> {
+    if format == FieldFormat::Text {
+        if matches!(value, Value::Null) {
+            return encoder.encode_field(&None::<String>);
+        }
+        let s = format!("{}", value);
+        return encoder.encode_field(&s);
+    }
+
     match value {
         Value::Null => encoder.encode_field(&None::<i8>),
         Value::Integer(i) => encoder.encode_field(i),
@@ -357,17 +367,13 @@ fn encode_value(encoder: &mut DataRowEncoder, value: &Value) -> PgWireResult<()>
         Value::Text(s) => encoder.encode_field(s),
         Value::Timestamp(t) => encoder.encode_field(&t.naive_utc()),
         Value::Date(d) => encoder.encode_field(d),
-        Value::Uuid(u) => encoder.encode_field(&u.to_string()),
-        Value::Array(a) => {
-            // Encode array as string representation for now "{1,2,3}"
-            // pgwire doesn't have easy array encoder yet?
-            // Let's use text format.
-            let s = format!("{}", value);
-            encoder.encode_field(&s)
-        }
-        Value::Json(j) => {
-            let s = j.to_string();
-            encoder.encode_field(&s)
+        Value::Uuid(u) => encoder.encode_field(u.as_bytes()),
+        
+        Value::Array(_) | Value::Json(_) => {
+             // These should be handled by Text format check above because create_field_infos forces Text.
+             // But if we reached here with Binary, fallback to string bytes.
+             let s = format!("{}", value);
+             encoder.encode_field(&s)
         }
     }
 }

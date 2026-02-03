@@ -191,6 +191,7 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
             DataType::Uuid => has_uuid = true,
             DataType::Array(_) => has_array = true,
             DataType::Json => has_json = true,
+            DataType::Unknown => has_text = true,
         }
     }
 

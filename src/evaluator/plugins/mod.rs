@@ -1,9 +1,11 @@
-pub mod comparison;
 pub mod arithmetic;
-pub mod logical;
-pub mod like;
 pub mod between;
-pub mod is_null;
-pub mod order_by;
 pub mod boolean;
+pub mod comparison;
+pub mod is_null;
+pub mod like;
+pub mod logical;
+pub mod order_by;
 pub mod subquery;
+pub mod json;
+pub mod function;

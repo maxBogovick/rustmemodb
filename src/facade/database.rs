@@ -55,7 +55,7 @@ impl InMemoryDB {
         pipeline.register(Box::new(DropTableExecutor));
         pipeline.register(Box::new(AlterTableExecutor));
 
-        pipeline.register(Box::new(InsertExecutor));
+        pipeline.register(Box::new(InsertExecutor::new(catalog.clone())));
         pipeline.register(Box::new(DeleteExecutor::new()));
         pipeline.register(Box::new(UpdateExecutor::new()));
 
@@ -83,19 +83,103 @@ impl InMemoryDB {
     fn refresh_catalog_executors(&mut self) {
         self.executor_pipeline.executors.retain(|e| {
             let name = e.name();
-            name != "SELECT" && name != "EXPLAIN"
+            name != "SELECT" && name != "EXPLAIN" && name != "INSERT"
         });
 
         self.executor_pipeline.register(Box::new(QueryExecutor::new(self.catalog.clone())));
         self.executor_pipeline.register(Box::new(ExplainExecutor::new(self.catalog.clone())));
+        self.executor_pipeline.register(Box::new(InsertExecutor::new(self.catalog.clone())));
+    }
+
+    async fn infer_parameters(&self, stmt: &Statement) -> std::collections::HashMap<usize, DataType> {
+        let mut params = std::collections::HashMap::new();
+        match stmt {
+            Statement::Insert(insert) => {
+                if let Ok(schema) = self.storage.get_schema(&insert.table_name).await {
+                    let columns = schema.schema().columns();
+                    if let crate::parser::ast::InsertSource::Values(rows) = &insert.source {
+                        for row in rows {
+                            for (i, expr) in row.iter().enumerate() {
+                                if i < columns.len() {
+                                    if let crate::parser::ast::Expr::Parameter(idx) = expr {
+                                        params.insert(*idx, columns[i].data_type.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Statement::Update(update) => {
+                if let Ok(schema) = self.storage.get_schema(&update.table_name).await {
+                    for assign in &update.assignments {
+                        if let Some(idx) = schema.schema().find_column_index(&assign.column) {
+                            if let crate::parser::ast::Expr::Parameter(p_idx) = &assign.value {
+                                params.insert(*p_idx, schema.schema().columns()[idx].data_type.clone());
+                            }
+                        }
+                    }
+                    if let Some(selection) = &update.selection {
+                        self.infer_from_expr(selection, &schema.schema(), &mut params);
+                    }
+                }
+            }
+            Statement::Delete(delete) => {
+                if let Ok(schema) = self.storage.get_schema(&delete.table_name).await {
+                    if let Some(selection) = &delete.selection {
+                        self.infer_from_expr(selection, &schema.schema(), &mut params);
+                    }
+                }
+            }
+            Statement::Query(query) => {
+                // println!("DEBUG: inferring query params. from len: {}", query.from.len());
+                // Simple inference for single table SELECT
+                if query.from.len() == 1 {
+                    if let crate::parser::ast::TableFactor::Table { name, .. } = &query.from[0].relation {
+                        // println!("DEBUG: inferring for table {}", name);
+                        if let Ok(schema) = self.storage.get_schema(name).await {
+                             if let Some(selection) = &query.selection {
+                                 // println!("DEBUG: inferring from selection {:?}", selection);
+                                 self.infer_from_expr(selection, &schema.schema(), &mut params);
+                             }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        params
+    }
+
+    fn infer_from_expr(&self, expr: &crate::parser::ast::Expr, schema: &Schema, params: &mut std::collections::HashMap<usize, DataType>) {
+        use crate::parser::ast::*;
+        match expr {
+            Expr::BinaryOp { left, op: _, right } => {
+                if let (Expr::Column(col), Expr::Parameter(idx)) = (&**left, &**right) {
+                    if let Some(c_idx) = schema.find_column_index(col) {
+                        params.insert(*idx, schema.columns()[c_idx].data_type.clone());
+                    }
+                }
+                if let (Expr::Parameter(idx), Expr::Column(col)) = (&**left, &**right) {
+                    if let Some(c_idx) = schema.find_column_index(col) {
+                        params.insert(*idx, schema.columns()[c_idx].data_type.clone());
+                    }
+                }
+                self.infer_from_expr(left, schema, params);
+                self.infer_from_expr(right, schema, params);
+            }
+            Expr::UnaryOp { expr, .. } => self.infer_from_expr(expr, schema, params),
+            Expr::Not { expr } => self.infer_from_expr(expr, schema, params),
+            _ => {}
+        }
     }
 
     /// Parse and plan a query without executing it, returning the output schema.
     /// Useful for Describe messages in Postgres Wire Protocol.
-    pub fn plan_query(&self, sql: &str) -> Result<Schema> {
+    pub async fn plan_query(&self, sql: &str) -> Result<(Schema, Vec<DataType>)> {
         // Special case for version() - common during handshakes
         if sql.to_uppercase().contains("VERSION()") {
-            return Ok(Schema::new(vec![Column::new("version", DataType::Text)]));
+            return Ok((Schema::new(vec![Column::new("version", DataType::Text)]), vec![]));
         }
 
         let statements = self.parser.parse(sql)?;
@@ -105,13 +189,38 @@ impl InMemoryDB {
         }
 
         let statement = &statements[0];
+        
+        let mut inferred = self.infer_parameters(statement).await;
+        
+        // Extract parameters (simplified regex approach for count)
+        let param_count = {
+             let s = format!("{:?}", statement);
+             let re = regex::Regex::new(r"Parameter\((\d+)\)").unwrap();
+             let mut max = 0;
+             for cap in re.captures_iter(&s) {
+                 if let Ok(n) = cap[1].parse::<usize>() {
+                     if n > max { max = n; }
+                 }
+             }
+             max
+        };
+        
+        let mut params = Vec::new();
+        for i in 1..=param_count {
+            params.push(inferred.remove(&i).unwrap_or(DataType::Unknown));
+        }
+
         match statement {
             Statement::Query(_) => {
                 let planner = QueryPlanner::new();
                 let plan = planner.plan(statement, &self.catalog)?;
-                Ok(plan.schema().clone())
+                Ok((plan.schema().clone(), params))
             }
-            _ => Ok(Schema::new(vec![])), // Non-query statements have no output schema (usually)
+            Statement::Explain(_) => {
+                 Ok((Schema::new(vec![Column::new("QUERY PLAN", DataType::Text)]), params))
+            }
+            // For DML and others, return empty schema (until RETURNING is supported)
+            _ => Ok((Schema::new(vec![]), params)),
         }
     }
 
@@ -298,7 +407,7 @@ impl InMemoryDB {
              return Err(DbError::TableExists(create.name.clone()));
         }
 
-        self.catalog = self.catalog.clone().with_view(create.name.clone(), *create.query.clone())?;
+        self.catalog = self.catalog.clone().with_view(create.name.clone(), *create.query.clone(), create.columns.clone())?;
         
         // TODO: Add WAL support for Views
         
@@ -489,7 +598,7 @@ impl InMemoryDB {
         pipeline.register(Box::new(CreateTableExecutor));
         pipeline.register(Box::new(DropTableExecutor));
         pipeline.register(Box::new(AlterTableExecutor));
-        pipeline.register(Box::new(InsertExecutor));
+        pipeline.register(Box::new(InsertExecutor::new(new_catalog.clone())));
         pipeline.register(Box::new(DeleteExecutor::new()));
         pipeline.register(Box::new(UpdateExecutor::new()));
         pipeline.register(Box::new(QueryExecutor::new(new_catalog.clone())));

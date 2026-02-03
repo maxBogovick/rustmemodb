@@ -125,6 +125,8 @@ impl EvaluatorRegistry {
         registry.register(Box::new(like::LikeEvaluator));
         registry.register(Box::new(between::BetweenEvaluator));
         registry.register(Box::new(is_null::IsNullEvaluator));
+        registry.register(Box::new(json::JsonEvaluator));
+        registry.register(Box::new(function::FunctionEvaluator));
 
         registry
     }

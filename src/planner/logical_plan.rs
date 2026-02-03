@@ -30,6 +30,21 @@ pub enum LogicalPlan {
 
     /// Window functions
     Window(WindowNode),
+
+    /// Constant values (e.g. SELECT 1)
+    Values(ValuesNode),
+
+    /// Recursive Query (WITH RECURSIVE)
+    RecursiveQuery(RecursiveQueryNode),
+}
+
+#[derive(Debug, Clone)]
+pub struct RecursiveQueryNode {
+    pub cte_name: String,
+    pub anchor_plan: Box<LogicalPlan>,
+    pub recursive_plan: Box<LogicalPlan>,
+    pub final_plan: Box<LogicalPlan>, // The main query using the CTE
+    pub schema: Schema,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +53,12 @@ pub struct TableScanNode {
     #[allow(dead_code)]
     pub projected_columns: Option<Vec<String>>, // None = all columns
     pub index_scan: Option<IndexScanInfo>,
+    pub schema: Schema,
+}
+
+#[derive(Debug, Clone)]
+pub struct ValuesNode {
+    pub rows: Vec<Vec<crate::parser::ast::Expr>>, // Expressions to evaluate to produce rows
     pub schema: Schema,
 }
 
@@ -166,6 +187,8 @@ impl LogicalPlan {
                 LogicalPlan::Aggregate(node) => &node.schema,
                 LogicalPlan::Distinct(node) => &node.schema,
                 LogicalPlan::Window(node) => &node.schema,
+                LogicalPlan::Values(node) => &node.schema,
+                LogicalPlan::RecursiveQuery(node) => &node.schema,
             }
         }
     
@@ -182,6 +205,8 @@ impl LogicalPlan {
                 LogicalPlan::Aggregate(node) => vec![&*node.input],
                 LogicalPlan::Distinct(node) => vec![&*node.input],
                 LogicalPlan::Window(node) => vec![&*node.input],
+                LogicalPlan::Values(_) => vec![],
+                LogicalPlan::RecursiveQuery(node) => vec![&*node.anchor_plan, &*node.recursive_plan, &*node.final_plan],
             }
         }
     }

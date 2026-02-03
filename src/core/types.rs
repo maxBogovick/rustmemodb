@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::fmt;
+use chrono::{DateTime, NaiveDate, Utc, NaiveDateTime};
+use uuid::Uuid;
 
 pub type Row = Vec<Value>;
 
@@ -25,12 +27,14 @@ pub enum DataType {
     Uuid,
     Array(Box<DataType>),
     Json,
+    Unknown, // For parameter inference
 }
 
 impl DataType {
     pub fn is_compatible(&self, value: &Value) -> bool {
         match (self, value) {
             (_, Value::Null) => true,
+            (Self::Unknown, _) => true, // Unknown accepts anything
             (Self::Integer, Value::Integer(_)) => true,
             (Self::Float, Value::Float(_)) => true,
             (Self::Float, Value::Integer(_)) => true, // Allow Integer -> Float coercion
@@ -69,6 +73,101 @@ impl DataType {
             (Self::Text, Self::Date) => true,
             (Self::Text, Self::Json) => true,
             (Self::Json, Self::Text) => true,
+            (Self::Unknown, _) => true, // Unknown can cast to anything (inferred)
+            (_, Self::Unknown) => true,
+            _ => false,
+        }
+    }
+
+    pub fn cast_value(&self, value: &Value) -> Result<Value> {
+        if matches!(value, Value::Null) {
+            return Ok(Value::Null);
+        }
+
+        if self.is_exact_match(value) {
+            return Ok(value.clone());
+        }
+
+        match (self, value) {
+            (Self::Float, Value::Integer(i)) => Ok(Value::Float(*i as f64)),
+            (Self::Integer, Value::Float(f)) => Ok(Value::Integer(*f as i64)),
+            
+            (Self::Timestamp, Value::Text(s)) => {
+                if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+                    return Ok(Value::Timestamp(dt.with_timezone(&Utc)));
+                }
+                if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                     return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                }
+                if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+                     return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                }
+                Err(DbError::TypeMismatch(format!("Invalid Timestamp format: {}", s)))
+            },
+            
+            (Self::Date, Value::Text(s)) => {
+                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                    Ok(Value::Date(d))
+                } else {
+                    Err(DbError::TypeMismatch(format!("Invalid Date format: {}", s)))
+                }
+            },
+            
+            (Self::Uuid, Value::Text(s)) => {
+                if let Ok(u) = Uuid::parse_str(s) {
+                    Ok(Value::Uuid(u))
+                } else {
+                    Err(DbError::TypeMismatch(format!("Invalid UUID format: {}", s)))
+                }
+            },
+            
+            (Self::Json, Value::Text(s)) => {
+                if let Ok(json) = serde_json::from_str(s) {
+                    Ok(Value::Json(json))
+                } else {
+                    Err(DbError::TypeMismatch(format!("Invalid JSON format: {}", s)))
+                }
+            },
+            
+            (Self::Array(inner), Value::Text(s)) => {
+                // Basic array parsing "{a,b}"
+                let trimmed = s.trim();
+                if (trimmed.starts_with('{') && trimmed.ends_with('}')) ||
+                   (trimmed.starts_with('[') && trimmed.ends_with(']')) {
+                    let content = &trimmed[1..trimmed.len()-1];
+                    if content.is_empty() {
+                        return Ok(Value::Array(vec![]));
+                    }
+                    let parts: Vec<&str> = content.split(',').map(|p| p.trim()).collect();
+                    let mut values = Vec::new();
+                    for part in parts {
+                        // TODO: handle quotes
+                        let val = Value::Text(part.to_string());
+                        values.push(inner.cast_value(&val)?);
+                    }
+                    Ok(Value::Array(values))
+                } else {
+                    Err(DbError::TypeMismatch(format!("Invalid Array format: {}", s)))
+                }
+            },
+
+            (Self::Text, v) => Ok(Value::Text(v.to_string())),
+
+            _ => Err(DbError::TypeMismatch(format!("Cannot cast {} to {}", value.type_name(), self))),
+        }
+    }
+
+    fn is_exact_match(&self, value: &Value) -> bool {
+        match (self, value) {
+            (Self::Integer, Value::Integer(_)) => true,
+            (Self::Float, Value::Float(_)) => true,
+            (Self::Text, Value::Text(_)) => true,
+            (Self::Boolean, Value::Boolean(_)) => true,
+            (Self::Timestamp, Value::Timestamp(_)) => true,
+            (Self::Date, Value::Date(_)) => true,
+            (Self::Uuid, Value::Uuid(_)) => true,
+            (Self::Json, Value::Json(_)) => true,
+            (Self::Array(_), Value::Array(_)) => true, // Simplification: doesn't check inner types
             _ => false,
         }
     }
@@ -86,6 +185,7 @@ impl fmt::Display for DataType {
             Self::Uuid => write!(f, "UUID"),
             Self::Array(t) => write!(f, "{}[]", t),
             Self::Json => write!(f, "JSONB"),
+            Self::Unknown => write!(f, "UNKNOWN"),
         }
     }
 }

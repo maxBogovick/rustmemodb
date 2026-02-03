@@ -24,6 +24,7 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub struct CreateViewStmt {
     pub name: String,
+    pub columns: Vec<String>,
     pub query: Box<QueryStmt>,
     pub or_replace: bool,
 }
@@ -104,7 +105,13 @@ pub struct ColumnDef {
 pub struct InsertStmt {
     pub table_name: String,
     pub columns: Option<Vec<String>>, // None = all columns
-    pub values: Vec<Vec<Expr>>,
+    pub source: InsertSource,
+}
+
+#[derive(Debug, Clone)]
+pub enum InsertSource {
+    Values(Vec<Vec<Expr>>),
+    Select(Box<QueryStmt>),
 }
 
 /// SELECT query statement
@@ -117,8 +124,23 @@ pub struct QueryStmt {
     pub selection: Option<Expr>,
     pub group_by: Vec<Expr>,
     pub having: Option<Expr>,
+    pub set_op: Option<Box<SetOperation>>,
     pub order_by: Vec<OrderByExpr>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetOperation {
+    pub op: SetOperator,
+    pub right: Box<QueryStmt>,
+    pub all: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum SetOperator {
+    Union,
+    Except,
+    Intersect,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +152,7 @@ pub struct With {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cte {
     pub alias: String,
+    pub columns: Vec<String>,
     pub query: Box<QueryStmt>,
 }
 
@@ -290,6 +313,21 @@ pub enum Expr {
         distinct: bool,
         over: Option<WindowSpec>,
     },
+
+    /// Type Cast (x::type or CAST(x AS type))
+    Cast {
+        expr: Box<Expr>,
+        data_type: DataType,
+    },
+
+    /// Array literal (ARRAY[1, 2, 3])
+    Array(Vec<Expr>),
+
+    /// Array index access (arr[index])
+    ArrayIndex {
+        obj: Box<Expr>,
+        index: Box<Expr>,
+    },
 }
 
 /// Binary operators
@@ -313,6 +351,10 @@ pub enum BinaryOp {
     // Logical
     And,
     Or,
+
+    // JSON
+    Arrow,     // ->
+    LongArrow, // ->>
 }
 
 /// Unary operators
@@ -391,6 +433,15 @@ impl fmt::Display for Expr {
 
             }
 
+            Expr::Cast { expr, data_type } => write!(f, "CAST({} AS {})", expr, data_type),
+
+            Expr::Array(list) => {
+                let list_str: Vec<String> = list.iter().map(|e| format!("{}", e)).collect();
+                write!(f, "ARRAY[{}]", list_str.join(", "))
+            }
+
+            Expr::ArrayIndex { obj, index } => write!(f, "{}[{}]", obj, index),
+
         }
 
     }
@@ -430,6 +481,10 @@ impl fmt::Display for BinaryOp {
             BinaryOp::And => write!(f, "AND"),
 
             BinaryOp::Or => write!(f, "OR"),
+
+            BinaryOp::Arrow => write!(f, "->"),
+
+            BinaryOp::LongArrow => write!(f, "->>"),
 
         }
 

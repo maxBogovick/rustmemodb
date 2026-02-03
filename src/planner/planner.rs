@@ -1,7 +1,7 @@
-use crate::parser::ast::{Statement, QueryStmt, SelectItem, OrderByExpr, Expr, BinaryOp, TableWithJoins, TableFactor, JoinOperator, JoinConstraint};
+use crate::parser::ast::{Statement, QueryStmt, SelectItem, OrderByExpr, Expr, BinaryOp, TableWithJoins, TableFactor, JoinOperator, JoinConstraint, SetOperator};
 use crate::storage::Catalog;
 use crate::core::{DbError, Result, Value, Schema, Column};
-use super::logical_plan::{LogicalPlan, TableScanNode, IndexScanInfo, IndexOp, SortNode, LimitNode, JoinNode, JoinType, ProjectionNode, FilterNode, AggregateNode, DistinctNode, WindowNode};
+use super::logical_plan::{LogicalPlan, TableScanNode, IndexScanInfo, IndexOp, SortNode, LimitNode, JoinNode, JoinType, ProjectionNode, FilterNode, AggregateNode, DistinctNode, WindowNode, ValuesNode, RecursiveQueryNode};
 
 /// Query planner - converts AST to LogicalPlan
 pub struct QueryPlanner;
@@ -21,18 +21,84 @@ impl QueryPlanner {
     }
 
     fn plan_query(&self, query: &QueryStmt, catalog: &Catalog) -> Result<LogicalPlan> {
-        // Handle CTEs (WITH clause)
-        // We create a local catalog that includes the CTEs as views
         let mut local_catalog = catalog.clone();
+
         if let Some(ref with) = query.with {
-            for cte in &with.cte_tables {
-                local_catalog = local_catalog.with_view(cte.alias.clone(), *cte.query.clone())?;
+            if with.recursive {
+                // Recursive CTE handling (Single Recursive CTE support for MVP)
+                for cte in &with.cte_tables {
+                    if let Some(ref set_op) = cte.query.set_op {
+                        if set_op.op == SetOperator::Union {
+                            // Anchor term: Left side of UNION
+                            let mut anchor_stmt = *cte.query.clone();
+                            anchor_stmt.set_op = None; // Strip recursive part
+                            anchor_stmt.with = None;   // Strip WITH to avoid loops
+
+                            let anchor_plan = self.plan_query(&anchor_stmt, catalog)?;
+
+                            // Register CTE as Table in local catalog for Recursive term and Final Query
+                            let cte_schema = anchor_plan.schema().clone();
+                            let mut columns = cte_schema.columns().to_vec();
+                            if !cte.columns.is_empty() {
+                                if cte.columns.len() != columns.len() {
+                                    return Err(DbError::ExecutionError(format!(
+                                        "CTE '{}' column count mismatch: expected {}, got {}", 
+                                        cte.alias, cte.columns.len(), columns.len()
+                                    )));
+                                }
+                                for (i, name) in cte.columns.iter().enumerate() {
+                                    columns[i].name = name.clone();
+                                }
+                            }
+                            let table_schema = crate::storage::TableSchema::new(cte.alias.clone(), columns);
+                            
+                            // Shadow existing table if any
+                            if local_catalog.table_exists(&cte.alias) {
+                                local_catalog = local_catalog.without_table(&cte.alias)?;
+                            }
+                            local_catalog = local_catalog.with_table(table_schema)?;
+
+                            // Recursive term: Right side of UNION
+                            let recursive_stmt = *set_op.right.clone();
+                            // Recursive term uses local_catalog (which has CTE as table)
+                            let recursive_plan = self.plan_query(&recursive_stmt, &local_catalog)?;
+
+                            // Final Query
+                            let mut final_stmt = query.clone();
+                            final_stmt.with = None; // Clear WITH
+                            
+                            let final_plan = self.plan_query(&final_stmt, &local_catalog)?;
+                            let schema = final_plan.schema().clone();
+
+                            return Ok(LogicalPlan::RecursiveQuery(RecursiveQueryNode {
+                                cte_name: cte.alias.clone(),
+                                anchor_plan: Box::new(anchor_plan),
+                                recursive_plan: Box::new(recursive_plan),
+                                final_plan: Box::new(final_plan),
+                                schema,
+                            }));
+                        }
+                    }
+                }
+            } else {
+                for cte in &with.cte_tables {
+                    local_catalog = local_catalog.with_view(cte.alias.clone(), *cte.query.clone(), cte.columns.clone())?;
+                }
             }
         }
+        
         let catalog = &local_catalog;
 
         // 1. Start with table scan / joins
-        let mut plan = self.plan_from(&query.from, catalog)?;
+        let mut plan = if query.from.is_empty() {
+            // Dummy relation with one empty row
+            LogicalPlan::Values(ValuesNode {
+                rows: vec![vec![]], // One row, no columns
+                schema: Schema::new(vec![]),
+            })
+        } else {
+            self.plan_from(&query.from, catalog)?
+        };
 
         // 2. Apply WHERE clause
         if let Some(ref selection) = query.selection {
@@ -317,8 +383,34 @@ impl QueryPlanner {
         match factor {
             TableFactor::Table { name, alias } => {
                 // Check if it's a view
-                if let Some(view_query) = catalog.get_view(name) {
-                    let plan = self.plan_query(view_query, catalog)?;
+                if let Some((view_query, view_columns)) = catalog.get_view(name) {
+                    let mut plan = self.plan_query(view_query, catalog)?;
+
+                    // Apply view column aliases if present
+                    if !view_columns.is_empty() {
+                        let input_schema = plan.schema().clone();
+                        if input_schema.column_count() != view_columns.len() {
+                            return Err(DbError::ExecutionError(format!(
+                                "View '{}' column count mismatch: expected {}, got {}",
+                                name, view_columns.len(), input_schema.column_count()
+                            )));
+                        }
+                        
+                        let expressions: Vec<Expr> = input_schema.columns()
+                            .iter()
+                            .map(|c| Expr::Column(c.name.clone()))
+                            .collect();
+                            
+                        let new_cols = view_columns.iter().zip(input_schema.columns()).map(|(alias, col)| {
+                            Column::new(alias.clone(), col.data_type.clone())
+                        }).collect();
+                        
+                        plan = LogicalPlan::Projection(ProjectionNode {
+                            input: Box::new(plan),
+                            expressions,
+                            schema: Schema::new(new_cols),
+                        });
+                    }
 
                     if let Some(alias_name) = alias {
                         let input_schema = plan.schema().clone();
@@ -336,10 +428,6 @@ impl QueryPlanner {
                             schema: new_schema,
                         }))
                     } else {
-                        // If view name is used as alias implicitly
-                        // We should probably qualify columns with view name to match behavior of tables
-                        // But views might already have complex column names.
-                        // For MVP, just return plan.
                         Ok(plan)
                     }
                 } else {
@@ -429,15 +517,7 @@ impl QueryPlanner {
                         }
                     });
                     
-                    // Simple type inference (fallback to Text if unknown)
-                    // In a real DB, we would evaluate expression type
-                    let data_type = if let Expr::Column(col_name) = expr {
-                        input_schema.get_column(col_name)
-                            .map(|c| c.data_type.clone())
-                            .unwrap_or(crate::core::DataType::Text)
-                    } else {
-                        crate::core::DataType::Text
-                    };
+                    let data_type = self.infer_expr_type(expr, input_schema);
 
                     columns.push(Column::new(name, data_type));
                 }
@@ -598,6 +678,34 @@ impl QueryPlanner {
                 over: over.clone(),
             },
             _ => expr.clone(),
+        }
+    }
+
+    fn infer_expr_type(&self, expr: &Expr, schema: &Schema) -> crate::core::DataType {
+        use crate::core::DataType;
+        match expr {
+            Expr::Column(name) => schema.get_column(name).map(|c| c.data_type.clone()).unwrap_or(DataType::Text),
+            Expr::Literal(val) => match val {
+                Value::Integer(_) => DataType::Integer,
+                Value::Float(_) => DataType::Float,
+                Value::Boolean(_) => DataType::Boolean,
+                Value::Timestamp(_) => DataType::Timestamp,
+                Value::Date(_) => DataType::Date,
+                Value::Uuid(_) => DataType::Uuid,
+                Value::Json(_) => DataType::Json,
+                _ => DataType::Text,
+            },
+            Expr::BinaryOp { left, .. } => self.infer_expr_type(left, schema),
+            Expr::UnaryOp { expr, .. } => self.infer_expr_type(expr, schema),
+            Expr::Function { name, .. } => {
+                match name.to_uppercase().as_str() {
+                    "COUNT" | "ROW_NUMBER" | "RANK" | "LENGTH" => DataType::Integer,
+                    "SUM" | "AVG" => DataType::Float,
+                    "NOW" => DataType::Timestamp,
+                    _ => DataType::Text,
+                }
+            }
+            _ => DataType::Text,
         }
     }
 }

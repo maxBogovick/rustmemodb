@@ -9,6 +9,15 @@ use crate::core::{DbError, Result, DataType, ForeignKey};
 use crate::parser::ast::*;
 use crate::plugins::ExpressionConverter;
 
+struct PartialSelect {
+    distinct: bool,
+    projection: Vec<SelectItem>,
+    from: Vec<TableWithJoins>,
+    selection: Option<Expr>,
+    group_by: Vec<Expr>,
+    having: Option<Expr>,
+}
+
 pub struct SqlParserAdapter {
     dialect: PostgreSqlDialect,
     expr_converter: ExpressionConverter,
@@ -73,11 +82,13 @@ impl SqlParserAdapter {
                 }
                 Ok(Statement::AlterTable(self.convert_alter_table(name, operations.into_iter().next().unwrap())?))
             }
-            sql_ast::Statement::CreateView { name, query, or_replace, .. } => {
+            sql_ast::Statement::CreateView { name, columns, query, or_replace, .. } => {
                 let view_name = extract_table_name(&name)?;
+                let view_columns = columns.into_iter().map(|c| c.name.value).collect();
                 let query_stmt = self.convert_query(*query)?;
                 Ok(Statement::CreateView(CreateViewStmt {
                     name: view_name,
+                    columns: view_columns,
                     query: Box::new(query_stmt),
                     or_replace,
                 }))
@@ -369,45 +380,52 @@ impl SqlParserAdapter {
             Some(insert.columns.into_iter().map(|id| id.value).collect())
         };
 
-        let values = if let Some(source) = insert.source {
-            if let sql_ast::SetExpr::Values(vals) = *source.body {
-                vals.rows
-                    .into_iter()
-                    .map(|row| {
-                        row.into_iter()
-                            .map(|expr| self.expr_converter.convert(expr, self))
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            } else {
-                return Err(DbError::UnsupportedOperation(
-                    "Only VALUES clause supported".into()
-                ));
+        let source = if let Some(source) = insert.source {
+            match *source.body {
+                sql_ast::SetExpr::Values(vals) => {
+                    let rows = vals.rows
+                        .into_iter()
+                        .map(|row| {
+                            row.into_iter()
+                                .map(|expr| self.expr_converter.convert(expr, self))
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    InsertSource::Values(rows)
+                }
+                sql_ast::SetExpr::Select(_) => {
+                    // Re-wrap body into Query to reuse convert_query?
+                    // source IS a Query.
+                    // But I matched *source.body.
+                    // If it is Select, I can just convert the whole source Query.
+                    // But I need to move source out of match?
+                    // Actually, I can clone source if needed or just use `source` if I didn't match `*source.body` first.
+                    // But I needed to check variant.
+                    
+                    // Simple hack: Reconstruct Query or pass source.
+                    // Since I matched *source.body, I consumed it?
+                    // No, matching reference `match &*source.body`.
+                    
+                    // Let's refactor.
+                    let query = self.convert_query(*source)?;
+                    InsertSource::Select(Box::new(query))
+                }
+                _ => return Err(DbError::UnsupportedOperation(
+                    "Only VALUES and SELECT supported in INSERT".into()
+                )),
             }
         } else {
-            Vec::new()
+            InsertSource::Values(Vec::new())
         };
 
         Ok(InsertStmt {
             table_name,
             columns,
-            values,
+            source,
         })
     }
 
-    fn convert_query(&self, query: sql_ast::Query) -> Result<QueryStmt> {
-        let with = if let Some(with) = query.with {
-            Some(self.convert_with(with)?)
-        } else {
-            None
-        };
-
-        let sql_ast::SetExpr::Select(select) = *query.body else {
-            return Err(DbError::UnsupportedOperation(
-                "Only SELECT queries supported".into()
-            ));
-        };
-
+    fn convert_select(&self, select: sql_ast::Select) -> Result<PartialSelect> {
         let distinct = match select.distinct {
             Some(sql_ast::Distinct::Distinct) => true,
             Some(sql_ast::Distinct::On(_)) => {
@@ -449,20 +467,104 @@ impl SqlParserAdapter {
             .map(|expr| self.expr_converter.convert(expr, self))
             .transpose()?;
 
-        let order_by = self.convert_order_by(query.order_by)?;
-        let limit = self.convert_limit_clause(&query.limit_clause)?;
-
-        Ok(QueryStmt {
-            with,
+        Ok(PartialSelect {
             distinct,
             projection,
             from,
             selection,
             group_by,
             having,
+        })
+    }
+
+    fn convert_query(&self, query: sql_ast::Query) -> Result<QueryStmt> {
+        let with = if let Some(with) = query.with {
+            Some(self.convert_with(with)?)
+        } else {
+            None
+        };
+
+        let (partial, set_op) = self.convert_set_expr(*query.body)?;
+
+        let order_by = self.convert_order_by(query.order_by)?;
+        let limit = self.convert_limit_clause(&query.limit_clause)?;
+
+        Ok(QueryStmt {
+            with,
+            distinct: partial.distinct,
+            projection: partial.projection,
+            from: partial.from,
+            selection: partial.selection,
+            group_by: partial.group_by,
+            having: partial.having,
+            set_op,
             order_by,
             limit,
         })
+    }
+
+    fn convert_set_expr(&self, expr: sql_ast::SetExpr) -> Result<(PartialSelect, Option<Box<SetOperation>>)> {
+        match expr {
+            sql_ast::SetExpr::Select(select) => {
+                let partial = self.convert_select(*select)?;
+                Ok((partial, None))
+            }
+            sql_ast::SetExpr::SetOperation { op, set_quantifier, left, right } => {
+                let (left_select, left_next_op) = self.convert_set_expr(*left)?;
+                let right_query = self.convert_set_expr_to_query(*right)?;
+
+                let my_op = match op {
+                    sql_ast::SetOperator::Union => SetOperator::Union,
+                    sql_ast::SetOperator::Except | sql_ast::SetOperator::Minus => SetOperator::Except,
+                    sql_ast::SetOperator::Intersect => SetOperator::Intersect,
+                };
+
+                let all = match set_quantifier {
+                    sql_ast::SetQuantifier::All => true,
+                    _ => false,
+                };
+
+                let new_op = SetOperation {
+                    op: my_op,
+                    right: Box::new(right_query),
+                    all,
+                };
+
+                let combined_op = if let Some(mut existing_op) = left_next_op {
+                    self.append_set_op(&mut existing_op, new_op);
+                    Some(existing_op)
+                } else {
+                    Some(Box::new(new_op))
+                };
+
+                Ok((left_select, combined_op))
+            }
+            _ => Err(DbError::UnsupportedOperation("Unsupported SetExpr".into())),
+        }
+    }
+
+    fn convert_set_expr_to_query(&self, expr: sql_ast::SetExpr) -> Result<QueryStmt> {
+        let (partial, set_op) = self.convert_set_expr(expr)?;
+        Ok(QueryStmt {
+            with: None,
+            distinct: partial.distinct,
+            projection: partial.projection,
+            from: partial.from,
+            selection: partial.selection,
+            group_by: partial.group_by,
+            having: partial.having,
+            set_op,
+            order_by: vec![],
+            limit: None,
+        })
+    }
+
+    fn append_set_op(&self, chain: &mut Box<SetOperation>, new_node: SetOperation) {
+        if let Some(ref mut next) = chain.right.set_op {
+            self.append_set_op(next, new_node);
+        } else {
+            chain.right.set_op = Some(Box::new(new_node));
+        }
     }
 
     fn convert_with(&self, with: sql_ast::With) -> Result<With> {
@@ -479,9 +581,11 @@ impl SqlParserAdapter {
 
     fn convert_cte(&self, cte: sql_ast::Cte) -> Result<Cte> {
         let alias = cte.alias.name.value;
+        let columns = cte.alias.columns.into_iter().map(|c| c.name.value).collect();
         let query = self.convert_query(*cte.query)?;
         Ok(Cte {
             alias,
+            columns,
             query: Box::new(query),
         })
     }

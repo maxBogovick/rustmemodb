@@ -81,6 +81,8 @@ impl QueryExecutor {
             LogicalPlan::Aggregate(aggr) => self.execute_aggregate(aggr, ctx).await,
             LogicalPlan::Distinct(distinct) => self.execute_distinct(distinct, ctx).await,
             LogicalPlan::Window(window) => self.execute_window(window, ctx).await,
+            LogicalPlan::Values(values) => self.execute_values(values, ctx).await,
+            LogicalPlan::RecursiveQuery(rec) => self.execute_recursive_query(rec, ctx).await,
         }
     }
 
@@ -553,6 +555,99 @@ impl QueryExecutor {
         }
 
         Ok(rows)
+    }
+
+    /// Execute VALUES clause (constant rows)
+    async fn execute_values(
+        &self,
+        values: &crate::planner::logical_plan::ValuesNode,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<Vec<Row>> {
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+        let schema = &values.schema;
+
+        let mut result = Vec::new();
+        for row_exprs in &values.rows {
+            let mut row = Vec::new();
+            for expr in row_exprs {
+                // Evaluate expression (e.g. literals, parameters)
+                // Use empty row context as VALUES usually don't reference tables
+                row.push(eval_ctx.evaluate(expr, &vec![], schema).await?);
+            }
+            result.push(row);
+        }
+        Ok(result)
+    }
+
+    /// Execute recursive CTE query
+    async fn execute_recursive_query(
+        &self,
+        node: &crate::planner::logical_plan::RecursiveQueryNode,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<Vec<Row>> {
+        // 1. Execute Anchor
+        let anchor_rows = self.execute_plan(&node.anchor_plan, ctx).await?;
+        
+        // 2. Setup Working Table (Iterative)
+        let mut working_table_rows = anchor_rows.clone();
+        let mut total_rows = anchor_rows;
+        
+        let table_schema = crate::storage::TableSchema::new(node.cte_name.clone(), node.schema.columns().to_vec());
+        
+        // Iteration limit to prevent infinite loops (safety)
+        let max_iterations = 100; 
+        
+        for _ in 0..max_iterations {
+            if working_table_rows.is_empty() {
+                break;
+            }
+
+            // Create a forked storage for this iteration
+            let mut iter_storage = ctx.storage.fork().await?;
+            iter_storage.create_table(table_schema.clone()).await?;
+            
+            let snapshot = ctx.snapshot.clone();
+            
+            for row in &working_table_rows {
+                iter_storage.insert_row(&node.cte_name, row.clone(), &snapshot).await?;
+            }
+            
+            let iter_ctx = ExecutionContext::new(
+                &iter_storage,
+                ctx.transaction_manager,
+                ctx.persistence,
+                snapshot.clone()
+            ).with_params(ctx.params.clone());
+            
+            // Execute Recursive Term
+            let new_rows = self.execute_plan(&node.recursive_plan, &iter_ctx).await?;
+            
+            if new_rows.is_empty() {
+                break;
+            }
+            
+            total_rows.extend(new_rows.clone());
+            working_table_rows = new_rows;
+        }
+        
+        // 3. Execute Final Query with Full CTE Table
+        let mut final_storage = ctx.storage.fork().await?;
+        final_storage.create_table(table_schema).await?;
+        
+        let snapshot = ctx.snapshot.clone();
+        for row in &total_rows {
+            final_storage.insert_row(&node.cte_name, row.clone(), &snapshot).await?;
+        }
+        
+        let final_ctx = ExecutionContext::new(
+            &final_storage,
+            ctx.transaction_manager,
+            ctx.persistence,
+            snapshot
+        ).with_params(ctx.params.clone());
+        
+        self.execute_plan(&node.final_plan, &final_ctx).await
     }
 }
 

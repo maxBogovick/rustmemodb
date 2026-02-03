@@ -1,13 +1,22 @@
 use super::{ExecutionContext, Executor};
 use crate::core::{Column, DbError, Result, Row, Value};
-use crate::parser::ast::{Expr, InsertStmt, Statement};
+use crate::parser::ast::{Expr, InsertStmt, Statement, InsertSource, Statement as AstStatement};
 use crate::planner::logical_plan::IndexOp;
 use crate::result::QueryResult;
-use crate::storage::WalEntry;
+use crate::storage::{WalEntry, Catalog};
+use crate::executor::query::QueryExecutor;
 
 use async_trait::async_trait;
 
-pub struct InsertExecutor;
+pub struct InsertExecutor {
+    catalog: Catalog,
+}
+
+impl InsertExecutor {
+    pub fn new(catalog: Catalog) -> Self {
+        Self { catalog }
+    }
+}
 
 #[async_trait]
 impl Executor for InsertExecutor {
@@ -33,11 +42,35 @@ impl InsertExecutor {
         let schema = ctx.storage.get_schema(&insert.table_name).await?;
 
         // Вычисляем строки
-        let rows: Vec<Row> = insert
-            .values
-            .iter()
-            .map(|row_exprs| self.evaluate_row(row_exprs, schema.schema().columns(), ctx))
-            .collect::<Result<Vec<_>>>()?;
+        let rows: Vec<Row> = match &insert.source {
+            InsertSource::Values(values) => {
+                values.iter()
+                    .map(|row_exprs| self.evaluate_row(row_exprs, schema.schema().columns(), ctx))
+                    .collect::<Result<Vec<_>>>()?
+            }
+            InsertSource::Select(query) => {
+                let executor = QueryExecutor::new(self.catalog.clone());
+                let result = executor.execute(&AstStatement::Query(*query.clone()), ctx).await?;
+                // TODO: Validate column types against schema?
+                // QueryExecutor returns generic rows.
+                // Insert expects specific types? evaluate_row does casting.
+                // Here we might need casting too if types strictly don't match.
+                // For MVP, assume types match or rely on implicit compat.
+                // But strict types: Integer vs Text.
+                // I should iterate rows and cast?
+                
+                let mut cast_rows = Vec::new();
+                for row in result.rows() {
+                    let mut new_row = Vec::new();
+                    for (i, val) in row.iter().enumerate() {
+                        let target_type = &schema.schema().columns()[i].data_type;
+                        new_row.push(target_type.cast_value(val)?);
+                    }
+                    cast_rows.push(new_row);
+                }
+                cast_rows
+            }
+        };
 
         // Validate Foreign Keys
         for row in &rows {
@@ -118,86 +151,18 @@ impl InsertExecutor {
     ) -> Result<Value> {
         match expr {
             Expr::Literal(val) => {
-                self.cast_value(val, expected_type)
+                expected_type.cast_value(val)
             }
             Expr::Parameter(idx) => {
                 if *idx == 0 || *idx > ctx.params.len() {
                     return Err(DbError::ExecutionError(format!("Parameter index out of range: ${}", idx)));
                 }
                 let val = &ctx.params[*idx - 1];
-                self.cast_value(val, expected_type)
+                expected_type.cast_value(val)
             }
             _ => Err(DbError::UnsupportedOperation(
                 "Only literal values or parameters supported in INSERT".into(),
             )),
         }
-    }
-
-    fn cast_value(&self, val: &Value, expected_type: &crate::core::DataType) -> Result<Value> {
-        if matches!(val, Value::Null) {
-            return Ok(Value::Null);
-        }
-
-        // If types match directly, return value
-        if expected_type.is_compatible(val) {
-             return Ok(val.clone());
-        }
-
-        // Attempt type coercion for Strings -> Complex Types
-        if let Value::Text(s) = val {
-            match expected_type {
-                crate::core::DataType::Timestamp => {
-                    // Try parsing ISO8601
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-                        return Ok(Value::Timestamp(dt.with_timezone(&chrono::Utc)));
-                    }
-                },
-                crate::core::DataType::Date => {
-                    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                        return Ok(Value::Date(d));
-                    }
-                },
-                crate::core::DataType::Uuid => {
-                    if let Ok(u) = uuid::Uuid::parse_str(s) {
-                        return Ok(Value::Uuid(u));
-                    }
-                },
-                crate::core::DataType::Json => {
-                    if let Ok(json) = serde_json::from_str(s) {
-                        return Ok(Value::Json(json));
-                    }
-                },
-                crate::core::DataType::Array(inner_type) => {
-                    // Parse array literal "{1,2,3}" or "[1,2,3]"
-                    let trimmed = s.trim();
-                    if (trimmed.starts_with('{') && trimmed.ends_with('}')) ||
-                       (trimmed.starts_with('[') && trimmed.ends_with(']')) {
-                        let content = &trimmed[1..trimmed.len()-1];
-                        if content.is_empty() {
-                            return Ok(Value::Array(vec![]));
-                        }
-                        let parts: Vec<&str> = content.split(',').map(|p| p.trim()).collect();
-                        let mut values = Vec::new();
-                        for part in parts {
-                            // Recursively parse elements
-                            // This is a very basic parser, doesn't handle quotes or nested arrays well
-                            let val = Value::Text(part.to_string());
-                            values.push(self.cast_value(&val, inner_type)?);
-                        }
-                        return Ok(Value::Array(values));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if !expected_type.is_compatible(val) {
-            return Err(DbError::TypeMismatch(format!(
-                "Expected {}, got {}",
-                expected_type,
-                val.type_name()
-            )));
-        }
-        Ok(val.clone())
     }
 }
