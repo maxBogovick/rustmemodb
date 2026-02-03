@@ -157,6 +157,11 @@ impl InMemoryDB {
                 return Ok(QueryResult::empty());
             }
             Statement::AlterTable(alter) => {
+                if let crate::parser::ast::AlterTableOperation::RenameTable(new_name) = &alter.operation {
+                    self.execute_rename_table(&alter.table_name, new_name).await?;
+                    return Ok(QueryResult::empty());
+                }
+
                 // Execute ALTER TABLE via pipeline
                 // We need to update catalog after execution
                 let persistence_ref = self.persistence.as_ref();
@@ -312,6 +317,23 @@ impl InMemoryDB {
          self.catalog = self.catalog.clone().without_view(&drop.name)?;
          self.refresh_catalog_executors();
          Ok(QueryResult::empty())
+    }
+
+    async fn execute_rename_table(&mut self, old_name: &str, new_name: &str) -> Result<()> {
+        if let Some(ref persistence) = self.persistence {
+            // Log rename not supported in WAL yet properly (or reuse AlterTable?)
+            // We'll skip WAL for RenameTable for MVP or need to add variant.
+        }
+
+        self.storage.rename_table(old_name, new_name).await?;
+
+        // Update Catalog
+        let schema = self.storage.get_schema(new_name).await?;
+        self.catalog = self.catalog.clone().without_table(old_name)?.with_table(schema)?;
+
+        self.refresh_catalog_executors();
+        self.maybe_checkpoint().await?;
+        Ok(())
     }
 
     pub fn table_exists(&self, name: &str) -> bool {

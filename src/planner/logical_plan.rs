@@ -24,6 +24,12 @@ pub enum LogicalPlan {
 
     /// Aggregate rows (GROUP BY)
     Aggregate(AggregateNode),
+
+    /// Distinct rows
+    Distinct(DistinctNode),
+
+    /// Window functions
+    Window(WindowNode),
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +131,19 @@ pub struct JoinNode {
     pub schema: Schema,
 }
 
+#[derive(Debug, Clone)]
+pub struct DistinctNode {
+    pub input: Box<LogicalPlan>,
+    pub schema: Schema,
+}
+
+#[derive(Debug, Clone)]
+pub struct WindowNode {
+    pub input: Box<LogicalPlan>,
+    pub window_exprs: Vec<Expr>,
+    pub schema: Schema,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum JoinType {
     Inner,
@@ -145,6 +164,8 @@ impl LogicalPlan {
                 LogicalPlan::Limit(node) => &node.schema,
                 LogicalPlan::Join(node) => &node.schema,
                 LogicalPlan::Aggregate(node) => &node.schema,
+                LogicalPlan::Distinct(node) => &node.schema,
+                LogicalPlan::Window(node) => &node.schema,
             }
         }
     
@@ -159,6 +180,8 @@ impl LogicalPlan {
                 LogicalPlan::Limit(node) => vec![&*node.input],
                 LogicalPlan::Join(node) => vec![&*node.left, &*node.right],
                 LogicalPlan::Aggregate(node) => vec![&*node.input],
+                LogicalPlan::Distinct(node) => vec![&*node.input],
+                LogicalPlan::Window(node) => vec![&*node.input],
             }
         }
     }

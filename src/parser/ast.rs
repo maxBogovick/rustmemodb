@@ -110,6 +110,8 @@ pub struct InsertStmt {
 /// SELECT query statement
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryStmt {
+    pub with: Option<With>,
+    pub distinct: bool,
     pub projection: Vec<SelectItem>,
     pub from: Vec<TableWithJoins>,
     pub selection: Option<Expr>,
@@ -117,6 +119,18 @@ pub struct QueryStmt {
     pub having: Option<Expr>,
     pub order_by: Vec<OrderByExpr>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct With {
+    pub recursive: bool,
+    pub cte_tables: Vec<Cte>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cte {
+    pub alias: String,
+    pub query: Box<QueryStmt>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,6 +176,12 @@ pub enum SelectItem {
 pub struct OrderByExpr {
     pub expr: Expr,
     pub descending: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowSpec {
+    pub partition_by: Vec<Expr>,
+    pub order_by: Vec<OrderByExpr>,
 }
 
 /// DELETE statement
@@ -267,6 +287,8 @@ pub enum Expr {
     Function {
         name: String,
         args: Vec<Expr>,
+        distinct: bool,
+        over: Option<WindowSpec>,
     },
 }
 
@@ -360,11 +382,12 @@ impl fmt::Display for Expr {
 
             Expr::Not { expr } => write!(f, "NOT {}", expr),
 
-            Expr::Function { name, args } => {
+            Expr::Function { name, args, distinct, over } => {
 
                 let args_str: Vec<String> = args.iter().map(|e| format!("{}", e)).collect();
+                let over_str = if over.is_some() { " OVER (...)" } else { "" };
 
-                write!(f, "{}({})", name, args_str.join(", "))
+                write!(f, "{}({}{}){}", name, if *distinct { "DISTINCT " } else { "" }, args_str.join(", "), over_str)
 
             }
 

@@ -148,6 +148,10 @@ impl Table {
         Ok(())
     }
 
+    pub fn set_name(&mut self, name: String) {
+        self.schema.name = name;
+    }
+
     pub fn insert(&mut self, row: Row, snapshot: &Snapshot) -> Result<usize> {
         self.validate_row(&row)?;
         self.check_uniqueness(&row, None, snapshot)?;

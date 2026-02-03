@@ -79,6 +79,8 @@ impl QueryExecutor {
             LogicalPlan::Limit(limit) => self.execute_limit(limit, ctx).await,
             LogicalPlan::Join(join) => self.execute_join(join, ctx).await,
             LogicalPlan::Aggregate(aggr) => self.execute_aggregate(aggr, ctx).await,
+            LogicalPlan::Distinct(distinct) => self.execute_distinct(distinct, ctx).await,
+            LogicalPlan::Window(window) => self.execute_window(window, ctx).await,
         }
     }
 
@@ -133,8 +135,8 @@ impl QueryExecutor {
             
             // Append aggregate results
             for expr in &aggr.aggr_exprs {
-                if let Expr::Function { name, args } = expr {
-                    let val = self.evaluate_aggregate(name, args, &group_rows, input_schema, &eval_ctx).await?;
+                if let Expr::Function { name, args, distinct, over: _ } = expr {
+                    let val = self.evaluate_aggregate(name, args, *distinct, &group_rows, input_schema, &eval_ctx).await?;
                     row.push(val);
                 } else {
                     return Err(DbError::ExecutionError("Non-aggregate expression in aggregate list".into()));
@@ -428,6 +430,130 @@ impl QueryExecutor {
         rows.truncate(limit.limit);
         Ok(rows)
     }
+
+    /// Execute distinct operation
+    async fn execute_distinct(
+        &self,
+        distinct: &crate::planner::logical_plan::DistinctNode,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<Vec<Row>> {
+        let input_rows = self.execute_plan(&distinct.input, ctx).await?;
+        
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        
+        for row in input_rows {
+            // Wrap in JoinKey for hashing
+            let key: Vec<JoinKey> = row.iter().map(|v| JoinKey(v.clone())).collect();
+            
+            if seen.insert(key) {
+                result.push(row);
+            }
+        }
+        
+        Ok(result)
+    }
+
+    /// Execute window functions
+    async fn execute_window(
+        &self,
+        window: &crate::planner::logical_plan::WindowNode,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<Vec<Row>> {
+        let mut rows = self.execute_plan(&window.input, ctx).await?;
+        let input_schema = window.input.schema();
+        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
+        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+
+        for expr in &window.window_exprs {
+            if let Expr::Function { name, over: Some(spec), .. } = expr {
+                // 1. Prepare data with original indices
+                let indexed_rows: Vec<(usize, Row)> = rows.iter().enumerate().map(|(i, r)| (i, r.clone())).collect();
+
+                // 2. Sort by Partition Keys + Order Keys
+                let mut sort_keys = Vec::new();
+                for expr in &spec.partition_by {
+                    sort_keys.push(OrderByExpr { expr: expr.clone(), descending: false });
+                }
+                sort_keys.extend(spec.order_by.clone());
+
+                // Pre-evaluate keys
+                let mut row_keys = Vec::with_capacity(indexed_rows.len());
+                for (_, row) in &indexed_rows {
+                    let mut keys = Vec::new();
+                    for k in &sort_keys {
+                        keys.push(eval_ctx.evaluate(&k.expr, row, input_schema).await?);
+                    }
+                    row_keys.push(keys);
+                }
+                
+                let mut indices: Vec<usize> = (0..indexed_rows.len()).collect();
+                indices.sort_by(|&i, &j| {
+                    for (k, order_expr) in sort_keys.iter().enumerate() {
+                        let val_a = &row_keys[i][k];
+                        let val_b = &row_keys[j][k];
+                        let cmp = val_a.compare(val_b).unwrap_or(Ordering::Equal);
+                        if cmp != Ordering::Equal {
+                            return if order_expr.descending { cmp.reverse() } else { cmp };
+                        }
+                    }
+                    Ordering::Equal
+                });
+
+                // 3. Compute Window Function
+                let mut results: Vec<(usize, Value)> = Vec::with_capacity(rows.len());
+                
+                let mut current_partition: Option<Vec<Value>> = None;
+                let mut row_number = 0;
+                let mut rank = 0;
+                let mut last_order_values: Option<Vec<Value>> = None;
+
+                for &idx in &indices {
+                    let keys = &row_keys[idx];
+                    let partition_keys = &keys[0..spec.partition_by.len()];
+                    let order_keys = &keys[spec.partition_by.len()..];
+
+                    let partition_changed = match &current_partition {
+                        Some(p) => p.as_slice() != partition_keys,
+                        None => true,
+                    };
+
+                    if partition_changed {
+                        current_partition = Some(partition_keys.to_vec());
+                        row_number = 0;
+                        rank = 0;
+                        last_order_values = None;
+                    }
+
+                    row_number += 1;
+
+                    let order_changed = match &last_order_values {
+                        Some(o) => o.as_slice() != order_keys,
+                        None => true,
+                    };
+                    
+                    if order_changed {
+                        rank = row_number;
+                        last_order_values = Some(order_keys.to_vec());
+                    }
+
+                    let val = match name.to_uppercase().as_str() {
+                        "ROW_NUMBER" => Value::Integer(row_number),
+                        "RANK" => Value::Integer(rank),
+                        _ => Value::Null, // TODO: Implement Aggregates over Window
+                    };
+                    results.push((indexed_rows[idx].0, val));
+                }
+
+                // 4. Update rows
+                for (idx, val) in results {
+                    rows[idx].push(val);
+                }
+            }
+        }
+
+        Ok(rows)
+    }
 }
 
 // ============================================================================
@@ -504,8 +630,8 @@ impl QueryExecutor {
 
         for expr in expressions {
             let value = match expr {
-                Expr::Function { name, args } => {
-                    self.evaluate_aggregate(name, args, rows, schema, &eval_ctx).await?
+                Expr::Function { name, args, distinct, over: _ } => {
+                    self.evaluate_aggregate(name, args, *distinct, rows, schema, &eval_ctx).await?
                 }
                 _ => {
                     // Non-aggregate expressions evaluated on first row
@@ -527,16 +653,17 @@ impl QueryExecutor {
         &self,
         name: &str,
         args: &[Expr],
+        distinct: bool,
         rows: &[Row],
         schema: &Schema,
         eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         match name.to_uppercase().as_str() {
-            "COUNT" => self.aggregate_count(args, rows, schema, eval_ctx).await,
-            "SUM" => self.aggregate_sum(args, rows, schema, eval_ctx).await,
-            "AVG" => self.aggregate_avg(args, rows, schema, eval_ctx).await,
-            "MIN" => self.aggregate_min(args, rows, schema, eval_ctx).await,
-            "MAX" => self.aggregate_max(args, rows, schema, eval_ctx).await,
+            "COUNT" => self.aggregate_count(args, distinct, rows, schema, eval_ctx).await,
+            "SUM" => self.aggregate_sum(args, distinct, rows, schema, eval_ctx).await,
+            "AVG" => self.aggregate_avg(args, distinct, rows, schema, eval_ctx).await,
+            "MIN" => self.aggregate_min(args, distinct, rows, schema, eval_ctx).await,
+            "MAX" => self.aggregate_max(args, distinct, rows, schema, eval_ctx).await,
             _ => Err(DbError::UnsupportedOperation(format!(
                 "Unknown aggregate function: {}",
                 name
@@ -547,19 +674,36 @@ impl QueryExecutor {
     async fn aggregate_count(
         &self,
         args: &[Expr],
+        distinct: bool,
         rows: &[Row],
         schema: &Schema,
         eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         if args.is_empty() || matches!(args[0], Expr::Literal(Value::Text(ref s)) if s == "*") {
+            if distinct {
+                return Err(DbError::ExecutionError("COUNT(DISTINCT *) is not supported".into()));
+            }
             return Ok(Value::Integer(rows.len() as i64));
         }
 
         let mut count = 0i64;
-        for row in rows {
-            let val = eval_ctx.evaluate(&args[0], row, schema).await?;
-            if !matches!(val, Value::Null) {
-                count += 1;
+        
+        if distinct {
+            let mut seen = std::collections::HashSet::new();
+            for row in rows {
+                let val = eval_ctx.evaluate(&args[0], row, schema).await?;
+                if !matches!(val, Value::Null) {
+                    if seen.insert(JoinKey(val)) {
+                        count += 1;
+                    }
+                }
+            }
+        } else {
+            for row in rows {
+                let val = eval_ctx.evaluate(&args[0], row, schema).await?;
+                if !matches!(val, Value::Null) {
+                    count += 1;
+                }
             }
         }
 
@@ -569,6 +713,7 @@ impl QueryExecutor {
     async fn aggregate_sum(
         &self,
         args: &[Expr],
+        distinct: bool,
         rows: &[Row],
         schema: &Schema,
         eval_ctx: &EvaluationContext<'_>,
@@ -580,9 +725,17 @@ impl QueryExecutor {
         let mut int_sum: i64 = 0;
         let mut float_sum: f64 = 0.0;
         let mut is_integer = true;
+        let mut seen = if distinct { Some(std::collections::HashSet::new()) } else { None };
 
         for row in rows {
             let val = eval_ctx.evaluate(&args[0], row, schema).await?;
+            
+            if let Some(ref mut set) = seen {
+                if !matches!(val, Value::Null) && !set.insert(JoinKey(val.clone())) {
+                    continue;
+                }
+            }
+
             match val {
                 Value::Integer(i) => {
                     if is_integer {
@@ -614,6 +767,7 @@ impl QueryExecutor {
     async fn aggregate_avg(
         &self,
         args: &[Expr],
+        distinct: bool,
         rows: &[Row],
         schema: &Schema,
         eval_ctx: &EvaluationContext<'_>,
@@ -624,9 +778,17 @@ impl QueryExecutor {
 
         let mut sum = 0.0f64;
         let mut count = 0usize;
+        let mut seen = if distinct { Some(std::collections::HashSet::new()) } else { None };
 
         for row in rows {
             let val = eval_ctx.evaluate(&args[0], row, schema).await?;
+            
+            if let Some(ref mut set) = seen {
+                if !matches!(val, Value::Null) && !set.insert(JoinKey(val.clone())) {
+                    continue;
+                }
+            }
+
             match val {
                 Value::Integer(i) => {
                     sum += i as f64;
@@ -651,6 +813,7 @@ impl QueryExecutor {
     async fn aggregate_min(
         &self,
         args: &[Expr],
+        _distinct: bool,
         rows: &[Row],
         schema: &Schema,
         eval_ctx: &EvaluationContext<'_>,
@@ -684,6 +847,7 @@ impl QueryExecutor {
     async fn aggregate_max(
         &self,
         args: &[Expr],
+        _distinct: bool,
         rows: &[Row],
         schema: &Schema,
         eval_ctx: &EvaluationContext<'_>,

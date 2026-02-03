@@ -52,6 +52,29 @@ impl InMemoryStorage {
         table.drop_column(column_name)
     }
 
+    /// Переименовать таблицу
+    pub async fn rename_table(&mut self, old_name: &str, new_name: &str) -> Result<()> {
+        if !self.tables.contains_key(old_name) {
+            return Err(DbError::TableNotFound(old_name.to_string()));
+        }
+        if self.tables.contains_key(new_name) {
+            return Err(DbError::TableExists(new_name.to_string()));
+        }
+
+        // Remove old entry
+        let table_handle = self.tables.remove(old_name).unwrap();
+        
+        // Update table name inside the Table struct
+        {
+            let mut table = table_handle.write().await;
+            table.set_name(new_name.to_string());
+        }
+
+        // Insert with new name
+        self.tables.insert(new_name.to_string(), table_handle);
+        Ok(())
+    }
+
     /// Переименовать колонку
     pub async fn rename_column(&self, table_name: &str, old_name: &str, new_name: &str) -> Result<()> {
         let table_handle = self.get_table(table_name)?;

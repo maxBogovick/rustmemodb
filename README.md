@@ -153,10 +153,12 @@ We support a rich subset of SQL-92, focusing on the features most used in applic
 | **Comparisons** | `=`, `!=`, `<`, `>`, `<=`, `>=` (Optimized Range Scans) |
 | **Logic** | `AND`, `OR`, `NOT`, Parentheses `( )` |
 | **Predicates** | `LIKE` (Pattern matching), `BETWEEN`, `IS NULL`, `IS NOT NULL`, `IN (list/subquery)`, `EXISTS` |
-| **Aggregates** | `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` |
+| **Aggregates** | `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` (Support **`DISTINCT`**) |
+| **Window Functions** | **`ROW_NUMBER()`**, **`RANK()`** with `OVER (PARTITION BY ... ORDER BY ...)` |
 | **Constraints** | `PRIMARY KEY`, `UNIQUE`, **`FOREIGN KEY (REFERENCES)`** |
 | **Statements** | `CREATE/DROP TABLE`, `CREATE/DROP VIEW`, `CREATE INDEX`, `INSERT`, `UPDATE`, `DELETE`, `SELECT`, **`EXPLAIN`** |
-| **Clauses** | `WHERE`, `ORDER BY` (Multi-column), `LIMIT`, **`FROM (subquery)`** |
+| **Alter Table** | `ADD COLUMN`, `DROP COLUMN`, `RENAME COLUMN`, **`RENAME TABLE`** |
+| **Clauses** | `WHERE`, `ORDER BY`, `LIMIT`, `FROM (subquery)`, `DISTINCT`, **`WITH (CTEs)`** |
 | **Transactions** | `BEGIN`, `COMMIT`, `ROLLBACK` |
 
 ---

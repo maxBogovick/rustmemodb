@@ -396,10 +396,24 @@ impl SqlParserAdapter {
     }
 
     fn convert_query(&self, query: sql_ast::Query) -> Result<QueryStmt> {
+        let with = if let Some(with) = query.with {
+            Some(self.convert_with(with)?)
+        } else {
+            None
+        };
+
         let sql_ast::SetExpr::Select(select) = *query.body else {
             return Err(DbError::UnsupportedOperation(
                 "Only SELECT queries supported".into()
             ));
+        };
+
+        let distinct = match select.distinct {
+            Some(sql_ast::Distinct::Distinct) => true,
+            Some(sql_ast::Distinct::On(_)) => {
+                return Err(DbError::UnsupportedOperation("DISTINCT ON not supported".into()));
+            }
+            None => false,
         };
 
         let projection = select
@@ -439,6 +453,8 @@ impl SqlParserAdapter {
         let limit = self.convert_limit_clause(&query.limit_clause)?;
 
         Ok(QueryStmt {
+            with,
+            distinct,
             projection,
             from,
             selection,
@@ -446,6 +462,27 @@ impl SqlParserAdapter {
             having,
             order_by,
             limit,
+        })
+    }
+
+    fn convert_with(&self, with: sql_ast::With) -> Result<With> {
+        let cte_tables = with.cte_tables
+            .into_iter()
+            .map(|cte| self.convert_cte(cte))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(With {
+            recursive: with.recursive,
+            cte_tables,
+        })
+    }
+
+    fn convert_cte(&self, cte: sql_ast::Cte) -> Result<Cte> {
+        let alias = cte.alias.name.value;
+        let query = self.convert_query(*cte.query)?;
+        Ok(Cte {
+            alias,
+            query: Box::new(query),
         })
     }
 
@@ -659,6 +696,13 @@ impl SqlParserAdapter {
                     old_name: old_column_name.value,
                     new_name: new_column_name.value,
                 }
+            }
+            sql_ast::AlterTableOperation::RenameTable { table_name } => {
+                let name = match table_name {
+                    sql_ast::RenameTableNameKind::To(n) | sql_ast::RenameTableNameKind::As(n) => n,
+                };
+                let new_name = extract_table_name(&name)?;
+                AlterTableOperation::RenameTable(new_name)
             }
             _ => return Err(DbError::UnsupportedOperation(format!(
                 "Unsupported ALTER TABLE operation: {:?}", operation

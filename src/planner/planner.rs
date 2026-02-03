@@ -1,7 +1,7 @@
 use crate::parser::ast::{Statement, QueryStmt, SelectItem, OrderByExpr, Expr, BinaryOp, TableWithJoins, TableFactor, JoinOperator, JoinConstraint};
 use crate::storage::Catalog;
 use crate::core::{DbError, Result, Value, Schema, Column};
-use super::logical_plan::{LogicalPlan, TableScanNode, IndexScanInfo, IndexOp, SortNode, LimitNode, JoinNode, JoinType, ProjectionNode, FilterNode, AggregateNode};
+use super::logical_plan::{LogicalPlan, TableScanNode, IndexScanInfo, IndexOp, SortNode, LimitNode, JoinNode, JoinType, ProjectionNode, FilterNode, AggregateNode, DistinctNode, WindowNode};
 
 /// Query planner - converts AST to LogicalPlan
 pub struct QueryPlanner;
@@ -21,6 +21,16 @@ impl QueryPlanner {
     }
 
     fn plan_query(&self, query: &QueryStmt, catalog: &Catalog) -> Result<LogicalPlan> {
+        // Handle CTEs (WITH clause)
+        // We create a local catalog that includes the CTEs as views
+        let mut local_catalog = catalog.clone();
+        if let Some(ref with) = query.with {
+            for cte in &with.cte_tables {
+                local_catalog = local_catalog.with_view(cte.alias.clone(), *cte.query.clone())?;
+            }
+        }
+        let catalog = &local_catalog;
+
         // 1. Start with table scan / joins
         let mut plan = self.plan_from(&query.from, catalog)?;
 
@@ -54,10 +64,40 @@ impl QueryPlanner {
             });
         }
 
-        // 5. Apply ORDER BY
+        // 5. Apply Window Functions
+        let (has_window, window_exprs) = self.extract_window_functions(&query.projection, &query.order_by);
+        
+        if has_window {
+            let mut columns = plan.schema().columns().to_vec();
+            for expr in &window_exprs {
+                let name = format!("{}", expr);
+                let data_type = if let Expr::Function { name, .. } = expr {
+                    if matches!(name.to_uppercase().as_str(), "ROW_NUMBER" | "RANK" | "COUNT") {
+                        crate::core::DataType::Integer
+                    } else {
+                        crate::core::DataType::Float 
+                    }
+                } else {
+                    crate::core::DataType::Text
+                };
+                columns.push(Column::new(name, data_type));
+            }
+            let schema = Schema::new(columns);
+            
+            plan = LogicalPlan::Window(WindowNode {
+                input: Box::new(plan),
+                window_exprs: window_exprs.clone(),
+                schema,
+            });
+        }
+
+        // 6. Apply ORDER BY
         if !query.order_by.is_empty() {
             let rewritten_order_by = query.order_by.iter().map(|ob| OrderByExpr {
-                expr: self.rewrite_expression(&ob.expr, &aggr_exprs),
+                expr: self.rewrite_window_expression(
+                    &self.rewrite_expression(&ob.expr, &aggr_exprs),
+                    &window_exprs
+                ),
                 descending: ob.descending,
             }).collect();
             
@@ -69,17 +109,27 @@ impl QueryPlanner {
             });
         }
 
-        // 6. Apply Projection
-        // Rewrite projection expressions to point to aggregate columns
+        // 7. Apply Projection
+        // Rewrite projection expressions to point to aggregate/window columns
         let mut rewritten_projection = query.projection.clone();
         for item in &mut rewritten_projection {
             if let SelectItem::Expr { expr, .. } = item {
-                *expr = self.rewrite_expression(expr, &aggr_exprs);
+                let tmp = self.rewrite_expression(expr, &aggr_exprs);
+                *expr = self.rewrite_window_expression(&tmp, &window_exprs);
             }
         }
         plan = self.plan_projection(plan, &rewritten_projection)?;
 
-        // 7. Apply LIMIT
+        // 8. Apply DISTINCT
+        if query.distinct {
+            let schema = plan.schema().clone();
+            plan = LogicalPlan::Distinct(DistinctNode {
+                input: Box::new(plan),
+                schema,
+            });
+        }
+
+        // 9. Apply LIMIT
         if let Some(limit) = query.limit {
             let schema = plan.schema().clone();
             plan = LogicalPlan::Limit(LimitNode {
@@ -113,9 +163,11 @@ impl QueryPlanner {
             Expr::Not { expr } => Expr::Not {
                 expr: Box::new(self.rewrite_expression(expr, aggrs)),
             },
-            Expr::Function { name, args } => Expr::Function {
+            Expr::Function { name, args, distinct, over } => Expr::Function {
                 name: name.clone(),
                 args: args.iter().map(|a| self.rewrite_expression(a, aggrs)).collect(),
+                distinct: *distinct,
+                over: over.clone(),
             },
             // Other types (Literal, Column) don't need rewriting or are leaves
             _ => expr.clone(),
@@ -124,9 +176,11 @@ impl QueryPlanner {
 
     fn format_aggregate(&self, expr: &Expr) -> String {
         match expr {
-            Expr::Function { name, args } => {
+            Expr::Function { name, args, distinct, over } => {
+                let distinct_str = if *distinct { "DISTINCT " } else { "" };
                 let arg_str = if args.is_empty() { "*".to_string() } else { "expr".to_string() };
-                format!("{}({})", name, arg_str)
+                let over_str = if over.is_some() { " OVER (...)" } else { "" };
+                format!("{}({}{}){}", name, distinct_str, arg_str, over_str)
             }
             _ => "aggr".to_string(),
         }
@@ -139,7 +193,7 @@ impl QueryPlanner {
         // Recursive extraction function
         fn collect_recursive(expr: &Expr, aggrs: &mut Vec<Expr>, has_aggr: &mut bool) {
             match expr {
-                Expr::Function { name, args } => {
+                Expr::Function { name, args, .. } => {
                     let name_upper = name.to_uppercase();
                     if matches!(name_upper.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX") {
                         *has_aggr = true;
@@ -482,6 +536,69 @@ impl QueryPlanner {
             predicate: predicate.clone(),
             schema,
         }))
+    }
+
+    fn extract_window_functions(&self, projection: &[SelectItem], order_by: &[OrderByExpr]) -> (bool, Vec<Expr>) {
+        let mut wins = Vec::new();
+        let mut has_win = false;
+
+        fn collect(expr: &Expr, wins: &mut Vec<Expr>, has_win: &mut bool) {
+            match expr {
+                Expr::Function { over: Some(_), .. } => {
+                    *has_win = true;
+                    if !wins.contains(expr) {
+                        wins.push(expr.clone());
+                    }
+                }
+                Expr::BinaryOp { left, right, .. } => {
+                    collect(left, wins, has_win);
+                    collect(right, wins, has_win);
+                }
+                Expr::UnaryOp { expr, .. } => collect(expr, wins, has_win),
+                Expr::Not { expr } => collect(expr, wins, has_win),
+                _ => {}
+            }
+        }
+
+        for item in projection {
+            if let SelectItem::Expr { expr, .. } = item {
+                collect(expr, &mut wins, &mut has_win);
+            }
+        }
+        for item in order_by {
+            collect(&item.expr, &mut wins, &mut has_win);
+        }
+
+        (has_win, wins)
+    }
+
+    fn rewrite_window_expression(&self, expr: &Expr, wins: &[Expr]) -> Expr {
+        if let Some(pos) = wins.iter().position(|w| w == expr) {
+            let col_name = format!("{}", wins[pos]);
+            return Expr::Column(col_name);
+        }
+
+        match expr {
+            Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+                left: Box::new(self.rewrite_window_expression(left, wins)),
+                op: *op,
+                right: Box::new(self.rewrite_window_expression(right, wins)),
+            },
+            Expr::UnaryOp { op, expr } => Expr::UnaryOp {
+                op: *op,
+                expr: Box::new(self.rewrite_window_expression(expr, wins)),
+            },
+            Expr::Not { expr } => Expr::Not {
+                expr: Box::new(self.rewrite_window_expression(expr, wins)),
+            },
+            Expr::Function { name, args, distinct, over } => Expr::Function {
+                name: name.clone(),
+                args: args.iter().map(|a| self.rewrite_window_expression(a, wins)).collect(),
+                distinct: *distinct,
+                over: over.clone(),
+            },
+            _ => expr.clone(),
+        }
     }
 }
 

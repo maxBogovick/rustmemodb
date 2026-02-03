@@ -1,6 +1,6 @@
 use super::{ExpressionPlugin, ExpressionConverter, QueryConverter};
 use crate::core::Result;
-use crate::parser::ast::Expr;
+use crate::parser::ast::{Expr, WindowSpec, OrderByExpr};
 use sqlparser::ast as sql_ast;
 
 pub struct FunctionPlugin;
@@ -20,8 +20,10 @@ impl ExpressionPlugin for FunctionPlugin {
                 let name = func.name.to_string().to_uppercase();
 
                 // Convert arguments
-                let args = if let sql_ast::FunctionArguments::List(arg_list) = func.args {
-                    arg_list.args
+                let (args, distinct) = if let sql_ast::FunctionArguments::List(arg_list) = func.args {
+                    let distinct = matches!(arg_list.duplicate_treatment, Some(sql_ast::DuplicateTreatment::Distinct));
+                    
+                    let args = arg_list.args
                         .into_iter()
                         .map(|arg| {
                             match arg {
@@ -37,12 +39,31 @@ impl ExpressionPlugin for FunctionPlugin {
                                 )),
                             }
                         })
-                        .collect::<Result<Vec<_>>>()?
+                        .collect::<Result<Vec<_>>>()?;
+                    (args, distinct)
                 } else {
-                    Vec::new()
+                    (Vec::new(), false)
                 };
 
-                Ok(Expr::Function { name, args })
+                let over = if let Some(sql_ast::WindowType::WindowSpec(spec)) = func.over {
+                    let partition_by = spec.partition_by.into_iter()
+                        .map(|e| converter.convert(e, query_converter))
+                        .collect::<Result<Vec<_>>>()?;
+                    
+                    let order_by = spec.order_by.into_iter()
+                        .map(|o| {
+                            let expr = converter.convert(o.expr, query_converter)?;
+                            let descending = o.options.asc.map(|a| !a).unwrap_or(false);
+                            Ok(OrderByExpr { expr, descending })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                        
+                    Some(WindowSpec { partition_by, order_by })
+                } else {
+                    None
+                };
+
+                Ok(Expr::Function { name, args, distinct, over })
             }
             _ => unreachable!("FunctionPlugin called with non-function expression"),
         }

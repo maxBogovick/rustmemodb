@@ -28,6 +28,7 @@ async fn test_indexing_backend() {
     use rustmemodb::storage::InMemoryStorage;
     use rustmemodb::storage::TableSchema;
     use rustmemodb::core::{Column, DataType};
+    use rustmemodb::planner::logical_plan::IndexOp;
     use std::sync::Arc;
     
     let mut storage = InMemoryStorage::new();
@@ -51,13 +52,13 @@ async fn test_indexing_backend() {
     storage.insert_row("users", vec![Value::Integer(3), Value::Integer(25)], &snapshot).await.unwrap();
     
     // Scan index
-    let rows = storage.scan_index("users", "age", &Value::Integer(25), &snapshot).await.unwrap().unwrap();
+    let rows = storage.scan_index("users", "age", &Value::Integer(25), &None, &IndexOp::Eq, &snapshot).await.unwrap().unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0][0], Value::Integer(2));
     assert_eq!(rows[1][0], Value::Integer(3));
     
     // Scan non-existent value
-    let rows = storage.scan_index("users", "age", &Value::Integer(99), &snapshot).await.unwrap().unwrap();
+    let rows = storage.scan_index("users", "age", &Value::Integer(99), &None, &IndexOp::Eq, &snapshot).await.unwrap().unwrap();
     assert_eq!(rows.len(), 0);
 }
 

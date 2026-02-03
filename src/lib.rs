@@ -12,7 +12,7 @@ pub mod json;
 pub mod interface;
 pub mod server;
 mod parser;
-mod planner;
+pub mod planner;
 mod executor;
 mod expression;
 mod plugins;
