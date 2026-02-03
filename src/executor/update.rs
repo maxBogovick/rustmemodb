@@ -75,7 +75,8 @@ impl UpdateExecutor {
                         ))?;
 
                     let new_value = eval_ctx.evaluate(&assignment.value, &row, schema.schema()).await?;
-                    new_row[col_idx] = new_value;
+                    let target_type = &schema.schema().columns()[col_idx].data_type;
+                    new_row[col_idx] = target_type.cast_value(&new_value)?;
                 }
 
                 updates.push((id, row, new_row));
@@ -85,6 +86,11 @@ impl UpdateExecutor {
         let updated_count = updates.len();
 
         // Apply updates to storage (MVCC write)
+        let autocommit = ctx.transaction_id.is_none();
+        let tx_id = ctx.snapshot.tx_id;
+        let mut logged_begin = false;
+        let mut logged_any = false;
+
         for (idx, old_row, new_row) in &updates {
             // Check concurrency? If row was updated by another tx since scan?
             // update_row will return false if it can't find visible version.
@@ -97,19 +103,30 @@ impl UpdateExecutor {
             // But for now, we follow standard MVCC: create new version.
             // Table::update handles setting xmax on latest version.
             
-            let success = ctx.storage.update_row(&update.table_name, *idx, new_row.clone(), &ctx.snapshot).await?;
-            
-            if success {
-                // Log to WAL
-                if let Some(persistence) = ctx.persistence {
+            if let Some(persistence) = ctx.persistence {
+                if autocommit && !logged_begin {
                     let mut persistence_guard = persistence.lock().await;
-                    persistence_guard.log(&WalEntry::Update {
-                        table: update.table_name.clone(),
-                        row_index: *idx,
-                        old_row: old_row.clone(),
-                        new_row: new_row.clone(),
-                    })?;
+                    persistence_guard.log(&WalEntry::BeginTransaction(tx_id))?;
+                    logged_begin = true;
                 }
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Update {
+                    tx_id,
+                    table: update.table_name.clone(),
+                    row_index: *idx,
+                    old_row: old_row.clone(),
+                    new_row: new_row.clone(),
+                })?;
+                logged_any = true;
+            }
+
+            let _success = ctx.storage.update_row(&update.table_name, *idx, new_row.clone(), &ctx.snapshot).await?;
+        }
+
+        if autocommit && logged_any {
+            if let Some(persistence) = ctx.persistence {
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Commit(tx_id))?;
             }
         }
 

@@ -76,6 +76,10 @@ impl InMemoryDB {
         &self.transaction_manager
     }
 
+    pub fn persistence(&self) -> Option<Arc<Mutex<PersistenceManager>>> {
+        self.persistence.clone()
+    }
+
     pub(crate) fn storage_mut(&mut self) -> &mut InMemoryStorage {
         &mut self.storage
     }
@@ -262,7 +266,12 @@ impl InMemoryDB {
                 return self.execute_drop_view(drop_view).await;
             }
             Statement::CreateIndex(create_index) => {
-                self.create_index(&create_index.table_name, &create_index.column).await?;
+                self.create_index_with_options(
+                    &create_index.table_name,
+                    &create_index.column,
+                    create_index.if_not_exists,
+                    create_index.unique,
+                ).await?;
                 return Ok(QueryResult::empty());
             }
             Statement::AlterTable(alter) => {
@@ -313,6 +322,13 @@ impl InMemoryDB {
     }
 
     async fn execute_create_table(&mut self, create: &CreateTableStmt) -> Result<QueryResult> {
+        if self.catalog.table_exists(&create.table_name) {
+            if create.if_not_exists {
+                return Ok(QueryResult::empty());
+            }
+            return Err(DbError::TableExists(create.table_name.clone()));
+        }
+
         let columns: Vec<Column> = create
             .columns
             .iter()
@@ -345,15 +361,31 @@ impl InMemoryDB {
             }
         }
 
+        let mut wal_tx_id = None;
         if let Some(ref persistence) = self.persistence {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            wal_tx_id = Some(snapshot.tx_id);
             let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::BeginTransaction(snapshot.tx_id))?;
             persistence_guard.log(&WalEntry::CreateTable {
+                tx_id: snapshot.tx_id,
                 name: create.table_name.clone(),
                 schema: schema.clone(),
             })?;
         }
 
-        self.storage.create_table(schema.clone()).await?;
+        if let Err(err) = self.storage.create_table(schema.clone()).await {
+            if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Rollback(tx_id))?;
+            }
+            return Err(err);
+        }
+
+        if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::Commit(tx_id))?;
+        }
         self.catalog = self.catalog.clone().with_table(schema)?;
 
         self.refresh_catalog_executors();
@@ -377,16 +409,32 @@ impl InMemoryDB {
             None
         };
 
+        let mut wal_tx_id = None;
         if let Some(ref persistence) = self.persistence
             && let Some(table) = table {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            wal_tx_id = Some(snapshot.tx_id);
             let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::BeginTransaction(snapshot.tx_id))?;
             persistence_guard.log(&WalEntry::DropTable {
+                tx_id: snapshot.tx_id,
                 name: drop.table_name.clone(),
                 table,
             })?;
         }
 
-        self.storage.drop_table(&drop.table_name).await?;
+        if let Err(err) = self.storage.drop_table(&drop.table_name).await {
+            if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Rollback(tx_id))?;
+            }
+            return Err(err);
+        }
+
+        if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::Commit(tx_id))?;
+        }
         self.catalog = self.catalog.clone().without_table(&drop.table_name)?;
 
         self.refresh_catalog_executors();
@@ -429,7 +477,7 @@ impl InMemoryDB {
     }
 
     async fn execute_rename_table(&mut self, old_name: &str, new_name: &str) -> Result<()> {
-        if let Some(ref persistence) = self.persistence {
+        if let Some(ref _persistence) = self.persistence {
             // Log rename not supported in WAL yet properly (or reuse AlterTable?)
             // We'll skip WAL for RenameTable for MVP or need to add variant.
         }
@@ -465,15 +513,76 @@ impl InMemoryDB {
     }
 
     pub async fn create_index(&mut self, table_name: &str, column_name: &str) -> Result<()> {
+        self.create_index_with_options(table_name, column_name, false, false).await
+    }
+
+    pub async fn create_index_with_options(
+        &mut self,
+        table_name: &str,
+        column_name: &str,
+        if_not_exists: bool,
+        unique: bool,
+    ) -> Result<()> {
+        let schema = self.storage.get_schema(table_name).await?;
+        if schema.is_indexed(column_name) {
+            if if_not_exists {
+                return Ok(());
+            }
+            return Err(DbError::ExecutionError(format!(
+                "Index on '{}.{}' already exists",
+                table_name, column_name
+            )));
+        }
+
+        if unique {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            let rows = self.storage.scan_table(table_name, &snapshot).await?;
+            let col_idx = schema.schema().find_column_index(column_name)
+                .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), table_name.to_string()))?;
+            let mut seen = std::collections::HashSet::new();
+            for row in rows {
+                let value = &row[col_idx];
+                if value.is_null() {
+                    continue;
+                }
+                if !seen.insert(value.clone()) {
+                    return Err(DbError::ConstraintViolation(format!(
+                        "Unique index violation on '{}.{}'",
+                        table_name, column_name
+                    )));
+                }
+            }
+        }
+
+        let mut wal_tx_id = None;
         if let Some(ref persistence) = self.persistence {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            wal_tx_id = Some(snapshot.tx_id);
             let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::BeginTransaction(snapshot.tx_id))?;
             persistence_guard.log(&WalEntry::CreateIndex {
+                tx_id: snapshot.tx_id,
                 table_name: table_name.to_string(),
                 column_name: column_name.to_string(),
             })?;
         }
 
-        self.storage.create_index(table_name, column_name).await?;
+        if unique {
+            self.storage.set_column_unique(table_name, column_name).await?;
+        }
+
+        if let Err(err) = self.storage.create_index(table_name, column_name).await {
+            if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Rollback(tx_id))?;
+            }
+            return Err(err);
+        }
+
+        if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::Commit(tx_id))?;
+        }
 
         let updated_schema = self.storage.get_schema(table_name).await?;
         self.catalog = self.catalog.clone().without_table(table_name)?.with_table(updated_schema)?;

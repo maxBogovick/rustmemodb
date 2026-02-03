@@ -43,7 +43,8 @@ Integration testing in Rust usually forces a painful tradeoff:
 
 **RustMemDB is the Third Way.**
 
-It is a pure Rust SQL engine with **MVCC** and **Snapshot Isolation** that introduces a paradigm shift in testing: **Instant Database Forking**.
+It is a pure Rust SQL engine with MVCC-based storage and Snapshot Isolation that introduces a paradigm shift in testing: **Instant Database Forking**.
+Note: the current connection layer serializes statements via a global lock, so parallel query execution is limited.
 
 ---
 
@@ -77,7 +78,7 @@ cargo run -- server --host 127.0.0.1 --port 5432
 | :--- | :---: | :---: | :---: |
 | **Startup Time** | **< 1ms** | ~10ms | 1s - 5s |
 | **Test Isolation** | **Instant Fork (O(1))** | File Copy / Rollback | New Container / Truncate |
-| **Parallelism** | ✅ **Safe & Fast** | ❌ Locking Issues | ⚠️ High RAM Usage |
+| **Parallelism** | ⚠️ **Limited (global lock)** | ❌ Locking Issues | ⚠️ High RAM Usage |
 | **Type Safety** | ✅ **Strict** | ❌ Loose / Dynamic | ✅ Strict |
 | **Dependencies** | **Zero** (Pure Rust) | C Bindings | Docker Daemon |
 
@@ -236,7 +237,7 @@ Built on Rust's guarantees.
 
 *   **Memory Safety:** Zero `unsafe` blocks in core logic. Immune to buffer overflows and use-after-free bugs that plague C-based databases.
 *   **Thread Safety:** The compiler guarantees that our MVCC implementation is free of Data Races.
-*   **Atomic Transactions:** If a transaction isn't committed, it's rolled back. No partial writes, ever.
+*   **Transaction Semantics:** Uncommitted changes are invisible; recovery replays only committed WAL entries.
 
 ---
 
@@ -287,7 +288,7 @@ async fn persistence_example() -> anyhow::Result<()> {
     let mut db = InMemoryDB::new();
     
     // Enable WAL persistence to ./data directory
-    db.enable_persistence("./data", DurabilityMode::Wal).await?;
+    db.enable_persistence("./data", DurabilityMode::Sync).await?;
     
     // Changes are now fsync'd to disk
     db.execute("INSERT INTO important_data VALUES (1)")?;
@@ -331,9 +332,8 @@ db.query("SELECT UPPER(name) FROM users");
 We take engineering seriously. This is not just a `Vec<Row>`.
 
 *   **MVCC (Multi-Version Concurrency Control):**
-    *   Writers never block readers.
-    *   Readers never block writers.
-    *   Full Snapshot Isolation support.
+    *   Snapshot visibility rules are applied in storage.
+    *   Connection-level execution is currently serialized (global lock).
 *   **Persistent Data Structures:**
     *   Uses `im-rs` for O(1) cloning and efficient memory usage.
     *   Tables are structural-shared trees, not flat arrays.

@@ -20,12 +20,12 @@ pub enum WalEntry {
     BeginTransaction(u64),
     Commit(u64),
     Rollback(u64),
-    Insert { table: String, row: Row },
-    Update { table: String, row_index: usize, old_row: Row, new_row: Row },
-    Delete { table: String, row_indices: Vec<usize>, deleted_rows: Vec<Row> },
-    CreateTable { name: String, schema: TableSchema },
-    DropTable { name: String, table: Table },
-    CreateIndex { table_name: String, column_name: String },
+    Insert { tx_id: u64, table: String, row: Row },
+    Update { tx_id: u64, table: String, row_index: usize, old_row: Row, new_row: Row },
+    Delete { tx_id: u64, table: String, row_indices: Vec<usize>, deleted_rows: Vec<Row> },
+    CreateTable { tx_id: u64, name: String, schema: TableSchema },
+    DropTable { tx_id: u64, name: String, table: Table },
+    CreateIndex { tx_id: u64, table_name: String, column_name: String },
 }
 
 impl WalEntry {
@@ -272,9 +272,24 @@ impl PersistenceManager {
         let wal_entries = self.wal.read_all()?;
         if tables.is_empty() && wal_entries.is_empty() { return Ok(None); }
 
-        // Use a dummy snapshot for applying WAL entries (committed/system)
-        let snapshot = Snapshot {
-            tx_id: 0,
+        let mut committed = HashSet::new();
+        let mut aborted = HashSet::new();
+
+        for entry in &wal_entries {
+            match entry {
+                WalEntry::BeginTransaction(_tx_id) => {}
+                WalEntry::Commit(tx_id) => {
+                    committed.insert(*tx_id);
+                }
+                WalEntry::Rollback(tx_id) => {
+                    aborted.insert(*tx_id);
+                }
+                _ => {}
+            }
+        }
+
+        let snapshot_for = |tx_id: u64| Snapshot {
+            tx_id,
             active: Arc::new(HashSet::new()),
             aborted: Arc::new(HashSet::new()),
             max_tx_id: u64::MAX,
@@ -282,33 +297,47 @@ impl PersistenceManager {
 
         for entry in wal_entries {
             match entry {
-                WalEntry::Insert { table, row } => {
-                    if let Some(tbl) = tables.get_mut(&table) {
-                        tbl.insert(row, &snapshot)?; 
-                    }
-                }
-                WalEntry::Update { table, row_index, new_row, .. } => {
-                    if let Some(tbl) = tables.get_mut(&table) {
-                        tbl.update(row_index, new_row, &snapshot)?;
-                    }
-                }
-                WalEntry::Delete { table, row_indices, .. } => {
-                    if let Some(tbl) = tables.get_mut(&table) {
-                        for idx in row_indices {
-                            tbl.delete(idx, 0)?; // Delete uses tx_id directly, not snapshot
+                WalEntry::Insert { tx_id, table, row } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        if let Some(tbl) = tables.get_mut(&table) {
+                            let snapshot = snapshot_for(tx_id);
+                            tbl.insert(row, &snapshot)?;
                         }
                     }
                 }
-                WalEntry::CreateTable { name, schema } => {
-                    let table = Table::new(schema);
-                    tables.insert(name, table);
+                WalEntry::Update { tx_id, table, row_index, new_row, .. } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        if let Some(tbl) = tables.get_mut(&table) {
+                            let snapshot = snapshot_for(tx_id);
+                            tbl.update(row_index, new_row, &snapshot)?;
+                        }
+                    }
                 }
-                WalEntry::DropTable { name, .. } => {
-                    tables.remove(&name);
+                WalEntry::Delete { tx_id, table, row_indices, .. } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        if let Some(tbl) = tables.get_mut(&table) {
+                            for idx in row_indices {
+                                tbl.delete(idx, tx_id)?;
+                            }
+                        }
+                    }
                 }
-                WalEntry::CreateIndex { table_name, column_name } => {
-                    if let Some(tbl) = tables.get_mut(&table_name) {
-                        let _ = tbl.create_index(&column_name);
+                WalEntry::CreateTable { tx_id, name, schema } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        let table = Table::new(schema);
+                        tables.insert(name, table);
+                    }
+                }
+                WalEntry::DropTable { tx_id, name, .. } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        tables.remove(&name);
+                    }
+                }
+                WalEntry::CreateIndex { tx_id, table_name, column_name } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        if let Some(tbl) = tables.get_mut(&table_name) {
+                            let _ = tbl.create_index(&column_name);
+                        }
                     }
                 }
                 WalEntry::BeginTransaction(_) | WalEntry::Commit(_) | WalEntry::Rollback(_) => {}
@@ -336,6 +365,7 @@ mod tests {
         let mut wal = WalManager::new(&wal_path, DurabilityMode::Sync).unwrap();
         wal.append(&WalEntry::BeginTransaction(1)).unwrap();
         wal.append(&WalEntry::Insert {
+            tx_id: 1,
             table: "users".to_string(),
             row: vec![crate::core::Value::Integer(1), crate::core::Value::Text("Alice".to_string())],
         }).unwrap();
@@ -389,17 +419,21 @@ mod tests {
                 Column::new("name", DataType::Text),
             ],
         );
+        persistence.log(&WalEntry::BeginTransaction(1)).unwrap();
         persistence.log(&WalEntry::CreateTable {
+            tx_id: 1,
             name: "users".to_string(),
             schema: schema.clone(),
         }).unwrap();
         persistence.log(&WalEntry::Insert {
+            tx_id: 1,
             table: "users".to_string(),
             row: vec![
                 crate::core::Value::Integer(1),
                 crate::core::Value::Text("Alice".to_string()),
             ],
         }).unwrap();
+        persistence.log(&WalEntry::Commit(1)).unwrap();
         let mut tables = HashMap::new();
         tables.insert("users".to_string(), {
             let mut table = Table::new(schema);
@@ -421,5 +455,61 @@ mod tests {
         // row_count might be different if MVCC tracks versions, but 1 inserted row means 1 logical row
         // Table::row_count returns number of keys (logical rows).
         assert_eq!(recovered.get("users").unwrap().row_count(), 1);
+    }
+
+    #[test]
+    fn test_recovery_ignores_uncommitted() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut persistence = PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
+        let schema = TableSchema::new(
+            "users",
+            vec![
+                Column::new("id", DataType::Integer),
+                Column::new("name", DataType::Text),
+            ],
+        );
+
+        persistence.log(&WalEntry::BeginTransaction(1)).unwrap();
+        persistence.log(&WalEntry::CreateTable {
+            tx_id: 1,
+            name: "users".to_string(),
+            schema: schema.clone(),
+        }).unwrap();
+        persistence.log(&WalEntry::Commit(1)).unwrap();
+
+        persistence.log(&WalEntry::BeginTransaction(2)).unwrap();
+        persistence.log(&WalEntry::Insert {
+            tx_id: 2,
+            table: "users".to_string(),
+            row: vec![
+                crate::core::Value::Integer(1),
+                crate::core::Value::Text("Alice".to_string()),
+            ],
+        }).unwrap();
+        persistence.log(&WalEntry::Rollback(2)).unwrap();
+
+        persistence.log(&WalEntry::BeginTransaction(3)).unwrap();
+        persistence.log(&WalEntry::Insert {
+            tx_id: 3,
+            table: "users".to_string(),
+            row: vec![
+                crate::core::Value::Integer(2),
+                crate::core::Value::Text("Bob".to_string()),
+            ],
+        }).unwrap();
+        persistence.log(&WalEntry::Commit(3)).unwrap();
+
+        let recovered = persistence.recover().unwrap().unwrap();
+        let table = recovered.get("users").unwrap();
+        assert_eq!(table.row_count(), 1);
+        let snapshot = Snapshot {
+            tx_id: 0,
+            active: Arc::new(HashSet::new()),
+            aborted: Arc::new(HashSet::new()),
+            max_tx_id: u64::MAX,
+        };
+        let rows = table.scan(&snapshot);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], crate::core::Value::Integer(2));
     }
 }

@@ -2,6 +2,7 @@ pub mod arithmetic;
 pub mod between;
 pub mod boolean;
 pub mod comparison;
+pub mod in_list;
 pub mod is_null;
 pub mod like;
 pub mod logical;

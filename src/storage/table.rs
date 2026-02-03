@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashSet};
 use im::{OrdMap, HashMap};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IndexEntry {
+    pub row_id: usize,
+    pub version_idx: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MvccRow {
     pub row: Row,
@@ -17,7 +23,7 @@ pub struct Table {
     // Using immutable data structures for O(1) cloning/forking
     rows: OrdMap<usize, Vec<MvccRow>>,
     next_row_id: usize,
-    indexes: HashMap<String, OrdMap<Value, Vec<usize>>>,
+    indexes: HashMap<String, OrdMap<Value, Vec<IndexEntry>>>,
 }
 
 impl Table {
@@ -44,6 +50,13 @@ impl Table {
 
     pub fn schema(&self) -> &TableSchema {
         &self.schema
+    }
+
+    pub fn set_unique(&mut self, column_name: &str) -> Result<()> {
+        let col_idx = self.schema.schema.find_column_index(column_name)
+            .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone()))?;
+        self.schema.schema.columns[col_idx].unique = true;
+        Ok(())
     }
 
     pub fn add_column(&mut self, column: Column) -> Result<()> {
@@ -167,7 +180,7 @@ impl Table {
 
         // im::OrdMap::update returns the new map
         self.rows.insert(id, vec![mvcc_row]);
-        self.update_indexes(id, &row);
+        self.add_index_entry(id, 0, &row);
 
         Ok(id)
     }
@@ -197,9 +210,7 @@ impl Table {
         self.validate_row(&new_row)?;
         self.check_uniqueness(&new_row, Some(id), snapshot)?;
 
-        let row_to_index_add;
-
-        if let Some(versions) = self.rows.get(&id) {
+        let (row_to_index_add, new_version_idx) = if let Some(versions) = self.rows.get(&id) {
             let mut new_versions = versions.clone();
 
             if let Some(latest) = new_versions.last_mut() {
@@ -217,16 +228,17 @@ impl Table {
                 xmax: None,
             };
             new_versions.push(new_version);
-            row_to_index_add = Some(new_row);
+            let version_idx = new_versions.len() - 1;
 
             // Update map
             self.rows.insert(id, new_versions);
+            (Some(new_row), Some(version_idx))
         } else {
             return Ok(false);
-        }
+        };
 
-        if let Some(new) = row_to_index_add {
-            self.update_indexes(id, &new);
+        if let (Some(new), Some(version_idx)) = (row_to_index_add, new_version_idx) {
+            self.add_index_entry(id, version_idx, &new);
         }
 
         Ok(true)
@@ -283,20 +295,18 @@ impl Table {
                     DbError::ExecutionError(format!("Critical: Unique index missing for column '{}'", column.name))
                 })?;
 
-                if let Some(ids) = index.get(value) {
-                    for id in ids {
-                        if let Some(ign) = ignore_id && *id == ign {
+                if let Some(entries) = index.get(value) {
+                    for entry in entries {
+                        if let Some(ign) = ignore_id && entry.row_id == ign {
                             continue;
                         }
 
-                        if let Some(versions) = self.rows.get(id) {
-                            for version in versions.iter().rev() {
-                                if &version.row[col_idx] == value && self.is_version_live(version, snapshot) {
-                                    return Err(DbError::ConstraintViolation(format!(
-                                        "Unique constraint violation: Column '{}' already contains value {}",
-                                        column.name, value
-                                    )));
-                                }
+                        if let Some(version) = self.get_version(*entry) {
+                            if &version.row[col_idx] == value && self.is_version_live(version, snapshot) {
+                                return Err(DbError::ConstraintViolation(format!(
+                                    "Unique constraint violation: Column '{}' already contains value {}",
+                                    column.name, value
+                                )));
                             }
                         }
                     }
@@ -389,19 +399,21 @@ impl Table {
             .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone()))?;
         let mut index = OrdMap::new();
         for (id, versions) in &self.rows {
-            for version in versions {
+            for (version_idx, version) in versions.iter().enumerate() {
                 let value = version.row[col_idx].clone();
                 // im::OrdMap::entry is not available in the same way, need manual update
                 // Or use `update` with a closure?
                 // im::OrdMap update: map.update(k, v)
                 // For multimap behavior (Vec<usize>), we need to get, clone, modify, insert.
-                let mut ids: Vec<usize> = index.get(&value).cloned().unwrap_or_default();
-                ids.push(*id);
-                index.insert(value, ids);
+                let mut entries: Vec<IndexEntry> = index.get(&value).cloned().unwrap_or_default();
+                entries.push(IndexEntry { row_id: *id, version_idx });
+                index.insert(value, entries);
             }
         }
         self.indexes.insert(column_name.to_string(), index);
-        self.schema.indexes.push(column_name.to_string());
+        if !self.schema.indexes.iter().any(|idx| idx == column_name) {
+            self.schema.indexes.push(column_name.to_string());
+        }
         Ok(())
     }
 
@@ -415,7 +427,7 @@ impl Table {
     ) -> Option<Vec<Row>> {
         let index = self.indexes.get(column_name)?;
         
-        let ids: Vec<usize> = match op {
+        let entries: Vec<IndexEntry> = match op {
             IndexOp::Eq => index.get(value).cloned().unwrap_or_default(),
             IndexOp::Gt => {
                 use std::ops::Bound;
@@ -458,20 +470,22 @@ impl Table {
             }
         };
 
-        let mut rows = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(row) = self.get_visible_row(id, snapshot) {
-                rows.push(row);
+        let mut rows = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if let Some(version) = self.get_version(entry) {
+                if self.is_visible(version, snapshot) {
+                    rows.push(version.row.clone());
+                }
             }
         }
         Some(rows)
     }
 
-    pub fn get_index(&self, column_name: &str) -> Option<&OrdMap<Value, Vec<usize>>> {
+    pub fn get_index(&self, column_name: &str) -> Option<&OrdMap<Value, Vec<IndexEntry>>> {
         self.indexes.get(column_name)
     }
 
-    fn update_indexes(&mut self, id: usize, row: &Row) {
+    fn add_index_entry(&mut self, id: usize, version_idx: usize, row: &Row) {
         // We need to iterate over indexes and update them.
         // im::HashMap iteration
         let mut updates = Vec::new();
@@ -480,22 +494,36 @@ impl Table {
              if let Some(col_idx) = self.schema.schema().find_column_index(col_name) {
                 let value = row[col_idx].clone();
                 // Prepare update
-                let mut ids: Vec<usize> = index.get(&value).cloned().unwrap_or_default();
-                if !ids.contains(&id) {
-                    ids.push(id);
-                    updates.push((col_name.clone(), value, ids));
+                let mut entries: Vec<IndexEntry> = index.get(&value).cloned().unwrap_or_default();
+                let entry = IndexEntry { row_id: id, version_idx };
+                if !entries.contains(&entry) {
+                    entries.push(entry);
+                    updates.push((col_name.clone(), value, entries));
                 }
              }
         }
 
         // Apply updates
-        for (col_name, value, ids) in updates {
+        for (col_name, value, entries) in updates {
             if let Some(index) = self.indexes.get_mut(&col_name) {
-                index.insert(value, ids);
+                index.insert(value, entries);
             }
         }
     }
 
+    fn get_version(&self, entry: IndexEntry) -> Option<&MvccRow> {
+        self.rows
+            .get(&entry.row_id)
+            .and_then(|versions| versions.get(entry.version_idx))
+    }
+
+    fn rebuild_indexes(&mut self) {
+        let index_columns = self.schema.indexes.clone();
+        self.indexes.clear();
+        for column in index_columns {
+            let _ = self.create_index(&column);
+        }
+    }
 
     pub fn vacuum(&mut self, min_active_tx_id: u64, aborted: &HashSet<u64>) -> usize {
         let mut freed_versions = 0;
@@ -538,6 +566,10 @@ impl Table {
             } else {
                 self.rows.insert(id, new_versions);
             }
+        }
+
+        if freed_versions > 0 {
+            self.rebuild_indexes();
         }
 
         freed_versions

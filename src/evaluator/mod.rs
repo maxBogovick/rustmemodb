@@ -122,6 +122,7 @@ impl EvaluatorRegistry {
         registry.register(Box::new(comparison::ComparisonEvaluator));
         registry.register(Box::new(arithmetic::ArithmeticEvaluator));
         registry.register(Box::new(logical::LogicalEvaluator));
+        registry.register(Box::new(in_list::InListEvaluator));
         registry.register(Box::new(like::LikeEvaluator));
         registry.register(Box::new(between::BetweenEvaluator));
         registry.register(Box::new(is_null::IsNullEvaluator));

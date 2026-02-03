@@ -32,6 +32,15 @@ async fn test_drop_table_if_exists() {
 }
 
 #[tokio::test]
+async fn test_create_table_if_not_exists() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
+
+    client.execute("CREATE TABLE test_create_if (id INTEGER)").await.unwrap();
+    let result = client.execute("CREATE TABLE IF NOT EXISTS test_create_if (id INTEGER)").await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
 async fn test_drop_table_non_existent() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 

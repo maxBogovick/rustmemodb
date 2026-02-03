@@ -4,6 +4,7 @@
 /// Run with: cargo test --test client_api_tests
 
 use rustmemodb::{Client, ConnectionConfig};
+use rustmemodb::core::Value;
 use std::time::Duration;
 
 #[tokio::test]
@@ -207,6 +208,21 @@ async fn test_client_execute_with_order_by() {
     let result = client.query("SELECT * FROM test_order ORDER BY id ASC").await.unwrap();
 
     assert_eq!(result.row_count(), 3);
+}
+
+#[tokio::test]
+async fn test_prepared_statement_params() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
+    client.execute("CREATE TABLE test_ps (id INTEGER, name TEXT)").await.unwrap();
+
+    let mut conn = client.get_connection().await.unwrap();
+    let stmt = conn.connection().prepare("INSERT INTO test_ps VALUES ($1, $2)").unwrap();
+    stmt.execute(&[&1, &"Alice"]).await.unwrap();
+
+    let result = conn.execute("SELECT * FROM test_ps WHERE id = 1").await.unwrap();
+    assert_eq!(result.row_count(), 1);
+    assert_eq!(result.rows()[0][0], Value::Integer(1));
+    assert_eq!(result.rows()[0][1], Value::Text("Alice".to_string()));
 }
 
 #[tokio::test]

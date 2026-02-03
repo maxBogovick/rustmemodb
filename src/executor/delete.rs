@@ -133,27 +133,41 @@ impl DeleteExecutor {
 
         let deleted_count = rows_to_delete.len();
 
-        // Delete rows from storage (MVCC delete)
         let mut deleted_indices = Vec::new();
         let mut deleted_rows_data = Vec::new();
-
         for (idx, row) in &rows_to_delete {
-            let success = ctx.storage.delete_row(&delete.table_name, *idx, ctx.snapshot.tx_id).await?;
-            if success {
-                deleted_indices.push(*idx);
-                deleted_rows_data.push(row.clone());
-            }
+            deleted_indices.push(*idx);
+            deleted_rows_data.push(row.clone());
         }
 
-        // Log to WAL if persistence is enabled
+        let autocommit = ctx.transaction_id.is_none();
+        let tx_id = ctx.snapshot.tx_id;
+
         if !deleted_indices.is_empty()
             && let Some(persistence) = ctx.persistence {
+                if autocommit {
+                    let mut persistence_guard = persistence.lock().await;
+                    persistence_guard.log(&WalEntry::BeginTransaction(tx_id))?;
+                }
                 let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::Delete {
+                    tx_id,
                     table: delete.table_name.clone(),
-                    row_indices: deleted_indices,
-                    deleted_rows: deleted_rows_data,
+                    row_indices: deleted_indices.clone(),
+                    deleted_rows: deleted_rows_data.clone(),
                 })?;
+            }
+
+        // Delete rows from storage (MVCC delete)
+        for idx in &deleted_indices {
+            let _success = ctx.storage.delete_row(&delete.table_name, *idx, ctx.snapshot.tx_id).await?;
+        }
+
+        if autocommit
+            && !deleted_indices.is_empty()
+            && let Some(persistence) = ctx.persistence {
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Commit(tx_id))?;
             }
 
         Ok(QueryResult::deleted(deleted_count))

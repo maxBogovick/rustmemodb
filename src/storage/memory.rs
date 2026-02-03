@@ -82,6 +82,12 @@ impl InMemoryStorage {
         table.rename_column(old_name, new_name)
     }
 
+    pub async fn set_column_unique(&self, table_name: &str, column_name: &str) -> Result<()> {
+        let table_handle = self.get_table(table_name)?;
+        let mut table = table_handle.write().await;
+        table.set_unique(column_name)
+    }
+
     /// Получить handle на таблицу для конкурентного доступа
     pub fn get_table(&self, name: &str) -> Result<Arc<RwLock<Table>>> {
         self.tables

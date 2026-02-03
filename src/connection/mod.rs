@@ -112,6 +112,15 @@ impl Connection {
             db.transaction_manager().begin().await?
         };
 
+        if let Some(persistence) = self.db.read().await.persistence() {
+            let mut persistence_guard = persistence.lock().await;
+            if let Err(err) = persistence_guard.log(&crate::storage::WalEntry::BeginTransaction(txn_id.0)) {
+                let db = self.db.read().await;
+                db.transaction_manager().rollback(txn_id).await?;
+                return Err(err);
+            }
+        }
+
         self.state = ConnectionState::InTransaction;
         self.transaction_id = Some(txn_id);
 
@@ -125,6 +134,11 @@ impl Connection {
         }
 
         let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
+
+        if let Some(persistence) = self.db.read().await.persistence() {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&crate::storage::WalEntry::Commit(txn_id.0))?;
+        }
 
         // Commit transaction via TransactionManager
         {
@@ -147,6 +161,11 @@ impl Connection {
         }
 
         let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
+
+        if let Some(persistence) = self.db.read().await.persistence() {
+            let mut persistence_guard = persistence.lock().await;
+            let _ = persistence_guard.log(&crate::storage::WalEntry::Rollback(txn_id.0));
+        }
 
         // Rollback transaction via TransactionManager
         {
@@ -216,15 +235,44 @@ pub struct PreparedStatement {
 
 impl PreparedStatement {
     /// Execute prepared statement with parameters
-    pub async fn execute(&self, _params: &[&dyn std::fmt::Display]) -> Result<QueryResult> {
+    pub async fn execute(&self, params: &[&dyn std::fmt::Display]) -> Result<QueryResult> {
+        let values = params
+            .iter()
+            .map(|p| parse_display_param(p))
+            .collect::<Result<Vec<_>>>()?;
+        self.execute_with_params(values).await
+    }
+
+    pub async fn execute_with_params(&self, params: Vec<crate::core::Value>) -> Result<QueryResult> {
         let mut db = self.db.write().await;
-        db.execute(&self.sql).await
+        db.execute_with_params(&self.sql, None, params).await
     }
 
     /// Get the SQL text of this prepared statement
     pub fn sql(&self) -> &str {
         &self.sql
     }
+}
+
+fn parse_display_param(param: &dyn std::fmt::Display) -> Result<crate::core::Value> {
+    let raw = param.to_string();
+    let trimmed = raw.trim();
+
+    if trimmed.eq_ignore_ascii_case("null") {
+        return Ok(crate::core::Value::Null);
+    }
+    if trimmed.eq_ignore_ascii_case("true") {
+        return Ok(crate::core::Value::Boolean(true));
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return Ok(crate::core::Value::Boolean(false));
+    }
+
+    if let Ok(number) = crate::core::Value::parse_number(trimmed) {
+        return Ok(number);
+    }
+
+    Ok(crate::core::Value::Text(trimmed.to_string()))
 }
 
 #[cfg(test)]

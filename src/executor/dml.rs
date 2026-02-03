@@ -40,12 +40,14 @@ impl InsertExecutor {
     async fn execute_insert(&self, insert: &InsertStmt, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         // Получаем схему (read lock на одну таблицу)
         let schema = ctx.storage.get_schema(&insert.table_name).await?;
+        let schema_columns = schema.schema().columns();
+        let insert_col_indices = self.resolve_insert_columns(insert.columns.as_deref(), schema_columns, &insert.table_name)?;
 
         // Вычисляем строки
         let rows: Vec<Row> = match &insert.source {
             InsertSource::Values(values) => {
                 values.iter()
-                    .map(|row_exprs| self.evaluate_row(row_exprs, schema.schema().columns(), ctx))
+                    .map(|row_exprs| self.build_row_from_exprs(row_exprs, schema_columns, insert_col_indices.as_deref(), ctx))
                     .collect::<Result<Vec<_>>>()?
             }
             InsertSource::Select(query) => {
@@ -61,12 +63,7 @@ impl InsertExecutor {
                 
                 let mut cast_rows = Vec::new();
                 for row in result.rows() {
-                    let mut new_row = Vec::new();
-                    for (i, val) in row.iter().enumerate() {
-                        let target_type = &schema.schema().columns()[i].data_type;
-                        new_row.push(target_type.cast_value(val)?);
-                    }
-                    cast_rows.push(new_row);
+                    cast_rows.push(self.build_row_from_values(row, schema_columns, insert_col_indices.as_deref())?);
                 }
                 cast_rows
             }
@@ -111,36 +108,156 @@ impl InsertExecutor {
         }
 
         // Insert rows into storage (MVCC write)
-        for row in rows {
-            ctx.storage.insert_row(&insert.table_name, row.clone(), &ctx.snapshot).await?;
+        let autocommit = ctx.transaction_id.is_none();
+        let tx_id = ctx.snapshot.tx_id;
+        let mut logged_begin = false;
+        let mut logged_any = false;
 
-            // Log to WAL if persistence is enabled
+        for row in rows {
+            // Log to WAL before applying
             if let Some(persistence) = ctx.persistence {
+                if autocommit && !logged_begin {
+                    let mut persistence_guard = persistence.lock().await;
+                    persistence_guard.log(&WalEntry::BeginTransaction(tx_id))?;
+                    logged_begin = true;
+                }
                 let mut persistence_guard = persistence.lock().await;
                 persistence_guard.log(&WalEntry::Insert {
+                    tx_id,
                     table: insert.table_name.clone(),
                     row: row.clone(),
                 })?;
+                logged_any = true;
+            }
+
+            ctx.storage.insert_row(&insert.table_name, row.clone(), &ctx.snapshot).await?;
+        }
+
+        if autocommit && logged_any {
+            if let Some(persistence) = ctx.persistence {
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Commit(tx_id))?;
             }
         }
 
         Ok(QueryResult::empty())
     }
 
-    fn evaluate_row(&self, exprs: &[Expr], columns: &[Column], ctx: &ExecutionContext<'_>) -> Result<Row> {
-        if exprs.len() != columns.len() {
-            return Err(DbError::ExecutionError(format!(
-                "Expected {} values, got {}",
-                columns.len(),
-                exprs.len()
-            )));
+    fn build_row_from_exprs(
+        &self,
+        exprs: &[Expr],
+        columns: &[Column],
+        insert_col_indices: Option<&[usize]>,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<Row> {
+        if let Some(indices) = insert_col_indices {
+            if exprs.len() != indices.len() {
+                return Err(DbError::ExecutionError(format!(
+                    "Expected {} values, got {}",
+                    indices.len(),
+                    exprs.len()
+                )));
+            }
+
+            let mut row: Row = columns
+                .iter()
+                .map(|col| col.default.clone().unwrap_or(Value::Null))
+                .collect();
+
+            for (expr, col_idx) in exprs.iter().zip(indices.iter()) {
+                let value = self.evaluate_literal(expr, &columns[*col_idx].data_type, ctx)?;
+                row[*col_idx] = value;
+            }
+
+            Ok(row)
+        } else {
+            if exprs.len() != columns.len() {
+                return Err(DbError::ExecutionError(format!(
+                    "Expected {} values, got {}",
+                    columns.len(),
+                    exprs.len()
+                )));
+            }
+
+            exprs
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| self.evaluate_literal(expr, &columns[i].data_type, ctx))
+                .collect()
+        }
+    }
+
+    fn build_row_from_values(
+        &self,
+        values: &[Value],
+        columns: &[Column],
+        insert_col_indices: Option<&[usize]>,
+    ) -> Result<Row> {
+        if let Some(indices) = insert_col_indices {
+            if values.len() != indices.len() {
+                return Err(DbError::ExecutionError(format!(
+                    "Expected {} values, got {}",
+                    indices.len(),
+                    values.len()
+                )));
+            }
+
+            let mut row: Row = columns
+                .iter()
+                .map(|col| col.default.clone().unwrap_or(Value::Null))
+                .collect();
+
+            for (val, col_idx) in values.iter().zip(indices.iter()) {
+                let cast = columns[*col_idx].data_type.cast_value(val)?;
+                row[*col_idx] = cast;
+            }
+
+            Ok(row)
+        } else {
+            if values.len() != columns.len() {
+                return Err(DbError::ExecutionError(format!(
+                    "Expected {} values, got {}",
+                    columns.len(),
+                    values.len()
+                )));
+            }
+
+            values
+                .iter()
+                .enumerate()
+                .map(|(i, val)| columns[i].data_type.cast_value(val))
+                .collect()
+        }
+    }
+
+    fn resolve_insert_columns(
+        &self,
+        insert_columns: Option<&[String]>,
+        columns: &[Column],
+        table_name: &str,
+    ) -> Result<Option<Vec<usize>>> {
+        let Some(col_names) = insert_columns else {
+            return Ok(None);
+        };
+
+        let mut seen = std::collections::HashSet::new();
+        let mut indices = Vec::with_capacity(col_names.len());
+
+        for name in col_names {
+            if !seen.insert(name) {
+                return Err(DbError::ExecutionError(format!(
+                    "Duplicate column '{}' in INSERT",
+                    name
+                )));
+            }
+            let idx = columns
+                .iter()
+                .position(|c| c.name == *name)
+                .ok_or_else(|| DbError::ColumnNotFound(name.clone(), table_name.to_string()))?;
+            indices.push(idx);
         }
 
-        exprs
-            .iter()
-            .enumerate()
-            .map(|(i, expr)| self.evaluate_literal(expr, &columns[i].data_type, ctx))
-            .collect()
+        Ok(Some(indices))
     }
 
     fn evaluate_literal(
