@@ -1,7 +1,7 @@
 use std::sync::{Arc};
 use tokio::net::TcpListener;
 use async_trait::async_trait;
-use pgwire::api::auth::noop::NoopStartupHandler;
+use pgwire::api::auth::{finish_authentication, save_startup_parameters_to_metadata, DefaultServerParameterProvider, LoginInfo, StartupHandler};
 use pgwire::api::query::{SimpleQueryHandler, ExtendedQueryHandler};
 use pgwire::api::copy::NoopCopyHandler;
 use pgwire::api::results::{Response, Tag, FieldInfo, QueryResponse, DataRowEncoder, FieldFormat, DescribeStatementResponse, DescribePortalResponse, DescribeResponse};
@@ -14,13 +14,15 @@ use tokio::sync::RwLock;
 use futures::{stream, SinkExt};
 use pgwire::messages::data::DataRow;
 use pgwire::messages::extendedquery::Sync as PgSync;
-use pgwire::messages::PgWireBackendMessage;
 use pgwire::messages::response::{ReadyForQuery, TransactionStatus};
 use futures::Sink;
 use std::fmt::Debug;
 
 use crate::core::Column;
 use crate::{DataType, InMemoryDB, Value};
+use crate::connection::auth::AuthManager;
+use pgwire::messages::startup::Authentication;
+use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 
 pub struct PostgresServer {
     db: Arc<RwLock<InMemoryDB>>,
@@ -64,8 +66,62 @@ struct HandlerFactory {
     db: Arc<RwLock<InMemoryDB>>,
 }
 
+struct RustMemDbStartupHandler {
+    auth: Arc<AuthManager>,
+    params: DefaultServerParameterProvider,
+}
+
+#[async_trait]
+impl StartupHandler for RustMemDbStartupHandler {
+    async fn on_startup<C>(
+        &self,
+        client: &mut C,
+        message: PgWireFrontendMessage,
+    ) -> PgWireResult<()>
+    where
+        C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        match message {
+            PgWireFrontendMessage::Startup(ref startup) => {
+                save_startup_parameters_to_metadata(client, startup);
+                client
+                    .send(PgWireBackendMessage::Authentication(
+                        Authentication::CleartextPassword,
+                    ))
+                    .await?;
+            }
+            PgWireFrontendMessage::PasswordMessageFamily(pwd) => {
+                let pwd = pwd.into_password()?;
+                let login_info = LoginInfo::from_client_info(client);
+                let username = login_info.user().unwrap_or("");
+                let password = std::str::from_utf8(pwd.password.as_bytes())
+                    .unwrap_or_default();
+
+                if self.auth.authenticate(username, password).await.is_ok() {
+                    finish_authentication(client, &self.params).await;
+                } else {
+                    let error_info = ErrorInfo::new(
+                        "FATAL".to_string(),
+                        "28P01".to_string(),
+                        "Password authentication failed".to_string(),
+                    );
+                    let error = pgwire::messages::response::ErrorResponse::from(error_info);
+                    client
+                        .feed(PgWireBackendMessage::ErrorResponse(error))
+                        .await?;
+                    client.close().await?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 impl pgwire::api::PgWireHandlerFactory for HandlerFactory {
-    type StartupHandler = NoopStartupHandler;
+    type StartupHandler = RustMemDbStartupHandler;
     type SimpleQueryHandler = QueryProcessor;
     type ExtendedQueryHandler = QueryProcessor;
     type CopyHandler = NoopCopyHandler;
@@ -79,7 +135,10 @@ impl pgwire::api::PgWireHandlerFactory for HandlerFactory {
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
-        Arc::new(NoopStartupHandler)
+        Arc::new(RustMemDbStartupHandler {
+            auth: Arc::clone(AuthManager::global()),
+            params: DefaultServerParameterProvider::default(),
+        })
     }
 
     fn copy_handler(&self) -> Arc<Self::CopyHandler> {
@@ -273,49 +332,29 @@ impl ExtendedQueryHandler for QueryProcessor {
 }
 
 async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec<Value>, format: FieldFormat) -> PgWireResult<Response<'a>> {
-    let mut db_guard = db.write().await;
     println!("Executing query: {} with params: {:?}", query, params);
     if query.trim().is_empty() {
         return Ok(Response::EmptyQuery);
     }
-    match db_guard.execute_with_params(query, None, params).await {
+
+    let statement = {
+        let db_guard = db.read().await;
+        db_guard.parse_first(query).map_err(|e| PgWireError::ApiError(Box::new(e)))?
+    };
+
+    {
+        let db_guard = db.read().await;
+        if InMemoryDB::is_read_only_stmt(&statement) {
+            let result = db_guard.execute_parsed_readonly_with_params(&statement, None, params).await
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            return build_response_from_result(query, result, format);
+        }
+    }
+
+    let mut db_guard = db.write().await;
+    match db_guard.execute_parsed_with_params(&statement, None, params).await {
         Ok(result) => {
-            println!("Query successful, rows: {}", result.row_count());
-            if result.rows().is_empty() {
-                if !result.columns().is_empty() {
-                    let fields = Arc::new(create_field_infos(result.columns(), format));
-                    return Ok(Response::Query(QueryResponse::new(fields, stream::iter(vec![]))));
-                }
-
-                let count = result.affected_rows().unwrap_or(0);
-                let tag = if query.to_uppercase().starts_with("INSERT") {
-                    Tag::new(&format!("INSERT 0 {}", count))
-                } else if query.to_uppercase().starts_with("DELETE") {
-                    Tag::new(&format!("DELETE {}", count))
-                } else if query.to_uppercase().starts_with("UPDATE") {
-                    Tag::new(&format!("UPDATE {}", count))
-                } else {
-                    Tag::new("OK")
-                };
-                return Ok(Response::Execution(tag));
-            }
-
-            let fields_vec = create_field_infos(result.columns(), format);
-            let fields = Arc::new(fields_vec.clone());
-            let mut results = Vec::with_capacity(result.row_count());
-
-            for row in result.rows() {
-                let mut encoder = DataRowEncoder::new(fields.clone());
-                for (i, val) in row.iter().enumerate() {
-                    let field_format = fields_vec[i].format();
-                    encode_value(&mut encoder, val, field_format)?;
-                }
-                results.push(encoder.finish()?);
-            }
-
-            let row_stream = stream::iter(results.into_iter().map(Ok::<DataRow, PgWireError>));
-
-            Ok(Response::Query(QueryResponse::new(fields, row_stream)))
+            build_response_from_result(query, result, format)
         }
         Err(e) => {
             eprintln!("Execution error: {:?}", e);
@@ -326,6 +365,45 @@ async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec
             ))))
         }
     }
+}
+
+fn build_response_from_result<'a>(query: &str, result: crate::result::QueryResult, format: FieldFormat) -> PgWireResult<Response<'a>> {
+    println!("Query successful, rows: {}", result.row_count());
+    if result.rows().is_empty() {
+        if !result.columns().is_empty() {
+            let fields = Arc::new(create_field_infos(result.columns(), format));
+            return Ok(Response::Query(QueryResponse::new(fields, stream::iter(vec![]))));
+        }
+
+        let count = result.affected_rows().unwrap_or(0);
+        let tag = if query.to_uppercase().starts_with("INSERT") {
+            Tag::new(&format!("INSERT 0 {}", count))
+        } else if query.to_uppercase().starts_with("DELETE") {
+            Tag::new(&format!("DELETE {}", count))
+        } else if query.to_uppercase().starts_with("UPDATE") {
+            Tag::new(&format!("UPDATE {}", count))
+        } else {
+            Tag::new("OK")
+        };
+        return Ok(Response::Execution(tag));
+    }
+
+    let fields_vec = create_field_infos(result.columns(), format);
+    let fields = Arc::new(fields_vec.clone());
+    let mut results = Vec::with_capacity(result.row_count());
+
+    for row in result.rows() {
+        let mut encoder = DataRowEncoder::new(fields.clone());
+        for (i, val) in row.iter().enumerate() {
+            let field_format = fields_vec[i].format();
+            encode_value(&mut encoder, val, field_format)?;
+        }
+        results.push(encoder.finish()?);
+    }
+
+    let row_stream = stream::iter(results.into_iter().map(Ok::<DataRow, PgWireError>));
+
+    Ok(Response::Query(QueryResponse::new(fields, row_stream)))
 }
 
 fn create_field_infos(columns: &[Column], default_format: FieldFormat) -> Vec<FieldInfo> {

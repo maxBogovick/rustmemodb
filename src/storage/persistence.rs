@@ -1,7 +1,8 @@
 //! Write-Ahead Logging (WAL) and persistence layer for RustMemDB
 
-use crate::core::{DbError, Result, Row, Snapshot};
+use crate::core::{DbError, Result, Row, Snapshot, Column};
 use crate::storage::table::{Table, TableSchema};
+use crate::parser::ast::{QueryStmt, AlterTableOperation};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -26,6 +27,10 @@ pub enum WalEntry {
     CreateTable { tx_id: u64, name: String, schema: TableSchema },
     DropTable { tx_id: u64, name: String, table: Table },
     CreateIndex { tx_id: u64, table_name: String, column_name: String },
+    CreateView { tx_id: u64, name: String, query: QueryStmt, columns: Vec<String>, or_replace: bool },
+    DropView { tx_id: u64, name: String },
+    RenameTable { tx_id: u64, old_name: String, new_name: String },
+    AlterTable { tx_id: u64, table_name: String, operation: AlterTableOperation },
 }
 
 impl WalEntry {
@@ -42,6 +47,7 @@ impl WalEntry {
 pub struct DatabaseSnapshot {
     pub version: u32,
     pub tables: HashMap<String, Table>,
+    pub views: HashMap<String, (QueryStmt, Vec<String>)>,
     pub metadata: SnapshotMetadata,
 }
 
@@ -53,7 +59,7 @@ pub struct SnapshotMetadata {
 }
 
 impl DatabaseSnapshot {
-    pub fn new(tables: HashMap<String, Table>) -> Self {
+    pub fn new(tables: HashMap<String, Table>, views: HashMap<String, (QueryStmt, Vec<String>)>) -> Self {
         let row_count = tables.values().map(|t| t.row_count()).sum();
         let table_count = tables.len();
         let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
@@ -61,6 +67,7 @@ impl DatabaseSnapshot {
         Self {
             version: 1,
             tables,
+            views,
             metadata: SnapshotMetadata { created_at, row_count, table_count },
         }
     }
@@ -230,6 +237,25 @@ impl SnapshotManager {
 // Persistence Manager
 // ============================================================================
 
+fn apply_alter_table(table: &mut Table, operation: AlterTableOperation) -> Result<()> {
+    match operation {
+        AlterTableOperation::AddColumn(col_def) => {
+            let column = Column::new(col_def.name, col_def.data_type);
+            table.add_column(column)?;
+        }
+        AlterTableOperation::DropColumn(col_name) => {
+            table.drop_column(&col_name)?;
+        }
+        AlterTableOperation::RenameColumn { old_name, new_name } => {
+            table.rename_column(&old_name, &new_name)?;
+        }
+        AlterTableOperation::RenameTable(_) => {
+            return Err(DbError::UnsupportedOperation("Rename table is not supported in AlterTable recovery".into()));
+        }
+    }
+    Ok(())
+}
+
 pub struct PersistenceManager {
     wal: WalManager,
     snapshot: SnapshotManager,
@@ -250,9 +276,9 @@ impl PersistenceManager {
         self.wal.append(entry)
     }
 
-    pub fn checkpoint(&mut self, tables: &HashMap<String, Table>) -> Result<()> {
+    pub fn checkpoint(&mut self, tables: &HashMap<String, Table>, views: &HashMap<String, (QueryStmt, Vec<String>)>) -> Result<()> {
         if self.durability_mode == DurabilityMode::None { return Ok(()); }
-        let snapshot = DatabaseSnapshot::new(tables.clone());
+        let snapshot = DatabaseSnapshot::new(tables.clone(), views.clone());
         self.snapshot.save(&snapshot)?;
         self.wal.clear()?;
         Ok(())
@@ -262,15 +288,15 @@ impl PersistenceManager {
         self.wal.needs_checkpoint()
     }
 
-    pub fn recover(&self) -> Result<Option<HashMap<String, Table>>> {
-        let mut tables = if let Some(snapshot) = self.snapshot.load()? {
-            snapshot.tables
+    pub fn recover(&self) -> Result<Option<DatabaseSnapshot>> {
+        let (mut tables, mut views) = if let Some(snapshot) = self.snapshot.load()? {
+            (snapshot.tables, snapshot.views)
         } else {
-            HashMap::new()
+            (HashMap::new(), HashMap::new())
         };
 
         let wal_entries = self.wal.read_all()?;
-        if tables.is_empty() && wal_entries.is_empty() { return Ok(None); }
+        if tables.is_empty() && views.is_empty() && wal_entries.is_empty() { return Ok(None); }
 
         let mut committed = HashSet::new();
         let mut aborted = HashSet::new();
@@ -340,10 +366,36 @@ impl PersistenceManager {
                         }
                     }
                 }
+                WalEntry::CreateView { tx_id, name, query, columns, or_replace } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        if or_replace || !views.contains_key(&name) {
+                            views.insert(name, (query, columns));
+                        }
+                    }
+                }
+                WalEntry::DropView { tx_id, name } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        views.remove(&name);
+                    }
+                }
+                WalEntry::RenameTable { tx_id, old_name, new_name } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        if let Some(table) = tables.remove(&old_name) {
+                            tables.insert(new_name, table);
+                        }
+                    }
+                }
+                WalEntry::AlterTable { tx_id, table_name, operation } => {
+                    if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                        if let Some(tbl) = tables.get_mut(&table_name) {
+                            apply_alter_table(tbl, operation)?;
+                        }
+                    }
+                }
                 WalEntry::BeginTransaction(_) | WalEntry::Commit(_) | WalEntry::Rollback(_) => {}
             }
         }
-        Ok(Some(tables))
+        Ok(Some(DatabaseSnapshot::new(tables, views)))
     }
 
     pub fn wal(&self) -> &WalManager { &self.wal }
@@ -356,6 +408,8 @@ impl PersistenceManager {
 mod tests {
     use super::*;
     use crate::core::{Column, DataType};
+    use crate::parser::{SqlParserAdapter};
+    use crate::parser::ast::Statement;
     use tempfile::TempDir;
 
     #[test]
@@ -388,7 +442,7 @@ mod tests {
             ],
         );
         tables.insert("users".to_string(), Table::new(schema));
-        let snapshot = DatabaseSnapshot::new(tables);
+        let snapshot = DatabaseSnapshot::new(tables, HashMap::new());
         snapshot_mgr.save(&snapshot).unwrap();
         assert!(snapshot_mgr.exists());
         let loaded = snapshot_mgr.load().unwrap().unwrap();
@@ -404,7 +458,7 @@ mod tests {
         persistence.log(&WalEntry::Commit(1)).unwrap();
         assert_eq!(persistence.wal().entries_since_checkpoint(), 2);
         let tables = HashMap::new();
-        persistence.checkpoint(&tables).unwrap();
+        persistence.checkpoint(&tables, &HashMap::new()).unwrap();
         assert_eq!(persistence.wal().entries_since_checkpoint(), 0);
     }
 
@@ -449,12 +503,12 @@ mod tests {
             ], &snapshot).unwrap();
             table
         });
-        persistence.checkpoint(&tables).unwrap();
+        persistence.checkpoint(&tables, &HashMap::new()).unwrap();
         let recovered = persistence.recover().unwrap().unwrap();
-        assert!(recovered.contains_key("users"));
+        assert!(recovered.tables.contains_key("users"));
         // row_count might be different if MVCC tracks versions, but 1 inserted row means 1 logical row
         // Table::row_count returns number of keys (logical rows).
-        assert_eq!(recovered.get("users").unwrap().row_count(), 1);
+        assert_eq!(recovered.tables.get("users").unwrap().row_count(), 1);
     }
 
     #[test]
@@ -500,7 +554,7 @@ mod tests {
         persistence.log(&WalEntry::Commit(3)).unwrap();
 
         let recovered = persistence.recover().unwrap().unwrap();
-        let table = recovered.get("users").unwrap();
+        let table = recovered.tables.get("users").unwrap();
         assert_eq!(table.row_count(), 1);
         let snapshot = Snapshot {
             tx_id: 0,
@@ -511,5 +565,30 @@ mod tests {
         let rows = table.scan(&snapshot);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], crate::core::Value::Integer(2));
+    }
+
+    #[test]
+    fn test_recovery_views() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut persistence = PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
+
+        let parser = SqlParserAdapter::new();
+        let stmts = parser.parse("CREATE VIEW v AS SELECT 1").unwrap();
+        let Statement::CreateView(create_view) = stmts.into_iter().next().unwrap() else {
+            panic!("Expected CREATE VIEW statement");
+        };
+
+        persistence.log(&WalEntry::BeginTransaction(1)).unwrap();
+        persistence.log(&WalEntry::CreateView {
+            tx_id: 1,
+            name: create_view.name.clone(),
+            query: *create_view.query.clone(),
+            columns: create_view.columns.clone(),
+            or_replace: create_view.or_replace,
+        }).unwrap();
+        persistence.log(&WalEntry::Commit(1)).unwrap();
+
+        let recovered = persistence.recover().unwrap().unwrap();
+        assert!(recovered.views.contains_key("v"));
     }
 }

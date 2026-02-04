@@ -1,7 +1,8 @@
 use crate::core::{Value, DataType, ForeignKey};
+use serde::{Serialize, Deserialize};
 
 /// Root statement type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum Statement {
     CreateTable(CreateTableStmt),
@@ -21,7 +22,7 @@ pub enum Statement {
 }
 
 /// CREATE VIEW statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateViewStmt {
     pub name: String,
     pub columns: Vec<String>,
@@ -30,21 +31,21 @@ pub struct CreateViewStmt {
 }
 
 /// DROP VIEW statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropViewStmt {
     pub name: String,
     pub if_exists: bool,
 }
 
 /// EXPLAIN statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExplainStmt {
     pub statement: Box<Statement>,
     pub analyze: bool, // Future: run and time it?
 }
 
 /// CREATE TABLE statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct CreateTableStmt {
     pub table_name: String,
@@ -53,7 +54,7 @@ pub struct CreateTableStmt {
 }
 
 /// CREATE INDEX statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct CreateIndexStmt {
     pub index_name: String,
@@ -64,14 +65,14 @@ pub struct CreateIndexStmt {
 }
 
 /// ALTER TABLE statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct AlterTableStmt {
     pub table_name: String,
     pub operation: AlterTableOperation,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum AlterTableOperation {
     AddColumn(ColumnDef),
@@ -81,13 +82,13 @@ pub enum AlterTableOperation {
 }
 
 /// DROP TABLE statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DropTableStmt {
     pub table_name: String,
     pub if_exists: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct ColumnDef {
     pub name: String,
@@ -100,7 +101,7 @@ pub struct ColumnDef {
 }
 
 /// INSERT statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct InsertStmt {
     pub table_name: String,
@@ -108,14 +109,14 @@ pub struct InsertStmt {
     pub source: InsertSource,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InsertSource {
     Values(Vec<Vec<Expr>>),
     Select(Box<QueryStmt>),
 }
 
 /// SELECT query statement
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryStmt {
     pub with: Option<With>,
     pub distinct: bool,
@@ -127,54 +128,55 @@ pub struct QueryStmt {
     pub set_op: Option<Box<SetOperation>>,
     pub order_by: Vec<OrderByExpr>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetOperation {
     pub op: SetOperator,
     pub right: Box<QueryStmt>,
     pub all: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
 pub enum SetOperator {
     Union,
     Except,
     Intersect,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct With {
     pub recursive: bool,
     pub cte_tables: Vec<Cte>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cte {
     pub alias: String,
     pub columns: Vec<String>,
     pub query: Box<QueryStmt>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TableWithJoins {
     pub relation: TableFactor,
     pub joins: Vec<Join>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TableFactor {
     Table { name: String, alias: Option<String> },
     Derived { subquery: Box<QueryStmt>, alias: Option<String> },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Join {
     pub relation: TableFactor,
     pub join_operator: JoinOperator,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum JoinOperator {
     Inner(JoinConstraint),
     LeftOuter(JoinConstraint),
@@ -183,53 +185,53 @@ pub enum JoinOperator {
     CrossJoin,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum JoinConstraint {
     On(Expr),
     None,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SelectItem {
     Wildcard,
     Expr { expr: Expr, alias: Option<String> },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderByExpr {
     pub expr: Expr,
     pub descending: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowSpec {
     pub partition_by: Vec<Expr>,
     pub order_by: Vec<OrderByExpr>,
 }
 
 /// DELETE statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteStmt {
     pub table_name: String,
     pub selection: Option<Expr>,
 }
 
 /// UPDATE statement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateStmt {
     pub table_name: String,
     pub assignments: Vec<Assignment>,
     pub selection: Option<Expr>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assignment {
     pub column: String,
     pub value: Expr,
 }
 
 /// Expression types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum Expr {
     /// Column reference
@@ -331,7 +333,7 @@ pub enum Expr {
 }
 
 /// Binary operators
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BinaryOp {
     // Arithmetic
     Add,
@@ -358,7 +360,7 @@ pub enum BinaryOp {
 }
 
 /// Unary operators
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum UnaryOp {
     Not,

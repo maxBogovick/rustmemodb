@@ -44,7 +44,7 @@ Integration testing in Rust usually forces a painful tradeoff:
 **RustMemDB is the Third Way.**
 
 It is a pure Rust SQL engine with MVCC-based storage and Snapshot Isolation that introduces a paradigm shift in testing: **Instant Database Forking**.
-Note: the current connection layer serializes statements via a global lock, so parallel query execution is limited.
+Note: read-only queries run under a shared lock, while writes are exclusive, so parallelism is limited under write-heavy workloads.
 
 ---
 
@@ -78,7 +78,7 @@ cargo run -- server --host 127.0.0.1 --port 5432
 | :--- | :---: | :---: | :---: |
 | **Startup Time** | **< 1ms** | ~10ms | 1s - 5s |
 | **Test Isolation** | **Instant Fork (O(1))** | File Copy / Rollback | New Container / Truncate |
-| **Parallelism** | ⚠️ **Limited (global lock)** | ❌ Locking Issues | ⚠️ High RAM Usage |
+| **Parallelism** | ⚠️ **Limited (shared read / exclusive write)** | ❌ Locking Issues | ⚠️ High RAM Usage |
 | **Type Safety** | ✅ **Strict** | ❌ Loose / Dynamic | ✅ Strict |
 | **Dependencies** | **Zero** (Pure Rust) | C Bindings | Docker Daemon |
 
@@ -161,7 +161,7 @@ We support a rich subset of SQL-92, focusing on the features most used in applic
 | **Constraints** | `PRIMARY KEY`, `UNIQUE`, **`FOREIGN KEY (REFERENCES)`** |
 | **Statements** | `CREATE/DROP TABLE`, `CREATE/DROP VIEW`, `CREATE INDEX`, `INSERT`, `UPDATE`, `DELETE`, `SELECT`, **`EXPLAIN`** |
 | **Alter Table** | `ADD COLUMN`, `DROP COLUMN`, `RENAME COLUMN`, **`RENAME TABLE`** |
-| **Clauses** | `WHERE`, `ORDER BY`, `LIMIT`, `FROM (subquery)`, `DISTINCT`, **`WITH (Recursive CTEs)`** |
+| **Clauses** | `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `FROM (subquery)`, `DISTINCT`, **`WITH (Recursive CTEs)`** |
 | **Transactions** | `BEGIN`, `COMMIT`, `ROLLBACK` |
 
 ---
@@ -210,6 +210,9 @@ Error: TypeMismatch
 
 ### 3. Strict Type Safety
 Unlike SQLite, RustMemDB enforces types. If you define an `INTEGER` column, you cannot insert a string. This catches bugs in your application logic **before** they hit production.
+
+### 4. Prepared Statements (Basic)
+The client API supports simple parameter binding via `PreparedStatement::execute` (numeric/boolean/NULL parsing; everything else treated as text).
 
 ---
 

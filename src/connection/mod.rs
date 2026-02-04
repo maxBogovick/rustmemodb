@@ -8,7 +8,7 @@ use crate::result::QueryResult;
 use crate::transaction::TransactionId;
 use std::sync::{Arc};
 use tokio::sync::RwLock;
-use auth::{User};
+use auth::{User, Permission};
 
 /// Database connection handle
 ///
@@ -77,8 +77,22 @@ impl Connection {
             return Ok(QueryResult::empty_with_message("Transaction rolled back".to_string()));
         }
 
+        let statement = {
+            let db = self.db.read().await;
+            db.parse_first(sql)?
+        };
+
+        enforce_permissions(&self.user, &statement)?;
+
+        {
+            let db = self.db.read().await;
+            if InMemoryDB::is_read_only_stmt(&statement) {
+                return db.execute_parsed_readonly_with_params(&statement, self.transaction_id, vec![]).await;
+            }
+        }
+
         let mut db = self.db.write().await;
-        db.execute_with_transaction(sql, self.transaction_id).await
+        db.execute_parsed_with_params(&statement, self.transaction_id, vec![]).await
     }
 
     /// Execute a query and return the result
@@ -210,6 +224,7 @@ impl Connection {
         Ok(PreparedStatement {
             sql: sql.to_string(),
             db: Arc::clone(&self.db),
+            user: self.user.clone(),
         })
     }
 }
@@ -231,6 +246,7 @@ impl Drop for Connection {
 pub struct PreparedStatement {
     sql: String,
     db: Arc<RwLock<InMemoryDB>>,
+    user: User,
 }
 
 impl PreparedStatement {
@@ -244,8 +260,21 @@ impl PreparedStatement {
     }
 
     pub async fn execute_with_params(&self, params: Vec<crate::core::Value>) -> Result<QueryResult> {
+        let statement = {
+            let db_guard = self.db.read().await;
+            db_guard.parse_first(&self.sql)?
+        };
+
+        {
+            let db_guard = self.db.read().await;
+            enforce_permissions(&self.user, &statement)?;
+            if InMemoryDB::is_read_only_stmt(&statement) {
+                return db_guard.execute_parsed_readonly_with_params(&statement, None, params).await;
+            }
+        }
+
         let mut db = self.db.write().await;
-        db.execute_with_params(&self.sql, None, params).await
+        db.execute_parsed_with_params(&statement, None, params).await
     }
 
     /// Get the SQL text of this prepared statement
@@ -273,6 +302,31 @@ fn parse_display_param(param: &dyn std::fmt::Display) -> Result<crate::core::Val
     }
 
     Ok(crate::core::Value::Text(trimmed.to_string()))
+}
+
+fn required_permission(stmt: &crate::parser::ast::Statement) -> Option<Permission> {
+    use crate::parser::ast::Statement::*;
+    match stmt {
+        Query(_) | Explain(_) => Some(Permission::Select),
+        Insert(_) => Some(Permission::Insert),
+        Update(_) => Some(Permission::Update),
+        Delete(_) => Some(Permission::Delete),
+        CreateTable(_) | CreateIndex(_) | CreateView(_) | AlterTable(_) => Some(Permission::CreateTable),
+        DropTable(_) | DropView(_) => Some(Permission::DropTable),
+        Begin | Commit | Rollback => None,
+    }
+}
+
+fn enforce_permissions(user: &User, stmt: &crate::parser::ast::Statement) -> Result<()> {
+    if let Some(permission) = required_permission(stmt) {
+        if !user.has_permission(permission) {
+            return Err(DbError::ExecutionError(format!(
+                "Permission denied: {:?} required",
+                permission
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

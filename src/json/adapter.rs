@@ -12,7 +12,7 @@ use super::converter::{
 };
 use super::error::{JsonError, JsonResult};
 use super::schema_inference::{SchemaInferenceEngine, SchemaInferenceStrategy};
-use super::validator::{QueryValidator, validate_collection_name};
+use super::validator::{QueryValidator, validate_collection_name, validate_field_name};
 use serde_json::Value as JsonValue;
 use std::sync::{Arc};
 use tokio::sync::RwLock;
@@ -131,8 +131,8 @@ impl JsonStorageAdapter {
 
         // Execute query
         let result = {
-            let mut db = self.db.write().await;
-            db.execute(query).await?
+            let db = self.db.read().await;
+            db.execute_readonly(query, None).await?
         };
 
         // Convert result to JSON
@@ -187,6 +187,7 @@ impl JsonStorageAdapter {
             // Add all fields except id to SET clause
             for (key, value) in obj {
                 if key != "id" {
+                    validate_field_name(key)?;
                     // Infer type from JSON value
                     let data_type = match value {
                         JsonValue::Null => crate::core::DataType::Text,
@@ -301,11 +302,7 @@ impl JsonStorageAdapter {
                 .ok_or_else(|| JsonError::ValidationError(
                     format!("Collection '{}' does not exist", collection_name)
                 ))?;
-
-            // We need to get the actual schema to convert JSON to rows
-            // For now, we'll re-infer it from the documents
-            // TODO: Get schema from catalog
-            self.schema_engine.infer_schema(collection_name, documents)?
+            db.get_table_schema(collection_name).await?
         };
 
         // Convert JSON documents to rows

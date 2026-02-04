@@ -263,6 +263,44 @@ pub fn validate_collection_name(name: &str) -> JsonResult<()> {
     Ok(())
 }
 
+/// Validates JSON field/column names to prevent injection
+pub fn validate_field_name(name: &str) -> JsonResult<()> {
+    if name.is_empty() {
+        return Err(JsonError::ValidationError("Field name cannot be empty".to_string()));
+    }
+
+    if !name.chars().next().unwrap().is_alphabetic() && !name.starts_with('_') {
+        return Err(JsonError::ValidationError(
+            "Field name must start with a letter or underscore".to_string(),
+        ));
+    }
+
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err(JsonError::ValidationError(
+            "Field name can only contain letters, numbers, and underscores".to_string(),
+        ));
+    }
+
+    if name.len() > 64 {
+        return Err(JsonError::ValidationError(
+            "Field name too long (max 64 characters)".to_string(),
+        ));
+    }
+
+    let sql_keywords = [
+        "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
+        "TABLE", "FROM", "WHERE", "JOIN", "UNION", "ORDER", "GROUP",
+    ];
+
+    if sql_keywords.iter().any(|&kw| name.eq_ignore_ascii_case(kw)) {
+        return Err(JsonError::ValidationError(
+            format!("Field name cannot be SQL keyword: {}", name),
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +321,15 @@ mod tests {
         assert!(validate_collection_name("user profile").is_err());
         assert!(validate_collection_name("SELECT").is_err());
         assert!(validate_collection_name("DROP").is_err());
+    }
+
+    #[test]
+    fn test_field_name_validation() {
+        assert!(validate_field_name("field1").is_ok());
+        assert!(validate_field_name("_internal").is_ok());
+        assert!(validate_field_name("bad-name").is_err());
+        assert!(validate_field_name("1bad").is_err());
+        assert!(validate_field_name("SELECT").is_err());
     }
 
     #[test]

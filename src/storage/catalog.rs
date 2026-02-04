@@ -88,6 +88,10 @@ impl Catalog {
         self.views.keys().map(|s| s.as_str()).collect()
     }
 
+    pub fn views_snapshot(&self) -> HashMap<String, (QueryStmt, Vec<String>)> {
+        (*self.views).clone()
+    }
+
     /// Удалить таблицу - возвращает НОВЫЙ Catalog
     pub fn without_table(self, name: &str) -> Result<Self> {
         if !self.tables.contains_key(name) {

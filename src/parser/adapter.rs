@@ -487,7 +487,7 @@ impl SqlParserAdapter {
         let (partial, set_op) = self.convert_set_expr(*query.body)?;
 
         let order_by = self.convert_order_by(query.order_by)?;
-        let limit = self.convert_limit_clause(&query.limit_clause)?;
+        let (limit, offset) = self.convert_limit_clause(&query.limit_clause)?;
 
         Ok(QueryStmt {
             with,
@@ -500,6 +500,7 @@ impl SqlParserAdapter {
             set_op,
             order_by,
             limit,
+            offset,
         })
     }
 
@@ -556,8 +557,10 @@ impl SqlParserAdapter {
             set_op,
             order_by: vec![],
             limit: None,
+            offset: None,
         })
     }
+
 
     fn append_set_op(&self, chain: &mut Box<SetOperation>, new_node: SetOperation) {
         if let Some(ref mut next) = chain.right.set_op {
@@ -698,48 +701,44 @@ impl SqlParserAdapter {
         })
     }
 
-    fn convert_limit_clause(&self, limit_clause: &Option<sql_ast::LimitClause>) -> Result<Option<usize>> {
+    fn convert_limit_clause(&self, limit_clause: &Option<sql_ast::LimitClause>) -> Result<(Option<usize>, Option<usize>)> {
         let Some(clause) = limit_clause else {
-            return Ok(None);
+            return Ok((None, None));
         };
 
         match clause {
-            sql_ast::LimitClause::LimitOffset { limit, .. } => {
-                match limit {
-                    Some(sql_ast::Expr::Value(value_with_span)) => {
-                        self.extract_limit_number(&value_with_span.value)
-                    }
-                    Some(_) => Err(DbError::UnsupportedOperation(
-                        "Only numeric LIMIT supported".into()
-                    )),
-                    None => Ok(None),
-                }
+            sql_ast::LimitClause::LimitOffset { limit, offset, .. } => {
+                let limit_value = match limit {
+                    Some(expr) => Some(self.extract_usize_expr(expr, "LIMIT")?),
+                    None => None,
+                };
+                let offset_value = match offset {
+                    Some(off) => Some(self.extract_usize_expr(&off.value, "OFFSET")?),
+                    None => None,
+                };
+                Ok((limit_value, offset_value))
             }
-            sql_ast::LimitClause::OffsetCommaLimit { limit, .. } => {
-                match limit {
-                    sql_ast::Expr::Value(value_with_span) => {
-                        self.extract_limit_number(&value_with_span.value)
-                    }
-                    _ => Err(DbError::UnsupportedOperation(
-                        "Only numeric LIMIT supported".into()
-                    )),
-                }
+            sql_ast::LimitClause::OffsetCommaLimit { offset, limit } => {
+                let offset_value = Some(self.extract_usize_expr(offset, "OFFSET")?);
+                let limit_value = Some(self.extract_usize_expr(limit, "LIMIT")?);
+                Ok((limit_value, offset_value))
             }
         }
     }
 
-    fn extract_limit_number(&self, value: &sql_ast::Value) -> Result<Option<usize>> {
-        match value {
-            sql_ast::Value::Number(n, _) => {
-                n.parse::<usize>()
-                    .map(Some)
-                    .map_err(|_| DbError::ParseError(
-                        format!("Invalid LIMIT value: {}", n)
-                    ))
-            }
-            _ => Err(DbError::UnsupportedOperation(
-                format!("Only numeric LIMIT supported, got: {:?}", value)
-            )),
+    fn extract_usize_expr(&self, expr: &sql_ast::Expr, label: &str) -> Result<usize> {
+        match expr {
+            sql_ast::Expr::Value(value_with_span) => match &value_with_span.value {
+                sql_ast::Value::Number(n, _) => n.parse::<usize>().map_err(|_| {
+                    DbError::ParseError(format!("Invalid {} value: {}", label, n))
+                }),
+                other => Err(DbError::UnsupportedOperation(format!(
+                    "Only numeric {} supported, got: {:?}", label, other
+                ))),
+            },
+            _ => Err(DbError::UnsupportedOperation(format!(
+                "Only numeric {} supported", label
+            ))),
         }
     }
 

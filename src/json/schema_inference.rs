@@ -9,6 +9,7 @@
 use crate::core::{Column, DataType};
 use crate::storage::TableSchema;
 use super::error::{JsonError, JsonResult};
+use super::validator::validate_field_name;
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
@@ -34,11 +35,12 @@ impl SchemaInferenceStrategy for FirstDocumentStrategy {
             .ok_or_else(|| JsonError::InvalidStructure("Expected JSON object".into()))?;
 
         let columns = obj.iter()
-            .map(|(key, value)| {
+            .map(|(key, value)| -> JsonResult<Column> {
+                validate_field_name(key)?;
                 let data_type = infer_type_from_value(value);
-                Column::new(key.clone(), data_type)
+                Ok(Column::new(key.clone(), data_type))
             })
-            .collect();
+            .collect::<JsonResult<Vec<_>>>()?;
 
         Ok(TableSchema::new(collection_name.to_string(), columns))
     }
@@ -63,6 +65,7 @@ impl SchemaInferenceStrategy for AllDocumentsStrategy {
                 .ok_or_else(|| JsonError::InvalidStructure("Expected JSON object".into()))?;
 
             for (key, value) in obj {
+                validate_field_name(key)?;
                 all_fields.insert(key.clone());
                 let data_type = infer_type_from_value(value);
                 field_types.entry(key.clone())

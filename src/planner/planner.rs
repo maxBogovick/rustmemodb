@@ -195,12 +195,13 @@ impl QueryPlanner {
             });
         }
 
-        // 9. Apply LIMIT
-        if let Some(limit) = query.limit {
+        // 9. Apply LIMIT/OFFSET
+        if query.limit.is_some() || query.offset.is_some() {
             let schema = plan.schema().clone();
             plan = LogicalPlan::Limit(LimitNode {
                 input: Box::new(plan),
-                limit,
+                limit: query.limit,
+                offset: query.offset.unwrap_or(0),
                 schema,
             });
         }
@@ -244,7 +245,11 @@ impl QueryPlanner {
         match expr {
             Expr::Function { name, args, distinct, over } => {
                 let distinct_str = if *distinct { "DISTINCT " } else { "" };
-                let arg_str = if args.is_empty() { "*".to_string() } else { "expr".to_string() };
+                let arg_str = if args.is_empty() {
+                    "*".to_string()
+                } else {
+                    args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ")
+                };
                 let over_str = if over.is_some() { " OVER (...)" } else { "" };
                 format!("{}({}{}){}", name, distinct_str, arg_str, over_str)
             }

@@ -131,7 +131,8 @@ impl SortNode {
 #[derive(Debug, Clone)]
 pub struct LimitNode {
     pub input: Box<LogicalPlan>,
-    pub limit: usize,
+    pub limit: Option<usize>,
+    pub offset: usize,
     pub schema: Schema,
 }
 

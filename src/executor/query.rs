@@ -428,8 +428,13 @@ impl QueryExecutor {
         limit: &crate::planner::logical_plan::LimitNode,
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let mut rows = self.execute_plan(&limit.input, ctx).await?;
-        rows.truncate(limit.limit);
+        let rows = self.execute_plan(&limit.input, ctx).await?;
+        let iter = rows.into_iter().skip(limit.offset);
+        let rows = if let Some(max) = limit.limit {
+            iter.take(max).collect()
+        } else {
+            iter.collect()
+        };
         Ok(rows)
     }
 
@@ -703,6 +708,41 @@ impl QueryExecutor {
             _ => false,
         }
     }
+
+    fn is_constant_expression(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Literal(_) | Expr::Parameter(_) => true,
+            Expr::UnaryOp { expr, .. } => self.is_constant_expression(expr),
+            Expr::BinaryOp { left, right, .. } => {
+                self.is_constant_expression(left) && self.is_constant_expression(right)
+            }
+            Expr::Like { expr, pattern, .. } => {
+                self.is_constant_expression(expr) && self.is_constant_expression(pattern)
+            }
+            Expr::Between { expr, low, high, .. } => {
+                self.is_constant_expression(expr)
+                    && self.is_constant_expression(low)
+                    && self.is_constant_expression(high)
+            }
+            Expr::In { expr, list, .. } => {
+                self.is_constant_expression(expr)
+                    && list.iter().all(|item| self.is_constant_expression(item))
+            }
+            Expr::IsNull { expr, .. } => self.is_constant_expression(expr),
+            Expr::Not { expr } => self.is_constant_expression(expr),
+            Expr::Cast { expr, .. } => self.is_constant_expression(expr),
+            Expr::Array(items) => items.iter().all(|item| self.is_constant_expression(item)),
+            Expr::ArrayIndex { obj, index } => {
+                self.is_constant_expression(obj) && self.is_constant_expression(index)
+            }
+            Expr::Function { .. }
+            | Expr::Column(_)
+            | Expr::CompoundIdentifier(_)
+            | Expr::Subquery(_)
+            | Expr::InSubquery { .. }
+            | Expr::Exists { .. } => false,
+        }
+    }
 }
 
 // ============================================================================
@@ -720,6 +760,17 @@ impl QueryExecutor {
     ) -> Result<Vec<Row>> {
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
         let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+
+        for expr in expressions {
+            if !self.is_aggregate_function(expr) && !self.is_constant_expression(expr) {
+                return Err(DbError::ExecutionError(
+                    "Non-aggregate expression used without GROUP BY".into(),
+                ));
+            }
+        }
+
+        let empty_row = Vec::new();
+        let row_for_eval = rows.get(0).unwrap_or(&empty_row);
         
         let mut result_row = Vec::new();
 
@@ -729,12 +780,8 @@ impl QueryExecutor {
                     self.evaluate_aggregate(name, args, *distinct, rows, schema, &eval_ctx).await?
                 }
                 _ => {
-                    // Non-aggregate expressions evaluated on first row
-                    if !rows.is_empty() {
-                        eval_ctx.evaluate(expr, &rows[0], schema).await?
-                    } else {
-                        Value::Null
-                    }
+                    // Constant expressions evaluated once
+                    eval_ctx.evaluate(expr, row_for_eval, schema).await?
                 }
             };
             result_row.push(value);

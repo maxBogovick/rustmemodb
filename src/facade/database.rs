@@ -155,6 +155,177 @@ impl InMemoryDB {
         params
     }
 
+    fn max_param_index(&self, stmt: &Statement) -> usize {
+        let mut max = 0usize;
+        self.collect_params_from_statement(stmt, &mut max);
+        max
+    }
+
+    fn collect_params_from_statement(&self, stmt: &Statement, max: &mut usize) {
+        match stmt {
+            Statement::Insert(insert) => {
+                if let crate::parser::ast::InsertSource::Values(rows) = &insert.source {
+                    for row in rows {
+                        for expr in row {
+                            self.collect_params_from_expr(expr, max);
+                        }
+                    }
+                }
+                if let crate::parser::ast::InsertSource::Select(query) = &insert.source {
+                    self.collect_params_from_query(query, max);
+                }
+            }
+            Statement::Update(update) => {
+                for assign in &update.assignments {
+                    self.collect_params_from_expr(&assign.value, max);
+                }
+                if let Some(selection) = &update.selection {
+                    self.collect_params_from_expr(selection, max);
+                }
+            }
+            Statement::Delete(delete) => {
+                if let Some(selection) = &delete.selection {
+                    self.collect_params_from_expr(selection, max);
+                }
+            }
+            Statement::Query(query) => {
+                self.collect_params_from_query(query, max);
+            }
+            Statement::Explain(explain) => {
+                self.collect_params_from_statement(&explain.statement, max);
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_params_from_query(&self, query: &crate::parser::ast::QueryStmt, max: &mut usize) {
+        if let Some(with) = &query.with {
+            for cte in &with.cte_tables {
+                self.collect_params_from_query(&cte.query, max);
+            }
+        }
+
+        for item in &query.projection {
+            if let crate::parser::ast::SelectItem::Expr { expr, .. } = item {
+                self.collect_params_from_expr(expr, max);
+            }
+        }
+
+        for table in &query.from {
+            self.collect_params_from_table_factor(&table.relation, max);
+            for join in &table.joins {
+                self.collect_params_from_table_factor(&join.relation, max);
+                if let crate::parser::ast::JoinOperator::Inner(constraint)
+                | crate::parser::ast::JoinOperator::LeftOuter(constraint)
+                | crate::parser::ast::JoinOperator::RightOuter(constraint)
+                | crate::parser::ast::JoinOperator::FullOuter(constraint) = &join.join_operator {
+                    if let crate::parser::ast::JoinConstraint::On(expr) = constraint {
+                        self.collect_params_from_expr(expr, max);
+                    }
+                }
+            }
+        }
+
+        if let Some(selection) = &query.selection {
+            self.collect_params_from_expr(selection, max);
+        }
+        for expr in &query.group_by {
+            self.collect_params_from_expr(expr, max);
+        }
+        if let Some(having) = &query.having {
+            self.collect_params_from_expr(having, max);
+        }
+        for order in &query.order_by {
+            self.collect_params_from_expr(&order.expr, max);
+        }
+
+        if let Some(set_op) = &query.set_op {
+            self.collect_params_from_set_op(set_op, max);
+        }
+    }
+
+    fn collect_params_from_set_op(&self, set_op: &crate::parser::ast::SetOperation, max: &mut usize) {
+        self.collect_params_from_query(&set_op.right, max);
+        if let Some(next) = &set_op.right.set_op {
+            self.collect_params_from_set_op(next, max);
+        }
+    }
+
+    fn collect_params_from_table_factor(&self, factor: &crate::parser::ast::TableFactor, max: &mut usize) {
+        if let crate::parser::ast::TableFactor::Derived { subquery, .. } = factor {
+            self.collect_params_from_query(subquery, max);
+        }
+    }
+
+    fn collect_params_from_expr(&self, expr: &crate::parser::ast::Expr, max: &mut usize) {
+        use crate::parser::ast::Expr;
+        match expr {
+            Expr::Parameter(idx) => {
+                if *idx > *max {
+                    *max = *idx;
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.collect_params_from_expr(left, max);
+                self.collect_params_from_expr(right, max);
+            }
+            Expr::UnaryOp { expr, .. } => self.collect_params_from_expr(expr, max),
+            Expr::Like { expr, pattern, .. } => {
+                self.collect_params_from_expr(expr, max);
+                self.collect_params_from_expr(pattern, max);
+            }
+            Expr::Between { expr, low, high, .. } => {
+                self.collect_params_from_expr(expr, max);
+                self.collect_params_from_expr(low, max);
+                self.collect_params_from_expr(high, max);
+            }
+            Expr::In { expr, list, .. } => {
+                self.collect_params_from_expr(expr, max);
+                for item in list {
+                    self.collect_params_from_expr(item, max);
+                }
+            }
+            Expr::InSubquery { expr, subquery, .. } => {
+                self.collect_params_from_expr(expr, max);
+                self.collect_params_from_query(subquery, max);
+            }
+            Expr::Subquery(subquery) => {
+                self.collect_params_from_query(subquery, max);
+            }
+            Expr::Exists { subquery, .. } => {
+                self.collect_params_from_query(subquery, max);
+            }
+            Expr::IsNull { expr, .. } => self.collect_params_from_expr(expr, max),
+            Expr::Not { expr } => self.collect_params_from_expr(expr, max),
+            Expr::Function { args, over, .. } => {
+                for arg in args {
+                    self.collect_params_from_expr(arg, max);
+                }
+                if let Some(over) = over {
+                    for expr in &over.partition_by {
+                        self.collect_params_from_expr(expr, max);
+                    }
+                    for order in &over.order_by {
+                        self.collect_params_from_expr(&order.expr, max);
+                    }
+                }
+            }
+            Expr::Cast { expr, .. } => self.collect_params_from_expr(expr, max),
+            Expr::Array(list) => {
+                for item in list {
+                    self.collect_params_from_expr(item, max);
+                }
+            }
+            Expr::ArrayIndex { obj, index } => {
+                self.collect_params_from_expr(obj, max);
+                self.collect_params_from_expr(index, max);
+            }
+            Expr::Column(_)
+            | Expr::CompoundIdentifier(_)
+            | Expr::Literal(_) => {}
+        }
+    }
+
     fn infer_from_expr(&self, expr: &crate::parser::ast::Expr, schema: &Schema, params: &mut std::collections::HashMap<usize, DataType>) {
         use crate::parser::ast::*;
         match expr {
@@ -196,18 +367,8 @@ impl InMemoryDB {
         
         let mut inferred = self.infer_parameters(statement).await;
         
-        // Extract parameters (simplified regex approach for count)
-        let param_count = {
-             let s = format!("{:?}", statement);
-             let re = regex::Regex::new(r"Parameter\((\d+)\)").unwrap();
-             let mut max = 0;
-             for cap in re.captures_iter(&s) {
-                 if let Ok(n) = cap[1].parse::<usize>() {
-                     if n > max { max = n; }
-                 }
-             }
-             max
-        };
+        // Extract parameters from AST (no regex)
+        let param_count = self.max_param_index(statement);
         
         let mut params = Vec::new();
         for i in 1..=param_count {
@@ -228,6 +389,71 @@ impl InMemoryDB {
         }
     }
 
+    pub fn parse_first(&self, sql: &str) -> Result<Statement> {
+        let statements = self.parser.parse(sql)?;
+        if statements.is_empty() {
+            return Err(DbError::ParseError("No statement found".into()));
+        }
+        Ok(statements[0].clone())
+    }
+
+    pub fn is_read_only(&self, sql: &str) -> Result<bool> {
+        let stmt = self.parse_first(sql)?;
+        Ok(Self::is_read_only_stmt(&stmt))
+    }
+
+    pub fn is_read_only_stmt(stmt: &Statement) -> bool {
+        matches!(stmt, Statement::Query(_) | Statement::Explain(_))
+    }
+
+    pub async fn execute_readonly_with_params(
+        &self,
+        sql: &str,
+        transaction_id: Option<crate::transaction::TransactionId>,
+        params: Vec<Value>,
+    ) -> Result<QueryResult> {
+        let statement = self.parse_first(sql)?;
+        self.execute_parsed_readonly_with_params(&statement, transaction_id, params)
+            .await
+    }
+
+    pub async fn execute_parsed_readonly_with_params(
+        &self,
+        statement: &Statement,
+        transaction_id: Option<crate::transaction::TransactionId>,
+        params: Vec<Value>,
+    ) -> Result<QueryResult> {
+        match statement {
+            Statement::Query(_) | Statement::Explain(_) => {}
+            _ => {
+                return Err(DbError::UnsupportedOperation(
+                    "Read-only execution supports only SELECT/EXPLAIN".into(),
+                ))
+            }
+        }
+
+        let persistence_ref = self.persistence.as_ref();
+        let ctx = if let Some(txn_id) = transaction_id {
+            let snapshot = self.transaction_manager.get_snapshot(txn_id).await?;
+            ExecutionContext::with_transaction(&self.storage, &self.transaction_manager, txn_id, persistence_ref, snapshot)
+                .with_params(params)
+        } else {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            ExecutionContext::new(&self.storage, &self.transaction_manager, persistence_ref, snapshot)
+                .with_params(params)
+        };
+
+        self.executor_pipeline.execute(statement, &ctx).await
+    }
+
+    pub async fn execute_readonly(
+        &self,
+        sql: &str,
+        transaction_id: Option<crate::transaction::TransactionId>,
+    ) -> Result<QueryResult> {
+        self.execute_readonly_with_params(sql, transaction_id, vec![]).await
+    }
+
     pub async fn execute(&mut self, sql: &str) -> Result<QueryResult> {
         self.execute_with_transaction(sql, None).await
     }
@@ -246,13 +472,17 @@ impl InMemoryDB {
             ));
         }
 
-        let statements = self.parser.parse(sql)?;
+        let statement = self.parse_first(sql)?;
+        self.execute_parsed_with_params(&statement, transaction_id, params).await
+    }
 
-        if statements.is_empty() {
-            return Err(DbError::ParseError("No statement found".into()));
-        }
-
-        match &statements[0] {
+    pub async fn execute_parsed_with_params(
+        &mut self,
+        statement: &Statement,
+        transaction_id: Option<crate::transaction::TransactionId>,
+        params: Vec<Value>,
+    ) -> Result<QueryResult> {
+        match statement {
             Statement::CreateTable(create) => {
                 return self.execute_create_table(create).await;
             }
@@ -282,15 +512,41 @@ impl InMemoryDB {
 
                 // Execute ALTER TABLE via pipeline
                 // We need to update catalog after execution
+                let mut wal_tx_id = None;
+                if let Some(ref persistence) = self.persistence {
+                    let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+                    wal_tx_id = Some(snapshot.tx_id);
+                    let mut persistence_guard = persistence.lock().await;
+                    persistence_guard.log(&WalEntry::BeginTransaction(snapshot.tx_id))?;
+                    persistence_guard.log(&WalEntry::AlterTable {
+                        tx_id: snapshot.tx_id,
+                        table_name: alter.table_name.clone(),
+                        operation: alter.operation.clone(),
+                    })?;
+                }
+
                 let persistence_ref = self.persistence.as_ref();
                 let ctx = ExecutionContext::new(&self.storage, &self.transaction_manager, persistence_ref, self.transaction_manager.get_auto_commit_snapshot().await?);
-                let result = self.executor_pipeline.execute(&statements[0], &ctx).await?;
+                let result = match self.executor_pipeline.execute(statement, &ctx).await {
+                    Ok(result) => result,
+                    Err(err) => {
+                        if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+                            let mut persistence_guard = persistence.lock().await;
+                            persistence_guard.log(&WalEntry::Rollback(tx_id))?;
+                        }
+                        return Err(err);
+                    }
+                };
 
                 // Refresh catalog
                 let schema = self.storage.get_schema(&alter.table_name).await?;
                 self.catalog = self.catalog.clone().without_table(&alter.table_name)?.with_table(schema)?;
 
                 self.refresh_catalog_executors();
+                if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+                    let mut persistence_guard = persistence.lock().await;
+                    persistence_guard.log(&WalEntry::Commit(tx_id))?;
+                }
 
                 return Ok(result);
             }
@@ -310,7 +566,7 @@ impl InMemoryDB {
                 .with_params(params)
         };
 
-        self.executor_pipeline.execute(&statements[0], &ctx).await
+        self.executor_pipeline.execute(statement, &ctx).await
     }
 
     pub async fn execute_with_transaction(
@@ -455,11 +711,29 @@ impl InMemoryDB {
              return Err(DbError::TableExists(create.name.clone()));
         }
 
+        let mut wal_tx_id = None;
+        if let Some(ref persistence) = self.persistence {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            wal_tx_id = Some(snapshot.tx_id);
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::BeginTransaction(snapshot.tx_id))?;
+            persistence_guard.log(&WalEntry::CreateView {
+                tx_id: snapshot.tx_id,
+                name: create.name.clone(),
+                query: *create.query.clone(),
+                columns: create.columns.clone(),
+                or_replace: create.or_replace,
+            })?;
+        }
+
         self.catalog = self.catalog.clone().with_view(create.name.clone(), *create.query.clone(), create.columns.clone())?;
-        
-        // TODO: Add WAL support for Views
+        if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::Commit(tx_id))?;
+        }
         
         self.refresh_catalog_executors();
+        self.maybe_checkpoint().await?;
         Ok(QueryResult::empty())
     }
 
@@ -471,22 +745,58 @@ impl InMemoryDB {
              return Err(DbError::ExecutionError(format!("View '{}' not found", drop.name)));
          }
 
+         let mut wal_tx_id = None;
+         if let Some(ref persistence) = self.persistence {
+             let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+             wal_tx_id = Some(snapshot.tx_id);
+             let mut persistence_guard = persistence.lock().await;
+             persistence_guard.log(&WalEntry::BeginTransaction(snapshot.tx_id))?;
+             persistence_guard.log(&WalEntry::DropView {
+                 tx_id: snapshot.tx_id,
+                 name: drop.name.clone(),
+             })?;
+         }
+
          self.catalog = self.catalog.clone().without_view(&drop.name)?;
+         if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+             let mut persistence_guard = persistence.lock().await;
+             persistence_guard.log(&WalEntry::Commit(tx_id))?;
+         }
          self.refresh_catalog_executors();
+         self.maybe_checkpoint().await?;
          Ok(QueryResult::empty())
     }
 
     async fn execute_rename_table(&mut self, old_name: &str, new_name: &str) -> Result<()> {
-        if let Some(ref _persistence) = self.persistence {
-            // Log rename not supported in WAL yet properly (or reuse AlterTable?)
-            // We'll skip WAL for RenameTable for MVP or need to add variant.
+        let mut wal_tx_id = None;
+        if let Some(ref persistence) = self.persistence {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            wal_tx_id = Some(snapshot.tx_id);
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::BeginTransaction(snapshot.tx_id))?;
+            persistence_guard.log(&WalEntry::RenameTable {
+                tx_id: snapshot.tx_id,
+                old_name: old_name.to_string(),
+                new_name: new_name.to_string(),
+            })?;
         }
 
-        self.storage.rename_table(old_name, new_name).await?;
+        if let Err(err) = self.storage.rename_table(old_name, new_name).await {
+            if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+                let mut persistence_guard = persistence.lock().await;
+                persistence_guard.log(&WalEntry::Rollback(tx_id))?;
+            }
+            return Err(err);
+        }
 
         // Update Catalog
         let schema = self.storage.get_schema(new_name).await?;
         self.catalog = self.catalog.clone().without_table(old_name)?.with_table(schema)?;
+
+        if let (Some(persistence), Some(tx_id)) = (&self.persistence, wal_tx_id) {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&WalEntry::Commit(tx_id))?;
+        }
 
         self.refresh_catalog_executors();
         self.maybe_checkpoint().await?;
@@ -495,6 +805,10 @@ impl InMemoryDB {
 
     pub fn table_exists(&self, name: &str) -> bool {
         self.catalog.table_exists(name)
+    }
+
+    pub async fn get_table_schema(&self, name: &str) -> Result<TableSchema> {
+        self.storage.get_schema(name).await
     }
 
     pub fn list_tables(&self) -> Vec<String> {
@@ -620,7 +934,7 @@ impl InMemoryDB {
         if let Some(ref persistence) = self.persistence {
             let tables = self.storage.get_all_tables().await?;
             let mut persistence_guard = persistence.lock().await;
-            persistence_guard.checkpoint(&tables)?;
+            persistence_guard.checkpoint(&tables, &self.catalog.views_snapshot())?;
         }
         Ok(())
     }
@@ -636,27 +950,38 @@ impl InMemoryDB {
     }
 
     async fn recover_if_needed(&mut self) -> Result<()> {
-        let tables = if let Some(ref persistence) = self.persistence {
+        let snapshot = if let Some(ref persistence) = self.persistence {
             let persistence_guard = persistence.lock().await;
             persistence_guard.recover()?
         } else {
             None
         };
 
-        if let Some(tables) = tables {
-            self.storage.restore_tables(tables).await?;
-            self.rebuild_catalog().await?;
+        if let Some(snapshot) = snapshot {
+            self.storage.restore_tables(snapshot.tables).await?;
+            self.rebuild_catalog_with_views(snapshot.views).await?;
         }
 
         Ok(())
     }
 
     async fn rebuild_catalog(&mut self) -> Result<()> {
+        self.rebuild_catalog_with_views(std::collections::HashMap::new()).await
+    }
+
+    async fn rebuild_catalog_with_views(
+        &mut self,
+        views: std::collections::HashMap<String, (crate::parser::ast::QueryStmt, Vec<String>)>,
+    ) -> Result<()> {
         let mut new_catalog = Catalog::new();
 
         for table_name in self.storage.list_tables() {
             let schema = self.storage.get_schema(&table_name).await?;
             new_catalog = new_catalog.with_table(schema)?;
+        }
+
+        for (name, (query, columns)) in views {
+            new_catalog = new_catalog.with_view(name, query, columns)?;
         }
 
         self.catalog = new_catalog;
@@ -671,7 +996,7 @@ impl InMemoryDB {
             let mut persistence_guard = persistence.lock().await;
             if persistence_guard.needs_checkpoint() {
                 let tables = self.storage.get_all_tables().await?;
-                persistence_guard.checkpoint(&tables)?;
+                persistence_guard.checkpoint(&tables, &self.catalog.views_snapshot())?;
             }
         }
         Ok(())

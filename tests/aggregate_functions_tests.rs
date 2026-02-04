@@ -123,6 +123,32 @@ async fn test_multiple_aggregates() {
 }
 
 #[tokio::test]
+async fn test_aggregate_column_names_unique() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
+
+    client.execute("CREATE TABLE test_multi_agg_names (a INTEGER, b INTEGER)").await.unwrap();
+    client.execute("INSERT INTO test_multi_agg_names VALUES (10, 100), (20, 200)").await.unwrap();
+
+    let result = client.query("SELECT SUM(a), SUM(b) FROM test_multi_agg_names").await.unwrap();
+    let cols = result.columns();
+    assert_eq!(cols.len(), 2);
+    assert_ne!(cols[0].name, cols[1].name);
+    assert!(cols[0].name.contains("SUM"));
+    assert!(cols[1].name.contains("SUM"));
+}
+
+#[tokio::test]
+async fn test_aggregate_rejects_non_aggregate_expression_without_group_by() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
+
+    client.execute("CREATE TABLE test_agg_mixed (id INTEGER, value INTEGER)").await.unwrap();
+    client.execute("INSERT INTO test_agg_mixed VALUES (1, 10), (2, 20)").await.unwrap();
+
+    let result = client.query("SELECT id, COUNT(*) FROM test_agg_mixed").await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn test_aggregate_with_float() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 

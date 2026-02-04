@@ -2,6 +2,7 @@ use super::{Connection, config::ConnectionConfig, auth::AuthManager};
 use crate::core::{DbError, Result};
 use crate::facade::InMemoryDB;
 use std::sync::{Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{RwLock, Mutex};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -16,7 +17,7 @@ pub struct ConnectionPool {
     /// Available connections
     available: Arc<Mutex<VecDeque<PooledConnection>>>,
     /// Total number of connections created
-    total_connections: Arc<Mutex<usize>>,
+    total_connections: Arc<AtomicUsize>,
     /// Shared database instance
     db: Arc<RwLock<InMemoryDB>>,
     /// Next connection ID
@@ -74,7 +75,7 @@ impl ConnectionPool {
             .map_err(DbError::ExecutionError)?;
 
         let available = Arc::new(Mutex::new(VecDeque::new()));
-        let total_connections = Arc::new(Mutex::new(0));
+        let total_connections = Arc::new(AtomicUsize::new(0));
         let next_id = Arc::new(Mutex::new(1));
 
         let pool = Self {
@@ -120,6 +121,7 @@ impl ConnectionPool {
                 return Ok(PoolGuard {
                     connection: Some(pooled.connection),
                     pool: self.available.clone(),
+                    total_connections: self.total_connections.clone(),
                 });
             }
 
@@ -128,6 +130,7 @@ impl ConnectionPool {
                 return Ok(PoolGuard {
                     connection: Some(conn),
                     pool: self.available.clone(),
+                    total_connections: self.total_connections.clone(),
                 });
             }
 
@@ -147,20 +150,30 @@ impl ConnectionPool {
     async fn try_get_available(&self) -> Result<Option<PooledConnection>> {
         let mut available = self.available.lock().await;
 
-        // Remove expired/idle connections
-        available.retain(|pooled| {
-            !pooled.is_expired(self.config.max_lifetime) &&
-            !pooled.is_idle_too_long(self.config.idle_timeout)
-        });
+        let mut kept = VecDeque::with_capacity(available.len());
+        let mut removed = 0usize;
+        while let Some(pooled) = available.pop_front() {
+            if pooled.is_expired(self.config.max_lifetime)
+                || pooled.is_idle_too_long(self.config.idle_timeout)
+            {
+                removed += 1;
+            } else {
+                kept.push_back(pooled);
+            }
+        }
+        *available = kept;
+
+        if removed > 0 {
+            self.total_connections.fetch_sub(removed, Ordering::SeqCst);
+        }
 
         Ok(available.pop_front())
     }
 
     /// Try to create a new connection if under limit
     async fn try_create_connection(&self) -> Result<Option<Connection>> {
-        let mut total = self.total_connections.lock().await;
-
-        if *total >= self.config.max_connections {
+        let total = self.total_connections.load(Ordering::SeqCst);
+        if total >= self.config.max_connections {
             return Ok(None);
         }
 
@@ -178,17 +191,16 @@ impl ConnectionPool {
         // Create connection
         let connection = Connection::new(id, user, Arc::clone(&self.db));
 
-        *total += 1;
+        self.total_connections.fetch_add(1, Ordering::SeqCst);
 
         Ok(Some(connection))
     }
 
     /// Ensure minimum number of connections
     async fn ensure_min_connections(&self) -> Result<()> {
-        let mut total = self.total_connections.lock().await;
         let mut available = self.available.lock().await;
 
-        while *total < self.config.min_connections {
+        while self.total_connections.load(Ordering::SeqCst) < self.config.min_connections {
             // Authenticate user
             let user = AuthManager::global().authenticate(
                 &self.config.username,
@@ -202,7 +214,7 @@ impl ConnectionPool {
             let connection = Connection::new(id, user, Arc::clone(&self.db));
             available.push_back(PooledConnection::new(connection));
 
-            *total += 1;
+            self.total_connections.fetch_add(1, Ordering::SeqCst);
         }
 
         Ok(())
@@ -210,13 +222,13 @@ impl ConnectionPool {
 
     /// Get pool statistics
     pub async fn stats(&self) -> PoolStats {
-        let total = self.total_connections.lock().await;
         let available = self.available.lock().await;
+        let total = self.total_connections.load(Ordering::SeqCst);
 
         PoolStats {
-            total_connections: *total,
+            total_connections: total,
             available_connections: available.len(),
-            active_connections: *total - available.len(),
+            active_connections: total.saturating_sub(available.len()),
             max_connections: self.config.max_connections,
         }
     }
@@ -263,6 +275,7 @@ impl std::fmt::Display for PoolStats {
 pub struct PoolGuard {
     connection: Option<Connection>,
     pool: Arc<Mutex<VecDeque<PooledConnection>>>,
+    total_connections: Arc<AtomicUsize>,
 }
 
 impl PoolGuard {
@@ -319,6 +332,7 @@ impl Drop for PoolGuard {
                  eprintln!("Warning: PoolGuard dropped with active transaction. Connection dropped/leaked because async rollback is not possible in Drop. Use pool_guard.close().await.");
                  // Connection is dropped here (leaked from pool perspective, but memory freed)
                  // NOTE: We can't easily decrement total_connections here because we can't lock async mutex.
+                 self.total_connections.fetch_sub(1, Ordering::SeqCst);
                  return;
             }
 
@@ -327,6 +341,7 @@ impl Drop for PoolGuard {
                 pool.push_back(PooledConnection::new(connection));
             } else {
                  eprintln!("Warning: PoolGuard dropped and pool lock busy. Connection dropped/leaked. Use pool_guard.close().await.");
+                 self.total_connections.fetch_sub(1, Ordering::SeqCst);
             }
         }
     }
