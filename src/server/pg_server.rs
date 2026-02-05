@@ -1,7 +1,9 @@
-use std::sync::{Arc};
+use std::sync::Arc;
+use log::{debug, info, error};
 use tokio::net::TcpListener;
 use async_trait::async_trait;
 use pgwire::api::auth::{finish_authentication, save_startup_parameters_to_metadata, DefaultServerParameterProvider, LoginInfo, StartupHandler};
+use pgwire::api::PgWireConnectionState;
 use pgwire::api::query::{SimpleQueryHandler, ExtendedQueryHandler};
 use pgwire::api::copy::NoopCopyHandler;
 use pgwire::api::results::{Response, Tag, FieldInfo, QueryResponse, DataRowEncoder, FieldFormat, DescribeStatementResponse, DescribePortalResponse, DescribeResponse};
@@ -14,13 +16,13 @@ use tokio::sync::RwLock;
 use futures::{stream, SinkExt};
 use pgwire::messages::data::DataRow;
 use pgwire::messages::extendedquery::Sync as PgSync;
-use pgwire::messages::response::{ReadyForQuery, TransactionStatus};
+use pgwire::messages::response::{ReadyForQuery, TransactionStatus, SslResponse};
 use futures::Sink;
 use std::fmt::Debug;
 
 use crate::core::Column;
 use crate::{DataType, InMemoryDB, Value};
-use crate::connection::auth::AuthManager;
+use crate::connection::auth::{AuthManager, enforce_permissions};
 use pgwire::messages::startup::Authentication;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 
@@ -42,7 +44,7 @@ impl PostgresServer {
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let addr = format!("{}:{}", self.host, self.port);
         let listener = TcpListener::bind(&addr).await?;
-        println!("🚀 Postgres Server listening on {}", addr);
+        info!("Postgres Server listening on {}", addr);
 
         let factory = Arc::new(HandlerFactory {
             db: self.db.clone(),
@@ -50,12 +52,12 @@ impl PostgresServer {
 
         loop {
             let (socket, addr) = listener.accept().await?;
-            println!("Accepted new connection from {:?}", addr);
+            debug!("Accepted new connection from {:?}", addr);
             let factory = factory.clone();
 
             tokio::spawn(async move {
                 if let Err(e) = process_socket(socket, None, factory).await {
-                    eprintln!("Connection error: {:?}", e);
+                    error!("Connection error: {:?}", e);
                 }
             });
         }
@@ -84,8 +86,14 @@ impl StartupHandler for RustMemDbStartupHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         match message {
+            PgWireFrontendMessage::SslRequest(_) => {
+                client
+                    .send(PgWireBackendMessage::SslResponse(SslResponse::Refuse))
+                    .await?;
+            }
             PgWireFrontendMessage::Startup(ref startup) => {
                 save_startup_parameters_to_metadata(client, startup);
+                client.set_state(PgWireConnectionState::AuthenticationInProgress);
                 client
                     .send(PgWireBackendMessage::Authentication(
                         Authentication::CleartextPassword,
@@ -156,11 +164,13 @@ impl SimpleQueryHandler for QueryProcessor {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        println!("Simple Query: {}", query);
+        debug!("Simple Query: {}", query);
         if query.trim().is_empty() {
             return Ok(vec![Response::EmptyQuery]);
         }
-        let response = execute_query(self.db.clone(), query, vec![], FieldFormat::Text).await?;
+        let login_info = LoginInfo::from_client_info(_client);
+        let username = login_info.user().unwrap_or("");
+        let response = execute_query(self.db.clone(), query, vec![], FieldFormat::Text, username).await?;
         Ok(vec![response])
     }
 }
@@ -184,7 +194,7 @@ impl ExtendedQueryHandler for QueryProcessor {
         C: ClientInfo + Unpin + Send + Sync,
     {
         let query = &portal.statement.statement;
-        println!("Extended Query Exec: {}", query);
+        debug!("Extended Query Exec: {}", query);
 
         if query.trim().is_empty() {
             return Ok(Response::EmptyQuery);
@@ -235,7 +245,9 @@ impl ExtendedQueryHandler for QueryProcessor {
             params.push(val);
         }
 
-        execute_query(self.db.clone(), query, params, FieldFormat::Binary).await
+        let login_info = LoginInfo::from_client_info(_client);
+        let username = login_info.user().unwrap_or("");
+        execute_query(self.db.clone(), query, params, FieldFormat::Binary, username).await
     }
 
     async fn do_describe_statement<C>(
@@ -247,7 +259,7 @@ impl ExtendedQueryHandler for QueryProcessor {
         C: ClientInfo + Unpin + Send + Sync,
     {
         let query = &stmt.statement;
-        println!("Describe Statement: {}", query);
+        debug!("Describe Statement: {}", query);
         if query.trim().is_empty() {
             return Ok(<DescribeStatementResponse as DescribeResponse>::no_data());
         }
@@ -268,7 +280,7 @@ impl ExtendedQueryHandler for QueryProcessor {
                 Ok(DescribeStatementResponse::new(param_types, fields))
             }
             Err(e) => {
-                eprintln!("Plan query error: {:?}", e);
+                error!("Plan query error: {:?}", e);
                 Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "ERROR".to_string(),
                     "42P00".to_string(),
@@ -287,7 +299,7 @@ impl ExtendedQueryHandler for QueryProcessor {
         C: ClientInfo + Unpin + Send + Sync,
     {
         let query = &portal.statement.statement;
-        println!("Describe Portal: {}", query);
+        debug!("Describe Portal: {}", query);
         if query.trim().is_empty() {
             return Ok(<DescribePortalResponse as DescribeResponse>::no_data());
         }
@@ -300,7 +312,7 @@ impl ExtendedQueryHandler for QueryProcessor {
                 Ok(DescribePortalResponse::new(fields))
             }
             Err(e) => {
-                eprintln!("Plan query error: {:?}", e);
+                error!("Plan query error: {:?}", e);
                 Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "ERROR".to_string(),
                     "42P00".to_string(),
@@ -320,7 +332,7 @@ impl ExtendedQueryHandler for QueryProcessor {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        println!("Sync");
+        debug!("Sync");
         _client
             .send(PgWireBackendMessage::ReadyForQuery(ReadyForQuery::new(
                 TransactionStatus::Idle,
@@ -331,16 +343,49 @@ impl ExtendedQueryHandler for QueryProcessor {
     }
 }
 
-async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec<Value>, format: FieldFormat) -> PgWireResult<Response<'a>> {
-    println!("Executing query: {} with params: {:?}", query, params);
+async fn execute_query<'a>(
+    db: Arc<RwLock<InMemoryDB>>,
+    query: &str,
+    params: Vec<Value>,
+    format: FieldFormat,
+    username: &str,
+) -> PgWireResult<Response<'a>> {
+    debug!("Executing query: {} with params: {:?}", query, params);
     if query.trim().is_empty() {
         return Ok(Response::EmptyQuery);
     }
+
+    if username.is_empty() {
+        return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+            "FATAL".to_string(),
+            "28000".to_string(),
+            "Missing username".to_string(),
+        ))));
+    }
+
+    let user = AuthManager::global()
+        .get_user(username)
+        .await
+        .map_err(|e| {
+            PgWireError::UserError(Box::new(ErrorInfo::new(
+                "FATAL".to_string(),
+                "28000".to_string(),
+                e.to_string(),
+            )))
+        })?;
 
     let statement = {
         let db_guard = db.read().await;
         db_guard.parse_first(query).map_err(|e| PgWireError::ApiError(Box::new(e)))?
     };
+
+    enforce_permissions(&user, &statement).map_err(|e| {
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_string(),
+            "42501".to_string(),
+            e.to_string(),
+        )))
+    })?;
 
     {
         let db_guard = db.read().await;
@@ -357,7 +402,7 @@ async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec
             build_response_from_result(query, result, format)
         }
         Err(e) => {
-            eprintln!("Execution error: {:?}", e);
+            error!("Execution error: {:?}", e);
             Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_string(),
                 "XX000".to_string(),
@@ -368,7 +413,7 @@ async fn execute_query<'a>(db: Arc<RwLock<InMemoryDB>>, query: &str, params: Vec
 }
 
 fn build_response_from_result<'a>(query: &str, result: crate::result::QueryResult, format: FieldFormat) -> PgWireResult<Response<'a>> {
-    println!("Query successful, rows: {}", result.row_count());
+    debug!("Query successful, rows: {}", result.row_count());
     if result.rows().is_empty() {
         if !result.columns().is_empty() {
             let fields = Arc::new(create_field_infos(result.columns(), format));

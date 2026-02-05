@@ -66,7 +66,7 @@ async fn test_constraint_with_index() {
     db.execute("CREATE TABLE indexed (val INTEGER UNIQUE)").await.unwrap();
     
     // Create index (should speed up checks)
-    db.execute("CREATE INDEX idx_val ON indexed (val)").await.unwrap();
+    db.execute("CREATE INDEX IF NOT EXISTS idx_val ON indexed (val)").await.unwrap();
 
     db.execute("INSERT INTO indexed VALUES (10)").await.unwrap();
     

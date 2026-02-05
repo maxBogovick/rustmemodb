@@ -18,22 +18,54 @@ async fn start_server(port: u16) -> Arc<RwLock<InMemoryDB>> {
     db
 }
 
-async fn connect(port: u16) -> Client {
-    let connection_string = format!("host=127.0.0.1 port={} user=admin dbname=postgres", port);
-    let (client, connection) = tokio_postgres::connect(&connection_string, NoTls).await.expect("Failed to connect");
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("Connection error: {}", e);
+fn reserve_port() -> Option<u16> {
+    match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            let port = listener.local_addr().ok()?.port();
+            drop(listener);
+            Some(port)
         }
-    });
+        Err(_) => None,
+    }
+}
 
-    client
+async fn connect(port: u16) -> Client {
+    let connection_string = format!(
+        "host=127.0.0.1 port={} user=admin password=adminpass dbname=postgres sslmode=disable",
+        port
+    );
+    connect_with_retry(&connection_string, 10)
+        .await
+        .expect("Failed to connect")
+}
+
+async fn connect_with_retry(
+    connection_string: &str,
+    attempts: usize,
+) -> Result<tokio_postgres::Client, tokio_postgres::Error> {
+    let mut last_err = None;
+    for _ in 0..attempts {
+        match tokio_postgres::connect(connection_string, NoTls).await {
+            Ok((client, connection)) => {
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        eprintln!("Connection error: {}", e);
+                    }
+                });
+                return Ok(client);
+            }
+            Err(e) => {
+                last_err = Some(e);
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
+    }
+    Err(last_err.expect("connect_with_retry: no attempts made"))
 }
 
 #[tokio::test]
 async fn test_parameter_binding() {
-    let port = 5440;
+    let Some(port) = reserve_port() else { return; };
     let _db = start_server(port).await;
     let client = connect(port).await;
 
@@ -55,7 +87,7 @@ async fn test_parameter_binding() {
 
 #[tokio::test]
 async fn test_alter_table() {
-    let port = 5441;
+    let Some(port) = reserve_port() else { return; };
     let _db = start_server(port).await;
     let client = connect(port).await;
 
@@ -92,7 +124,7 @@ async fn test_alter_table() {
 
 #[tokio::test]
 async fn test_json_type() {
-    let port = 5442;
+    let Some(port) = reserve_port() else { return; };
     let _db = start_server(port).await;
     let client = connect(port).await;
 
@@ -114,7 +146,7 @@ async fn test_json_type() {
 
 #[tokio::test]
 async fn test_array_type() {
-    let port = 5443;
+    let Some(port) = reserve_port() else { return; };
     let _db = start_server(port).await;
     let client = connect(port).await;
 

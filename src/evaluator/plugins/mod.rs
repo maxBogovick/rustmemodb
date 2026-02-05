@@ -5,8 +5,6 @@ pub mod comparison;
 pub mod in_list;
 pub mod is_null;
 pub mod like;
-pub mod logical;
-pub mod order_by;
 pub mod subquery;
 pub mod json;
 pub mod function;

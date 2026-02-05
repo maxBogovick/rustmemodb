@@ -29,6 +29,10 @@ impl TransactionId {
         TransactionId(NEXT_TXN_ID.fetch_add(1, Ordering::SeqCst))
     }
 
+    pub(crate) fn next_raw() -> u64 {
+        NEXT_TXN_ID.load(Ordering::SeqCst)
+    }
+
     /// Get the raw ID value
     pub fn as_u64(&self) -> u64 {
         self.0

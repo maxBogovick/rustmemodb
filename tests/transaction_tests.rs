@@ -282,9 +282,9 @@ async fn test_transaction_error_handling() {
     let invalid_result = conn.execute("INSERT INTO nonexistent VALUES (1)").await;
     assert!(invalid_result.is_err());
 
-    // Transaction should still be active
-    assert!(conn.connection().is_in_transaction());
+    // Transaction should be auto-rolled back
+    assert!(!conn.connection().is_in_transaction());
 
-    // Can still rollback
+    // ROLLBACK should be no-op
     assert!(conn.rollback().await.is_ok());
 }

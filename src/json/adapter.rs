@@ -392,7 +392,7 @@ mod tests {
         ]"#;
 
         let result = adapter.create("users", doc).await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "{:?}", result.err());
 
         assert!(adapter.collection_exists("users").await);
     }

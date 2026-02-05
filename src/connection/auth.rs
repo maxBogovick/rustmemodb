@@ -118,9 +118,11 @@ impl AuthManager {
     pub fn with_admin(username: &str, password: &str) -> Self {
         let mut users = HashMap::new();
 
+        let admin_hash = Self::hash_password(password)
+            .unwrap_or_else(|e| panic!("Failed to hash default admin password: {}", e));
         let admin_user = User::new(
             username.to_string(),
-            Self::hash_password(password),
+            admin_hash,
             vec![Permission::Admin],
         );
 
@@ -135,9 +137,9 @@ impl AuthManager {
     ///
     /// Uses bcrypt with default cost factor (12) for secure password hashing.
     /// Each hash includes a random salt, so the same password will produce different hashes.
-    fn hash_password(password: &str) -> String {
+    fn hash_password(password: &str) -> Result<String> {
         bcrypt::hash(password, bcrypt::DEFAULT_COST)
-            .expect("Failed to hash password")
+            .map_err(|e| DbError::ExecutionError(format!("Failed to hash password: {}", e)))
     }
 
     /// Verifies password against bcrypt hash
@@ -181,7 +183,7 @@ impl AuthManager {
 
         let user = User::new(
             username.to_string(),
-            Self::hash_password(password),
+            Self::hash_password(password)?,
             permissions,
         );
 
@@ -226,7 +228,7 @@ impl AuthManager {
                 format!("User '{}' not found", username)
             ))?;
 
-        user.set_password_hash(Self::hash_password(new_password));
+        user.set_password_hash(Self::hash_password(new_password)?);
 
         Ok(())
     }
@@ -338,6 +340,31 @@ impl AuthManager {
 
         Ok(())
     }
+}
+
+pub fn required_permission(stmt: &crate::parser::ast::Statement) -> Option<Permission> {
+    use crate::parser::ast::Statement::*;
+    match stmt {
+        Query(_) | Explain(_) => Some(Permission::Select),
+        Insert(_) => Some(Permission::Insert),
+        Update(_) => Some(Permission::Update),
+        Delete(_) => Some(Permission::Delete),
+        CreateTable(_) | CreateIndex(_) | CreateView(_) | AlterTable(_) => Some(Permission::CreateTable),
+        DropTable(_) | DropView(_) => Some(Permission::DropTable),
+        Begin | Commit | Rollback => None,
+    }
+}
+
+pub fn enforce_permissions(user: &User, stmt: &crate::parser::ast::Statement) -> Result<()> {
+    if let Some(permission) = required_permission(stmt) {
+        if !user.has_permission(permission) {
+            return Err(DbError::ExecutionError(format!(
+                "Permission denied: {:?} required",
+                permission
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl Default for AuthManager {

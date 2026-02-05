@@ -97,6 +97,22 @@ async fn test_admin_permission() {
 }
 
 #[tokio::test]
+async fn test_permission_enforcement_on_queries() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
+    let auth = client.auth_manager();
+
+    auth.create_user("reader", "reader123", vec![Permission::Select]).await.unwrap();
+
+    let reader = Client::connect("reader", "reader123").await.unwrap();
+
+    let result = reader.execute("CREATE TABLE denied_tbl (id INTEGER)").await;
+    assert!(result.is_err());
+
+    let result = reader.execute("INSERT INTO denied_tbl VALUES (1)").await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn test_duplicate_user_creation() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();

@@ -8,7 +8,7 @@ use crate::result::QueryResult;
 use crate::transaction::TransactionId;
 use std::sync::{Arc};
 use tokio::sync::RwLock;
-use auth::{User, Permission};
+use auth::{User, enforce_permissions};
 
 /// Database connection handle
 ///
@@ -92,7 +92,19 @@ impl Connection {
         }
 
         let mut db = self.db.write().await;
-        db.execute_parsed_with_params(&statement, self.transaction_id, vec![]).await
+        let result = db
+            .execute_parsed_with_params(&statement, self.transaction_id, vec![])
+            .await;
+        drop(db);
+        match result {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                if self.state == ConnectionState::InTransaction {
+                    let _ = self.rollback().await;
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Execute a query and return the result
@@ -302,31 +314,6 @@ fn parse_display_param(param: &dyn std::fmt::Display) -> Result<crate::core::Val
     }
 
     Ok(crate::core::Value::Text(trimmed.to_string()))
-}
-
-fn required_permission(stmt: &crate::parser::ast::Statement) -> Option<Permission> {
-    use crate::parser::ast::Statement::*;
-    match stmt {
-        Query(_) | Explain(_) => Some(Permission::Select),
-        Insert(_) => Some(Permission::Insert),
-        Update(_) => Some(Permission::Update),
-        Delete(_) => Some(Permission::Delete),
-        CreateTable(_) | CreateIndex(_) | CreateView(_) | AlterTable(_) => Some(Permission::CreateTable),
-        DropTable(_) | DropView(_) => Some(Permission::DropTable),
-        Begin | Commit | Rollback => None,
-    }
-}
-
-fn enforce_permissions(user: &User, stmt: &crate::parser::ast::Statement) -> Result<()> {
-    if let Some(permission) = required_permission(stmt) {
-        if !user.has_permission(permission) {
-            return Err(DbError::ExecutionError(format!(
-                "Permission denied: {:?} required",
-                permission
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

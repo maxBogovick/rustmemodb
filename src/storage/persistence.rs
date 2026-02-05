@@ -130,9 +130,11 @@ impl WalManager {
         let len = serialized.len() as u32;
         file.write_all(&len.to_le_bytes()).map_err(|e| DbError::ExecutionError(format!("Failed to write WAL: {}", e)))?;
         file.write_all(&serialized).map_err(|e| DbError::ExecutionError(format!("Failed to write WAL: {}", e)))?;
-        file.flush().map_err(|e| DbError::ExecutionError(format!("Failed to flush WAL: {}", e)))?;
-        if self.durability_mode == DurabilityMode::Sync {
-            file.get_mut().sync_all().map_err(|e| DbError::ExecutionError(format!("Failed to sync WAL: {}", e)))?;
+        if matches!(entry, WalEntry::Commit(_)) {
+            file.flush().map_err(|e| DbError::ExecutionError(format!("Failed to flush WAL: {}", e)))?;
+            if self.durability_mode == DurabilityMode::Sync {
+                file.get_mut().sync_all().map_err(|e| DbError::ExecutionError(format!("Failed to sync WAL: {}", e)))?;
+            }
         }
         self.entries_since_checkpoint += 1;
         Ok(())

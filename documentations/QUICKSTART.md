@@ -1,5 +1,8 @@
 # 🚀 RustMemoDB Quickstart Guide
 
+> NOTE: This quickstart is partially outdated.
+> Please refer to `README.md` and `MEMORY_BANK.md` for the current guarantees and limitations.
+
 **RustMemoDB** is a lightning-fast, MVCC-powered in-memory database written in Rust that brings PostgreSQL-style features to your application without the operational overhead. Perfect for development, testing, caching, and high-performance applications that need full SQL support with transactional guarantees.
 
 ## Why RustMemoDB?

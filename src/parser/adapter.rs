@@ -372,7 +372,14 @@ impl SqlParserAdapter {
     }
 
     fn convert_insert(&self, insert: sql_ast::Insert) -> Result<InsertStmt> {
-        let table_name = insert.table.to_string();
+        let table_name = match insert.table {
+            sql_ast::TableObject::TableName(name) => extract_table_name(&name)?,
+            sql_ast::TableObject::TableFunction(_) => {
+                return Err(DbError::UnsupportedOperation(
+                    "INSERT INTO TABLE FUNCTION is not supported".into()
+                ));
+            }
+        };
 
         let columns = if insert.columns.is_empty() {
             None
@@ -849,7 +856,8 @@ impl Default for SqlParserAdapter {
 fn extract_table_name(name: &sql_ast::ObjectName) -> Result<String> {
     name.0
         .last()
-        .map(|ident| ident.to_string())
+        .and_then(|part| part.as_ident())
+        .map(|ident| ident.value.clone())
         .ok_or_else(|| DbError::ParseError("Invalid table name".into()))
 }
 

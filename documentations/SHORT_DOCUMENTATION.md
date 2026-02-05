@@ -1,5 +1,8 @@
 # Complete documentation — Rust in-memory DB implementation
 
+> NOTE: This document is outdated and may not reflect current behavior.
+> Use `README.md` and `MEMORY_BANK.md` for the current feature set and limitations.
+
 # Overview
 
 This project implements an embeddable, in-memory SQL engine with a small SQL parser, an executor pipeline, a lightweight storage/catalog layer, a transaction manager, and some adapters (JSON storage adapter, client/connection pooling, auth). The main façade type exported for convenient usage is `InMemoryDB` (facade) and there is a `Client` wrapper providing pooled access for multi-threaded applications.

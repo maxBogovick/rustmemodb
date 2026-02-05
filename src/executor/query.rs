@@ -118,7 +118,7 @@ impl QueryExecutor {
             groups.insert(vec![], input_rows);
         } else {
             for row in input_rows {
-                let mut key = Vec::new();
+                let mut key = Vec::with_capacity(aggr.group_exprs.len());
                 for expr in &aggr.group_exprs {
                     key.push(eval_ctx.evaluate(expr, &row, input_schema).await?);
                 }
@@ -127,13 +127,11 @@ impl QueryExecutor {
         }
 
         // 2. Compute aggregates for each group
-        let mut result_rows = Vec::new();
+        let mut result_rows = Vec::with_capacity(groups.len());
 
         for (group_key, group_rows) in groups {
-            let mut row = Vec::new();
-            
-            // Append grouping values first
-            row.extend(group_key);
+            let mut row = group_key;
+            row.reserve(aggr.aggr_exprs.len());
             
             // Append aggregate results
             for expr in &aggr.aggr_exprs {
@@ -180,8 +178,7 @@ impl QueryExecutor {
             JoinType::Inner | JoinType::Cross => {
                 for left_row in &left_rows {
                     for right_row in &right_rows {
-                        let mut combined_row = left_row.clone();
-                        combined_row.extend(right_row.clone());
+                        let combined_row = self.combine_rows(left_row, right_row);
 
                         if join.join_type == JoinType::Cross || self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
                             result.push(combined_row);
@@ -195,8 +192,7 @@ impl QueryExecutor {
                 for left_row in &left_rows {
                     let mut matched = false;
                     for right_row in &right_rows {
-                        let mut combined_row = left_row.clone();
-                        combined_row.extend(right_row.clone());
+                        let combined_row = self.combine_rows(left_row, right_row);
 
                         if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
                             result.push(combined_row);
@@ -206,7 +202,7 @@ impl QueryExecutor {
 
                     if !matched {
                         let mut combined_row = left_row.clone();
-                        combined_row.extend(vec![Value::Null; right_width]);
+                        self.extend_nulls(&mut combined_row, right_width);
                         result.push(combined_row);
                     }
                 }
@@ -217,8 +213,7 @@ impl QueryExecutor {
                 for right_row in &right_rows {
                     let mut matched = false;
                     for left_row in &left_rows {
-                        let mut combined_row = left_row.clone();
-                        combined_row.extend(right_row.clone());
+                        let combined_row = self.combine_rows(left_row, right_row);
 
                         if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
                             result.push(combined_row);
@@ -227,8 +222,9 @@ impl QueryExecutor {
                     }
 
                     if !matched {
-                        let mut combined_row = vec![Value::Null; left_width];
-                        combined_row.extend(right_row.clone());
+                        let mut combined_row = Row::with_capacity(left_width + right_row.len());
+                        self.extend_nulls(&mut combined_row, left_width);
+                        combined_row.extend_from_slice(right_row);
                         result.push(combined_row);
                     }
                 }
@@ -276,13 +272,12 @@ impl QueryExecutor {
 
             if let Some(matches) = build_map.get(&key) {
                 for right_row in matches {
-                    let mut combined_row = left_row.clone();
-                    combined_row.extend(right_row.clone());
+                    let combined_row = self.combine_rows(&left_row, right_row);
                     result.push(combined_row);
                 }
             } else if join.join_type == JoinType::Left {
                 let mut combined_row = left_row.clone();
-                combined_row.extend(vec![Value::Null; right_width]);
+                self.extend_nulls(&mut combined_row, right_width);
                 result.push(combined_row);
             }
         }
@@ -370,7 +365,7 @@ impl QueryExecutor {
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
         let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
 
-        let mut filtered_rows = Vec::new();
+        let mut filtered_rows = Vec::with_capacity(input_rows.len());
         for row in input_rows {
             if self.evaluate_predicate(&eval_ctx, &filter.predicate, &row, schema).await {
                 filtered_rows.push(row);
@@ -395,7 +390,7 @@ impl QueryExecutor {
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
         let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
         
-        let mut projected_rows = Vec::new();
+        let mut projected_rows = Vec::with_capacity(input_rows.len());
         for row in input_rows {
             projected_rows.push(self.project_row(&proj.expressions, &row, input_schema, &eval_ctx).await?);
         }
@@ -447,7 +442,7 @@ impl QueryExecutor {
         let input_rows = self.execute_plan(&distinct.input, ctx).await?;
         
         let mut seen = std::collections::HashSet::new();
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(input_rows.len());
         
         for row in input_rows {
             // Wrap in JoinKey for hashing
@@ -478,7 +473,7 @@ impl QueryExecutor {
                 let indexed_rows: Vec<(usize, Row)> = rows.iter().enumerate().map(|(i, r)| (i, r.clone())).collect();
 
                 // 2. Sort by Partition Keys + Order Keys
-                let mut sort_keys = Vec::new();
+                let mut sort_keys = Vec::with_capacity(spec.partition_by.len() + spec.order_by.len());
                 for expr in &spec.partition_by {
                     sort_keys.push(OrderByExpr { expr: expr.clone(), descending: false });
                 }
@@ -487,7 +482,7 @@ impl QueryExecutor {
                 // Pre-evaluate keys
                 let mut row_keys = Vec::with_capacity(indexed_rows.len());
                 for (_, row) in &indexed_rows {
-                    let mut keys = Vec::new();
+                    let mut keys = Vec::with_capacity(sort_keys.len());
                     for k in &sort_keys {
                         keys.push(eval_ctx.evaluate(&k.expr, row, input_schema).await?);
                     }
@@ -572,13 +567,14 @@ impl QueryExecutor {
         let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
         let schema = &values.schema;
 
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(values.rows.len());
+        let empty_row: Row = Vec::new();
         for row_exprs in &values.rows {
-            let mut row = Vec::new();
+            let mut row = Vec::with_capacity(row_exprs.len());
             for expr in row_exprs {
                 // Evaluate expression (e.g. literals, parameters)
                 // Use empty row context as VALUES usually don't reference tables
-                row.push(eval_ctx.evaluate(expr, &vec![], schema).await?);
+                row.push(eval_ctx.evaluate(expr, &empty_row, schema).await?);
             }
             result.push(row);
         }
@@ -674,6 +670,20 @@ impl QueryExecutor {
             .await
             .map(|v| v.as_bool())
             .unwrap_or(false)
+    }
+
+    fn combine_rows(&self, left: &Row, right: &Row) -> Row {
+        let mut combined = Row::with_capacity(left.len() + right.len());
+        combined.extend_from_slice(left);
+        combined.extend_from_slice(right);
+        combined
+    }
+
+    fn extend_nulls(&self, row: &mut Row, count: usize) {
+        row.reserve(count);
+        for _ in 0..count {
+            row.push(Value::Null);
+        }
     }
 
     /// Project a single row
@@ -772,7 +782,7 @@ impl QueryExecutor {
         let empty_row = Vec::new();
         let row_for_eval = rows.get(0).unwrap_or(&empty_row);
         
-        let mut result_row = Vec::new();
+        let mut result_row = Vec::with_capacity(expressions.len());
 
         for expr in expressions {
             let value = match expr {

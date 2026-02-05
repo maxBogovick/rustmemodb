@@ -1,15 +1,6 @@
-use llm_utl::api::Scan;
 use rustmemodb::core::Result;
 use rustmemodb::InMemoryDB;
 
-#[allow(dead_code)]
-fn main2() {
-    Scan::current_dir()
-        .remove_comments()
-        .remove_doc_comments()
-        .allow_only(vec!["**/*.rs"])
-        .run().unwrap();
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {

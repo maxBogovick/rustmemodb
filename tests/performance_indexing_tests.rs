@@ -2,6 +2,8 @@ use rustmemodb::InMemoryDB;
 use std::time::Instant;
 
 mod perf_utils;
+mod perf_wal;
+mod perf_select_filter;
 
 #[tokio::test]
 async fn test_index_performance() {

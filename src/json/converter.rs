@@ -155,11 +155,11 @@ impl CreateTableBuilder {
         let column_defs: Vec<String> = self.columns.iter()
             .map(|(name, dtype, nullable)| {
                 let null_constraint = if *nullable { "" } else { " NOT NULL" };
-                format!("{} {}{}", name, dtype, null_constraint)
+                format!("{} {}{}", quote_ident(name), dtype, null_constraint)
             })
             .collect();
 
-        format!("CREATE TABLE {} ({})", self.table_name, column_defs.join(", "))
+        format!("CREATE TABLE {} ({})", quote_ident(&self.table_name), column_defs.join(", "))
     }
 }
 
@@ -205,7 +205,8 @@ impl InsertStatementBuilder {
         let column_list = if self.columns.is_empty() {
             String::new()
         } else {
-            format!(" ({})", self.columns.join(", "))
+            let cols: Vec<String> = self.columns.iter().map(|c| quote_ident(c)).collect();
+            format!(" ({})", cols.join(", "))
         };
 
         let values_str: Vec<String> = self.values.iter()
@@ -219,7 +220,7 @@ impl InsertStatementBuilder {
 
         format!(
             "INSERT INTO {}{} VALUES {}",
-            self.table_name,
+            quote_ident(&self.table_name),
             column_list,
             values_str.join(", ")
         )
@@ -234,7 +235,8 @@ impl InsertStatementBuilder {
         let column_list = if self.columns.is_empty() {
             String::new()
         } else {
-            format!(" ({})", self.columns.join(", "))
+            let cols: Vec<String> = self.columns.iter().map(|c| quote_ident(c)).collect();
+            format!(" ({})", cols.join(", "))
         };
 
         self.values
@@ -251,7 +253,7 @@ impl InsertStatementBuilder {
 
                 format!(
                     "INSERT INTO {}{} VALUES {}",
-                    self.table_name,
+                    quote_ident(&self.table_name),
                     column_list,
                     values_str.join(", ")
                 )
@@ -294,7 +296,7 @@ impl UpdateStatementBuilder {
 
     pub fn build(self) -> String {
         let set_parts: Vec<String> = self.set_clause.iter()
-            .map(|(col, val)| format!("{} = {}", col, format_value_for_sql(val)))
+            .map(|(col, val)| format!("{} = {}", quote_ident(col), format_value_for_sql(val)))
             .collect();
 
         let where_part = self.where_clause
@@ -303,7 +305,7 @@ impl UpdateStatementBuilder {
 
         format!(
             "UPDATE {} SET {}{}",
-            self.table_name,
+            quote_ident(&self.table_name),
             set_parts.join(", "),
             where_part
         )
@@ -334,7 +336,7 @@ impl DeleteStatementBuilder {
             .map(|w| format!(" WHERE {}", w))
             .unwrap_or_default();
 
-        format!("DELETE FROM {}{}", self.table_name, where_part)
+        format!("DELETE FROM {}{}", quote_ident(&self.table_name), where_part)
     }
 }
 
@@ -361,6 +363,11 @@ fn format_value_for_sql(value: &Value) -> String {
 /// Escape single quotes in SQL strings
 fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''")
+}
+
+fn quote_ident(ident: &str) -> String {
+    let escaped = ident.replace('"', "\"\"");
+    format!("\"{}\"", escaped)
 }
 
 #[cfg(test)]
@@ -403,7 +410,7 @@ mod tests {
             .add_column("name", DataType::Text, true)
             .build();
 
-        assert_eq!(sql, "CREATE TABLE users (id INTEGER NOT NULL, name TEXT)");
+        assert_eq!(sql, "CREATE TABLE \"users\" (\"id\" INTEGER NOT NULL, \"name\" TEXT)");
     }
 
     #[test]
@@ -416,7 +423,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            "INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob')"
+            "INSERT INTO \"users\" (\"id\", \"name\") VALUES (1, 'Alice'), (2, 'Bob')"
         );
     }
 
@@ -430,7 +437,7 @@ mod tests {
 
         assert_eq!(
             sql,
-            "UPDATE users SET name = 'Alice Smith', age = 31 WHERE id = 1"
+            "UPDATE \"users\" SET \"name\" = 'Alice Smith', \"age\" = 31 WHERE id = 1"
         );
     }
 
@@ -440,7 +447,7 @@ mod tests {
             .where_clause("id = 1")
             .build();
 
-        assert_eq!(sql, "DELETE FROM users WHERE id = 1");
+        assert_eq!(sql, "DELETE FROM \"users\" WHERE id = 1");
     }
 
     #[test]

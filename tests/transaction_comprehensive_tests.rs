@@ -380,11 +380,31 @@ async fn test_transaction_error_recovery() {
     // Attempt invalid operation
     let _ = conn.execute("INSERT INTO nonexistent_table VALUES (1)").await;
 
-    // Transaction should still be active, can be rolled back
-    assert!(conn.connection().is_in_transaction());
-    conn.rollback().await.unwrap();
+    // Transaction should be auto-rolled back
+    assert!(!conn.connection().is_in_transaction());
 
     let result = client.query("SELECT * FROM txn_error").await.unwrap();
+    assert_eq!(result.row_count(), 0);
+}
+
+#[tokio::test]
+async fn test_transaction_error_auto_rollback() {
+    let client = Client::connect("admin", "adminpass").await.unwrap();
+
+    client.execute("CREATE TABLE txn_error_auto (id INTEGER)").await.unwrap();
+
+    let mut conn = client.get_connection().await.unwrap();
+
+    conn.begin().await.unwrap();
+    conn.execute("INSERT INTO txn_error_auto VALUES (1)").await.unwrap();
+
+    // This should fail and auto-rollback the transaction.
+    let result = conn.execute("INSERT INTO missing_table VALUES (1)").await;
+    assert!(result.is_err());
+
+    assert!(!conn.connection().is_in_transaction());
+
+    let result = client.query("SELECT * FROM txn_error_auto").await.unwrap();
     assert_eq!(result.row_count(), 0);
 }
 

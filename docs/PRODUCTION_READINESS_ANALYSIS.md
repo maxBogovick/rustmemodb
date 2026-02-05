@@ -1,5 +1,7 @@
 # RustMemDB - Production Readiness Analysis
 
+> NOTE: This analysis is outdated. See `README.md` and `MEMORY_BANK.md` for the current status.
+
 **Analysis Date:** December 2, 2024
 **Version:** 0.1.0
 

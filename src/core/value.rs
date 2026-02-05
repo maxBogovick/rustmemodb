@@ -237,8 +237,8 @@ impl Ord for Value {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Null, Self::Null) => Ordering::Equal,
-            (Self::Null, _) => Ordering::Less,
-            (_, Self::Null) => Ordering::Greater,
+            (Self::Null, _) => Ordering::Greater,
+            (_, Self::Null) => Ordering::Less,
 
             (Self::Integer(a), Self::Integer(b)) => a.cmp(b),
             (Self::Float(a), Self::Float(b)) => {
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn test_value_ordering() {
         assert!(Value::Integer(1) < Value::Integer(2));
-        assert!(Value::Null < Value::Integer(0));
+        assert!(Value::Null > Value::Integer(0));
         
         let date1 = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
         let date2 = NaiveDate::from_ymd_opt(2023, 1, 2).unwrap();

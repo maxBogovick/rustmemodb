@@ -23,7 +23,6 @@ pub struct TransactionManager {
     aborted_ids: Arc<RwLock<Arc<HashSet<u64>>>>,
 
     global_version: Arc<RwLock<u64>>,
-    next_transaction_id: Arc<RwLock<u64>>,
 }
 
 impl Default for TransactionManager {
@@ -39,17 +38,12 @@ impl TransactionManager {
             active_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             aborted_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             global_version: Arc::new(RwLock::new(0)),
-            next_transaction_id: Arc::new(RwLock::new(1)),
         }
     }
 
     pub async fn begin(&self) -> Result<TransactionId> {
-        let mut next_id_guard = self.next_transaction_id.write().await;
-        let txn_id_val = *next_id_guard;
-        *next_id_guard += 1;
-        drop(next_id_guard); // Release early
-
-        let transaction_id = TransactionId(txn_id_val);
+        let transaction_id = TransactionId::new();
+        let txn_id_val = transaction_id.0;
         
         // Create snapshot for Repeatable Read
         let active = self.active_ids.read().await.clone();
@@ -93,7 +87,7 @@ impl TransactionManager {
         // Fast path: clone the Arcs (O(1))
         let active = self.active_ids.read().await.clone();
         let aborted = self.aborted_ids.read().await.clone();
-        let next_id = *self.next_transaction_id.read().await;
+        let next_id = TransactionId::next_raw();
 
         Ok(Snapshot {
             tx_id: txn_id.0,
@@ -106,16 +100,14 @@ impl TransactionManager {
     pub async fn get_auto_commit_snapshot(&self) -> Result<Snapshot> {
         let active = self.active_ids.read().await.clone();
         let aborted = self.aborted_ids.read().await.clone();
-        
-        let mut next_id_guard = self.next_transaction_id.write().await;
-        let this_id = *next_id_guard;
-        *next_id_guard += 1;
-        
+
+        let this_id = TransactionId::new().0;
+
         Ok(Snapshot {
             tx_id: this_id,
             active,
             aborted,
-            max_tx_id: *next_id_guard,
+            max_tx_id: this_id,
         })
     }
 
@@ -206,7 +198,6 @@ impl TransactionManager {
     pub async fn fork(&self) -> Self {
         let active_parent = self.active_ids.read().await;
         let aborted_parent = self.aborted_ids.read().await;
-        let next_id = *self.next_transaction_id.read().await;
 
         // In the fork, any transaction that was active in the parent is effectively "lost" (connection broken).
         // We must mark them as aborted so their partial writes are ignored.
@@ -220,7 +211,6 @@ impl TransactionManager {
             active_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             aborted_ids: Arc::new(RwLock::new(Arc::new(new_aborted))),
             global_version: Arc::new(RwLock::new(*self.global_version.read().await)),
-            next_transaction_id: Arc::new(RwLock::new(next_id)),
         }
     }
 }
