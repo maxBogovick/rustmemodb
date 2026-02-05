@@ -1,7 +1,7 @@
 use super::{DbError, Result, Value};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock};
 use std::fmt;
 use chrono::{DateTime, NaiveDate, Utc, NaiveDateTime};
 use uuid::Uuid;
@@ -270,14 +270,16 @@ impl Column {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Schema {
     pub(crate) columns: Vec<Column>,
+    #[serde(skip, default)]
+    cache: SchemaCache,
 }
 
 impl Schema {
     pub fn new(columns: Vec<Column>) -> Self {
-        Self { columns }
+        Self { columns, cache: SchemaCache::default() }
     }
 
     pub fn columns(&self) -> &[Column] {
@@ -285,24 +287,26 @@ impl Schema {
     }
 
     pub fn find_column_index(&self, name: &str) -> Option<usize> {
-        // 1. Exact match
-        if let Some(idx) = self.columns.iter().position(|col| col.name == name) {
+        let cache = self.cache.get_or_init(&self.columns);
+        if let Some(idx) = cache.exact.get(name).copied() {
             return Some(idx);
         }
 
-        // 2. Unqualified match (suffix)
-        let matches: Vec<usize> = self.columns
-            .iter()
-            .enumerate()
-            .filter(|(_, col)| col.name.ends_with(&format!(".{}", name)))
-            .map(|(idx, _)| idx)
-            .collect();
-
-        if matches.len() == 1 {
-            return Some(matches[0]);
+        if !name.contains('.') {
+            return cache.unqualified.get(name).and_then(|idx| *idx);
         }
 
-        None
+        let suffix = format!(".{}", name);
+        let mut match_idx = None;
+        for (idx, col) in self.columns.iter().enumerate() {
+            if col.name.ends_with(&suffix) {
+                if match_idx.is_some() {
+                    return None;
+                }
+                match_idx = Some(idx);
+            }
+        }
+        match_idx
     }
 
     pub fn get_column(&self, name: &str) -> Option<&Column> {
@@ -316,7 +320,7 @@ impl Schema {
     pub fn merge(left: &Schema, right: &Schema) -> Self {
         let mut columns = left.columns.clone();
         columns.extend(right.columns.clone());
-        Self { columns }
+        Self::new(columns)
     }
 
     pub fn qualify_columns(&self, table_name: &str) -> Self {
@@ -327,6 +331,52 @@ impl Schema {
             }
             new_col
         }).collect();
-        Self { columns }
+        Self::new(columns)
+    }
+}
+
+impl Clone for Schema {
+    fn clone(&self) -> Self {
+        Self::new(self.columns.clone())
+    }
+}
+
+#[derive(Debug, Default)]
+struct SchemaCache {
+    inner: OnceLock<SchemaCacheInner>,
+}
+
+#[derive(Debug)]
+struct SchemaCacheInner {
+    exact: HashMap<String, usize>,
+    unqualified: HashMap<String, Option<usize>>,
+}
+
+impl SchemaCache {
+    fn get_or_init(&self, columns: &[Column]) -> &SchemaCacheInner {
+        self.inner.get_or_init(|| SchemaCacheInner::build(columns))
+    }
+}
+
+impl SchemaCacheInner {
+    fn build(columns: &[Column]) -> Self {
+        let mut exact = HashMap::with_capacity(columns.len());
+        let mut unqualified: HashMap<String, Option<usize>> = HashMap::new();
+
+        for (idx, col) in columns.iter().enumerate() {
+            exact.insert(col.name.clone(), idx);
+            let key = col.name.rsplit('.').next().unwrap_or(&col.name);
+            match unqualified.get(key) {
+                None => {
+                    unqualified.insert(key.to_string(), Some(idx));
+                }
+                Some(Some(_)) => {
+                    unqualified.insert(key.to_string(), None);
+                }
+                Some(None) => {}
+            }
+        }
+
+        Self { exact, unqualified }
     }
 }

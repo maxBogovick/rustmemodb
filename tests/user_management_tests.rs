@@ -101,9 +101,12 @@ async fn test_permission_enforcement_on_queries() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
     let auth = client.auth_manager();
 
-    auth.create_user("reader", "reader123", vec![Permission::Select]).await.unwrap();
+    if auth.user_exists("reader_perm").await.unwrap() {
+        let _ = auth.delete_user("reader_perm").await;
+    }
+    auth.create_user("reader_perm", "reader123", vec![Permission::Select]).await.unwrap();
 
-    let reader = Client::connect("reader", "reader123").await.unwrap();
+    let reader = Client::connect("reader_perm", "reader123").await.unwrap();
 
     let result = reader.execute("CREATE TABLE denied_tbl (id INTEGER)").await;
     assert!(result.is_err());

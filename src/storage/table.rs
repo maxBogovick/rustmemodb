@@ -64,8 +64,10 @@ impl Table {
             return Err(DbError::ExecutionError(format!("Column '{}' already exists", column.name)));
         }
 
-        // Add column to schema
-        self.schema.schema.columns.push(column.clone());
+        // Add column to schema with cache reset
+        let mut columns = self.schema.schema.columns.clone();
+        columns.push(column.clone());
+        self.schema.schema = Schema::new(columns);
 
         // Update all existing rows with default value (or NULL)
         // Since we use persistent data structures, we need to be careful about performance.
@@ -106,8 +108,10 @@ impl Table {
         let col_idx = self.schema.schema.find_column_index(column_name)
             .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone()))?;
 
-        // Remove from schema
-        self.schema.schema.columns.remove(col_idx);
+        // Remove from schema with cache reset
+        let mut columns = self.schema.schema.columns.clone();
+        columns.remove(col_idx);
+        self.schema.schema = Schema::new(columns);
 
         // Remove index if exists
         if self.indexes.contains_key(column_name) {
@@ -148,7 +152,11 @@ impl Table {
             return Err(DbError::ExecutionError(format!("Column '{}' already exists", new_name)));
         }
 
-        self.schema.schema.columns[col_idx].name = new_name.to_string();
+        {
+            let mut columns = self.schema.schema.columns.clone();
+            columns[col_idx].name = new_name.to_string();
+            self.schema.schema = Schema::new(columns);
+        }
 
         // Rename index if exists
         if let Some(index) = self.indexes.remove(old_name) {

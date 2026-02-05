@@ -250,17 +250,17 @@ impl QueryExecutor {
         let left_rows = self.execute_plan(&join.left, ctx).await?;
         let right_rows = self.execute_plan(&join.right, ctx).await?;
         
-        let mut build_map = std::collections::HashMap::new();
+        let mut build_map = std::collections::HashMap::with_capacity(right_rows.len());
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
         let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
         
-        for row in right_rows {
-            let key_val = eval_ctx.evaluate(&right_key_expr, &row, join.right.schema()).await?;
+        for (idx, row) in right_rows.iter().enumerate() {
+            let key_val = eval_ctx.evaluate(&right_key_expr, row, join.right.schema()).await?;
             if key_val.is_null() {
                 continue;
             }
             let key = JoinKey(key_val);
-            build_map.entry(key).or_insert_with(Vec::new).push(row);
+            build_map.entry(key).or_insert_with(Vec::new).push(idx);
         }
 
         let mut result = Vec::new();
@@ -271,7 +271,8 @@ impl QueryExecutor {
             let key = JoinKey(key_val);
 
             if let Some(matches) = build_map.get(&key) {
-                for right_row in matches {
+                for &right_idx in matches {
+                    let right_row = &right_rows[right_idx];
                     let combined_row = self.combine_rows(&left_row, right_row);
                     result.push(combined_row);
                 }
@@ -469,10 +470,8 @@ impl QueryExecutor {
 
         for expr in &window.window_exprs {
             if let Expr::Function { name, over: Some(spec), .. } = expr {
-                // 1. Prepare data with original indices
-                let indexed_rows: Vec<(usize, Row)> = rows.iter().enumerate().map(|(i, r)| (i, r.clone())).collect();
-
-                // 2. Sort by Partition Keys + Order Keys
+                let func = name.to_uppercase();
+                // 1. Sort by Partition Keys + Order Keys
                 let mut sort_keys = Vec::with_capacity(spec.partition_by.len() + spec.order_by.len());
                 for expr in &spec.partition_by {
                     sort_keys.push(OrderByExpr { expr: expr.clone(), descending: false });
@@ -480,8 +479,8 @@ impl QueryExecutor {
                 sort_keys.extend(spec.order_by.clone());
 
                 // Pre-evaluate keys
-                let mut row_keys = Vec::with_capacity(indexed_rows.len());
-                for (_, row) in &indexed_rows {
+                let mut row_keys = Vec::with_capacity(rows.len());
+                for row in &rows {
                     let mut keys = Vec::with_capacity(sort_keys.len());
                     for k in &sort_keys {
                         keys.push(eval_ctx.evaluate(&k.expr, row, input_schema).await?);
@@ -489,7 +488,7 @@ impl QueryExecutor {
                     row_keys.push(keys);
                 }
                 
-                let mut indices: Vec<usize> = (0..indexed_rows.len()).collect();
+                let mut indices: Vec<usize> = (0..rows.len()).collect();
                 indices.sort_by(|&i, &j| {
                     for (k, order_expr) in sort_keys.iter().enumerate() {
                         let val_a = &row_keys[i][k];
@@ -539,15 +538,15 @@ impl QueryExecutor {
                         last_order_values = Some(order_keys.to_vec());
                     }
 
-                    let val = match name.to_uppercase().as_str() {
+                    let val = match func.as_str() {
                         "ROW_NUMBER" => Value::Integer(row_number),
                         "RANK" => Value::Integer(rank),
                         _ => Value::Null, // TODO: Implement Aggregates over Window
                     };
-                    results.push((indexed_rows[idx].0, val));
+                    results.push((idx, val));
                 }
 
-                // 4. Update rows
+                // 3. Update rows
                 for (idx, val) in results {
                     rows[idx].push(val);
                 }

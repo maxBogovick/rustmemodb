@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use log::{debug, info, error};
 use tokio::net::TcpListener;
 use async_trait::async_trait;
@@ -46,13 +47,19 @@ impl PostgresServer {
         let listener = TcpListener::bind(&addr).await?;
         info!("Postgres Server listening on {}", addr);
 
+        let metrics = Arc::new(PgWireMetrics::default());
         let factory = Arc::new(HandlerFactory {
             db: self.db.clone(),
+            metrics: Arc::clone(&metrics),
         });
 
         loop {
             let (socket, addr) = listener.accept().await?;
+            let conn_count = metrics.on_connection();
             debug!("Accepted new connection from {:?}", addr);
+            if conn_count % 1000 == 0 {
+                info!("PgWire connections accepted: {}", conn_count);
+            }
             let factory = factory.clone();
 
             tokio::spawn(async move {
@@ -66,11 +73,13 @@ impl PostgresServer {
 
 struct HandlerFactory {
     db: Arc<RwLock<InMemoryDB>>,
+    metrics: Arc<PgWireMetrics>,
 }
 
 struct RustMemDbStartupHandler {
     auth: Arc<AuthManager>,
     params: DefaultServerParameterProvider,
+    metrics: Arc<PgWireMetrics>,
 }
 
 #[async_trait]
@@ -87,12 +96,52 @@ impl StartupHandler for RustMemDbStartupHandler {
     {
         match message {
             PgWireFrontendMessage::SslRequest(_) => {
+                if !matches!(client.state(), PgWireConnectionState::AwaitingStartup) {
+                    let error_info = ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "08P01".to_string(),
+                        "Unexpected SSL request".to_string(),
+                    );
+                    let error = pgwire::messages::response::ErrorResponse::from(error_info);
+                    client
+                        .feed(PgWireBackendMessage::ErrorResponse(error))
+                        .await?;
+                    client.close().await?;
+                    return Ok(());
+                }
                 client
                     .send(PgWireBackendMessage::SslResponse(SslResponse::Refuse))
                     .await?;
             }
             PgWireFrontendMessage::Startup(ref startup) => {
+                if !matches!(client.state(), PgWireConnectionState::AwaitingStartup) {
+                    let error_info = ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "08P01".to_string(),
+                        "Unexpected startup message".to_string(),
+                    );
+                    let error = pgwire::messages::response::ErrorResponse::from(error_info);
+                    client
+                        .feed(PgWireBackendMessage::ErrorResponse(error))
+                        .await?;
+                    client.close().await?;
+                    return Ok(());
+                }
                 save_startup_parameters_to_metadata(client, startup);
+                let login_info = LoginInfo::from_client_info(client);
+                if login_info.user().unwrap_or("").is_empty() {
+                    let error_info = ErrorInfo::new(
+                        "FATAL".to_string(),
+                        "28000".to_string(),
+                        "Missing user in startup packet".to_string(),
+                    );
+                    let error = pgwire::messages::response::ErrorResponse::from(error_info);
+                    client
+                        .feed(PgWireBackendMessage::ErrorResponse(error))
+                        .await?;
+                    client.close().await?;
+                    return Ok(());
+                }
                 client.set_state(PgWireConnectionState::AuthenticationInProgress);
                 client
                     .send(PgWireBackendMessage::Authentication(
@@ -101,6 +150,19 @@ impl StartupHandler for RustMemDbStartupHandler {
                     .await?;
             }
             PgWireFrontendMessage::PasswordMessageFamily(pwd) => {
+                if !matches!(client.state(), PgWireConnectionState::AuthenticationInProgress) {
+                    let error_info = ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "08P01".to_string(),
+                        "Unexpected password message".to_string(),
+                    );
+                    let error = pgwire::messages::response::ErrorResponse::from(error_info);
+                    client
+                        .feed(PgWireBackendMessage::ErrorResponse(error))
+                        .await?;
+                    client.close().await?;
+                    return Ok(());
+                }
                 let pwd = pwd.into_password()?;
                 let login_info = LoginInfo::from_client_info(client);
                 let username = login_info.user().unwrap_or("");
@@ -108,8 +170,11 @@ impl StartupHandler for RustMemDbStartupHandler {
                     .unwrap_or_default();
 
                 if self.auth.authenticate(username, password).await.is_ok() {
+                    debug!("PgWire auth succeeded for user '{}'", username);
                     finish_authentication(client, &self.params).await;
                 } else {
+                    self.metrics.on_auth_failure();
+                    debug!("PgWire auth failed for user '{}'", username);
                     let error_info = ErrorInfo::new(
                         "FATAL".to_string(),
                         "28P01".to_string(),
@@ -135,17 +200,18 @@ impl pgwire::api::PgWireHandlerFactory for HandlerFactory {
     type CopyHandler = NoopCopyHandler;
 
     fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
-        Arc::new(QueryProcessor { db: self.db.clone() })
+        Arc::new(QueryProcessor { db: self.db.clone(), metrics: Arc::clone(&self.metrics) })
     }
 
     fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
-        Arc::new(QueryProcessor { db: self.db.clone() })
+        Arc::new(QueryProcessor { db: self.db.clone(), metrics: Arc::clone(&self.metrics) })
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
         Arc::new(RustMemDbStartupHandler {
             auth: Arc::clone(AuthManager::global()),
             params: DefaultServerParameterProvider::default(),
+            metrics: Arc::clone(&self.metrics),
         })
     }
 
@@ -156,6 +222,7 @@ impl pgwire::api::PgWireHandlerFactory for HandlerFactory {
 
 struct QueryProcessor {
     db: Arc<RwLock<InMemoryDB>>,
+    metrics: Arc<PgWireMetrics>,
 }
 
 #[async_trait]
@@ -170,7 +237,14 @@ impl SimpleQueryHandler for QueryProcessor {
         }
         let login_info = LoginInfo::from_client_info(_client);
         let username = login_info.user().unwrap_or("");
-        let response = execute_query(self.db.clone(), query, vec![], FieldFormat::Text, username).await?;
+        let response = execute_query(
+            self.db.clone(),
+            query,
+            vec![],
+            FieldFormat::Text,
+            username,
+            &self.metrics,
+        ).await?;
         Ok(vec![response])
     }
 }
@@ -247,7 +321,14 @@ impl ExtendedQueryHandler for QueryProcessor {
 
         let login_info = LoginInfo::from_client_info(_client);
         let username = login_info.user().unwrap_or("");
-        execute_query(self.db.clone(), query, params, FieldFormat::Binary, username).await
+        execute_query(
+            self.db.clone(),
+            query,
+            params,
+            FieldFormat::Binary,
+            username,
+            &self.metrics,
+        ).await
     }
 
     async fn do_describe_statement<C>(
@@ -349,13 +430,16 @@ async fn execute_query<'a>(
     params: Vec<Value>,
     format: FieldFormat,
     username: &str,
+    metrics: &PgWireMetrics,
 ) -> PgWireResult<Response<'a>> {
     debug!("Executing query: {} with params: {:?}", query, params);
     if query.trim().is_empty() {
         return Ok(Response::EmptyQuery);
     }
+    metrics.on_query();
 
     if username.is_empty() {
+        metrics.on_query_error();
         return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
             "FATAL".to_string(),
             "28000".to_string(),
@@ -367,6 +451,7 @@ async fn execute_query<'a>(
         .get_user(username)
         .await
         .map_err(|e| {
+            metrics.on_query_error();
             PgWireError::UserError(Box::new(ErrorInfo::new(
                 "FATAL".to_string(),
                 "28000".to_string(),
@@ -380,6 +465,7 @@ async fn execute_query<'a>(
     };
 
     enforce_permissions(&user, &statement).map_err(|e| {
+        metrics.on_query_error();
         PgWireError::UserError(Box::new(ErrorInfo::new(
             "ERROR".to_string(),
             "42501".to_string(),
@@ -391,17 +477,19 @@ async fn execute_query<'a>(
         let db_guard = db.read().await;
         if InMemoryDB::is_read_only_stmt(&statement) {
             let result = db_guard.execute_parsed_readonly_with_params(&statement, None, params).await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                .map_err(|e| {
+                    metrics.on_query_error();
+                    PgWireError::ApiError(Box::new(e))
+                })?;
             return build_response_from_result(query, result, format);
         }
     }
 
     let mut db_guard = db.write().await;
     match db_guard.execute_parsed_with_params(&statement, None, params).await {
-        Ok(result) => {
-            build_response_from_result(query, result, format)
-        }
+        Ok(result) => build_response_from_result(query, result, format),
         Err(e) => {
+            metrics.on_query_error();
             error!("Execution error: {:?}", e);
             Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_string(),
@@ -409,6 +497,32 @@ async fn execute_query<'a>(
                 e.to_string()
             ))))
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PgWireMetrics {
+    connections_accepted: AtomicU64,
+    auth_failures: AtomicU64,
+    queries_total: AtomicU64,
+    queries_failed: AtomicU64,
+}
+
+impl PgWireMetrics {
+    fn on_connection(&self) -> u64 {
+        self.connections_accepted.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn on_auth_failure(&self) {
+        self.auth_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn on_query(&self) {
+        self.queries_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn on_query_error(&self) {
+        self.queries_failed.fetch_add(1, Ordering::Relaxed);
     }
 }
 

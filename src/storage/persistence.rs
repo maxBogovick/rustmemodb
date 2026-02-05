@@ -8,6 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread;
+use std::time::{Duration, Instant};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -93,10 +97,11 @@ pub enum DurabilityMode {
 
 pub struct WalManager {
     wal_path: PathBuf,
-    wal_file: Option<BufWriter<File>>,
     durability_mode: DurabilityMode,
-    entries_since_checkpoint: usize,
+    entries_since_checkpoint: AtomicUsize,
     checkpoint_threshold: usize,
+    writer: Option<WalWriter>,
+    metrics: Arc<WalMetrics>,
 }
 
 impl WalManager {
@@ -106,37 +111,39 @@ impl WalManager {
             fs::create_dir_all(parent).map_err(|e| DbError::ExecutionError(format!("Failed to create WAL directory: {}", e)))?;
         }
 
-        let wal_file = if durability_mode != DurabilityMode::None {
-            let file = OpenOptions::new().create(true).append(true).open(&wal_path)
-                .map_err(|e| DbError::ExecutionError(format!("Failed to open WAL file: {}", e)))?;
-            Some(BufWriter::new(file))
+        let metrics = Arc::new(WalMetrics::default());
+        let writer = if durability_mode != DurabilityMode::None {
+            Some(WalWriter::start(wal_path.clone(), durability_mode, Arc::clone(&metrics))?)
         } else {
             None
         };
 
         Ok(Self {
             wal_path,
-            wal_file,
             durability_mode,
-            entries_since_checkpoint: 0,
+            entries_since_checkpoint: AtomicUsize::new(0),
             checkpoint_threshold: 1000,
+            writer,
+            metrics,
         })
     }
 
     pub fn append(&mut self, entry: &WalEntry) -> Result<()> {
         if self.durability_mode == DurabilityMode::None { return Ok(()); }
-        let file = self.wal_file.as_mut().ok_or_else(|| DbError::ExecutionError("WAL file not initialized".to_string()))?;
-        let serialized = rmp_serde::to_vec(entry).map_err(|e| DbError::ExecutionError(format!("Failed to serialize WAL entry: {}", e)))?;
+        let serialized = rmp_serde::to_vec(entry)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to serialize WAL entry: {}", e)))?;
         let len = serialized.len() as u32;
-        file.write_all(&len.to_le_bytes()).map_err(|e| DbError::ExecutionError(format!("Failed to write WAL: {}", e)))?;
-        file.write_all(&serialized).map_err(|e| DbError::ExecutionError(format!("Failed to write WAL: {}", e)))?;
-        if matches!(entry, WalEntry::Commit(_)) {
-            file.flush().map_err(|e| DbError::ExecutionError(format!("Failed to flush WAL: {}", e)))?;
-            if self.durability_mode == DurabilityMode::Sync {
-                file.get_mut().sync_all().map_err(|e| DbError::ExecutionError(format!("Failed to sync WAL: {}", e)))?;
-            }
+        let mut payload = Vec::with_capacity(4 + serialized.len());
+        payload.extend_from_slice(&len.to_le_bytes());
+        payload.extend_from_slice(&serialized);
+
+        if let Some(writer) = &self.writer {
+            let is_commit = matches!(entry, WalEntry::Commit(_));
+            let wait_for_sync = is_commit && self.durability_mode == DurabilityMode::Sync;
+            writer.append(payload, is_commit, wait_for_sync)?;
+            self.metrics.on_append(serialized.len() as u64, is_commit);
+            self.entries_since_checkpoint.fetch_add(1, Ordering::Relaxed);
         }
-        self.entries_since_checkpoint += 1;
         Ok(())
     }
 
@@ -163,24 +170,252 @@ impl WalManager {
 
     pub fn clear(&mut self) -> Result<()> {
         if self.durability_mode == DurabilityMode::None { return Ok(()); }
-        self.wal_file = None;
-        let file = OpenOptions::new().write(true).truncate(true).open(&self.wal_path)
-            .map_err(|e| DbError::ExecutionError(format!("Failed to truncate WAL: {}", e)))?;
-        self.wal_file = Some(BufWriter::new(file));
-        self.entries_since_checkpoint = 0;
+        if let Some(writer) = &self.writer {
+            writer.truncate()?;
+        }
+        self.entries_since_checkpoint.store(0, Ordering::Relaxed);
         Ok(())
     }
 
     pub fn needs_checkpoint(&self) -> bool {
-        self.entries_since_checkpoint >= self.checkpoint_threshold
+        self.entries_since_checkpoint.load(Ordering::Relaxed) >= self.checkpoint_threshold
     }
 
     pub fn entries_since_checkpoint(&self) -> usize {
-        self.entries_since_checkpoint
+        self.entries_since_checkpoint.load(Ordering::Relaxed)
     }
 
     pub fn set_checkpoint_threshold(&mut self, threshold: usize) {
         self.checkpoint_threshold = threshold;
+    }
+
+    pub fn metrics(&self) -> WalMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+}
+
+#[derive(Default)]
+pub struct WalMetrics {
+    bytes_written: AtomicU64,
+    entries_written: AtomicU64,
+    commit_entries: AtomicU64,
+    flush_count: AtomicU64,
+    sync_count: AtomicU64,
+}
+
+impl WalMetrics {
+    fn on_append(&self, bytes: u64, is_commit: bool) {
+        self.bytes_written.fetch_add(bytes, Ordering::Relaxed);
+        self.entries_written.fetch_add(1, Ordering::Relaxed);
+        if is_commit {
+            self.commit_entries.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn on_flush(&self) {
+        self.flush_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn on_sync(&self) {
+        self.sync_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> WalMetricsSnapshot {
+        WalMetricsSnapshot {
+            bytes_written: self.bytes_written.load(Ordering::Relaxed),
+            entries_written: self.entries_written.load(Ordering::Relaxed),
+            commit_entries: self.commit_entries.load(Ordering::Relaxed),
+            flush_count: self.flush_count.load(Ordering::Relaxed),
+            sync_count: self.sync_count.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WalMetricsSnapshot {
+    pub bytes_written: u64,
+    pub entries_written: u64,
+    pub commit_entries: u64,
+    pub flush_count: u64,
+    pub sync_count: u64,
+}
+
+enum WalCommand {
+    Append { bytes: Vec<u8>, is_commit: bool, ack: Option<Sender<()>> },
+    Flush { ack: Sender<()> },
+    Truncate { ack: Sender<()> },
+    Shutdown,
+}
+
+struct WalWriter {
+    sender: Sender<WalCommand>,
+    join: Option<thread::JoinHandle<()>>,
+    metrics: Arc<WalMetrics>,
+}
+
+impl WalWriter {
+    fn start(path: PathBuf, durability: DurabilityMode, metrics: Arc<WalMetrics>) -> Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let metrics_clone = Arc::clone(&metrics);
+
+        let join = thread::Builder::new()
+            .name("wal-writer".to_string())
+            .spawn(move || wal_writer_loop(path, durability, rx, metrics_clone))
+            .map_err(|e| DbError::ExecutionError(format!("Failed to start WAL writer: {}", e)))?;
+
+        Ok(Self { sender: tx, join: Some(join), metrics })
+    }
+
+    fn append(&self, bytes: Vec<u8>, is_commit: bool, wait_for_sync: bool) -> Result<()> {
+        if wait_for_sync {
+            let (tx, rx) = mpsc::channel();
+            self.sender
+                .send(WalCommand::Append { bytes, is_commit, ack: Some(tx) })
+                .map_err(|e| DbError::ExecutionError(format!("Failed to send WAL entry: {}", e)))?;
+            rx.recv()
+                .map_err(|e| DbError::ExecutionError(format!("Failed to wait WAL sync: {}", e)))?;
+            return Ok(());
+        }
+
+        self.sender
+            .send(WalCommand::Append { bytes, is_commit, ack: None })
+            .map_err(|e| DbError::ExecutionError(format!("Failed to send WAL entry: {}", e)))?;
+        Ok(())
+    }
+
+    fn truncate(&self) -> Result<()> {
+        let (tx, rx) = mpsc::channel();
+        self.sender
+            .send(WalCommand::Truncate { ack: tx })
+            .map_err(|e| DbError::ExecutionError(format!("Failed to truncate WAL: {}", e)))?;
+        rx.recv()
+            .map_err(|e| DbError::ExecutionError(format!("Failed to truncate WAL: {}", e)))?;
+        Ok(())
+    }
+}
+
+impl Drop for WalWriter {
+    fn drop(&mut self) {
+        let _ = self.sender.send(WalCommand::Shutdown);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+fn wal_writer_loop(path: PathBuf, durability: DurabilityMode, rx: Receiver<WalCommand>, metrics: Arc<WalMetrics>) {
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => BufWriter::new(f),
+        Err(_) => return,
+    };
+
+    let mut pending_commit_acks: Vec<Sender<()>> = Vec::new();
+    let mut last_flush = Instant::now();
+    let flush_interval = Duration::from_millis(50);
+    let commit_window = Duration::from_millis(5);
+
+    loop {
+        let cmd = match rx.recv() {
+            Ok(cmd) => cmd,
+            Err(_) => break,
+        };
+
+        if matches!(cmd, WalCommand::Shutdown) {
+            break;
+        }
+
+        let mut commit_pending = false;
+        let mut drain_deadline = None::<Instant>;
+
+        let mut process_cmd = |cmd: WalCommand,
+                               file: &mut BufWriter<File>,
+                               pending_commit_acks: &mut Vec<Sender<()>>,
+                               commit_pending: &mut bool| {
+            match cmd {
+                WalCommand::Append { bytes, is_commit, ack } => {
+                    let _ = file.write_all(&bytes);
+                    if is_commit {
+                        *commit_pending = true;
+                        if let Some(ack) = ack {
+                            pending_commit_acks.push(ack);
+                        }
+                    }
+                }
+                WalCommand::Flush { ack } => {
+                    let _ = file.flush();
+                    metrics.on_flush();
+                    let _ = ack.send(());
+                }
+                WalCommand::Truncate { ack } => {
+                    let _ = file.flush();
+                    metrics.on_flush();
+                    let _ = file.get_mut().sync_all();
+                    metrics.on_sync();
+                    if let Ok(new_file) = OpenOptions::new().write(true).truncate(true).open(&path) {
+                        *file = BufWriter::new(new_file);
+                    }
+                    let _ = ack.send(());
+                }
+                WalCommand::Shutdown => {}
+            }
+        };
+
+        process_cmd(cmd, &mut file, &mut pending_commit_acks, &mut commit_pending);
+
+        if commit_pending {
+            let mut saw_extra = false;
+            loop {
+                match rx.try_recv() {
+                    Ok(cmd) => {
+                        if matches!(cmd, WalCommand::Shutdown) {
+                            return;
+                        }
+                        saw_extra = true;
+                        process_cmd(cmd, &mut file, &mut pending_commit_acks, &mut commit_pending);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return,
+                }
+            }
+
+            if saw_extra {
+                drain_deadline = Some(Instant::now() + commit_window);
+            }
+        }
+
+        while let Some(deadline) = drain_deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(cmd) => {
+                    if matches!(cmd, WalCommand::Shutdown) {
+                        return;
+                    }
+                    process_cmd(cmd, &mut file, &mut pending_commit_acks, &mut commit_pending);
+                }
+                Err(_) => break,
+            }
+        }
+
+        let now = Instant::now();
+        let should_flush = commit_pending || now.duration_since(last_flush) >= flush_interval;
+        if should_flush {
+            let _ = file.flush();
+            metrics.on_flush();
+            if commit_pending && durability == DurabilityMode::Sync {
+                let _ = file.get_mut().sync_all();
+                metrics.on_sync();
+            }
+            last_flush = now;
+        }
+
+        if commit_pending {
+            for ack in pending_commit_acks.drain(..) {
+                let _ = ack.send(());
+            }
+        }
     }
 }
 
