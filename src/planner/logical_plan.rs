@@ -1,5 +1,5 @@
 use crate::parser::ast::{Expr, OrderByExpr};
-use crate::core::{Schema, Value};
+use crate::core::Schema;
 
 /// Logical plan nodes - high-level operations
 #[derive(Debug, Clone)]
@@ -65,8 +65,8 @@ pub struct ValuesNode {
 #[derive(Debug, Clone)]
 pub struct IndexScanInfo {
     pub column: String,
-    pub value: Value,
-    pub end_value: Option<Value>,
+    pub value_expr: Expr,
+    pub end_value_expr: Option<Expr>,
     #[allow(dead_code)]
     pub op: IndexOp,
 }

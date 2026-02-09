@@ -5,16 +5,21 @@ use crate::planner::logical_plan::IndexOp;
 use crate::result::QueryResult;
 use crate::storage::{WalEntry, Catalog};
 use crate::executor::query::QueryExecutor;
+use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
 
 use async_trait::async_trait;
 
 pub struct InsertExecutor {
     catalog: Catalog,
+    evaluator_registry: EvaluatorRegistry,
 }
 
 impl InsertExecutor {
     pub fn new(catalog: Catalog) -> Self {
-        Self { catalog }
+        Self {
+            catalog,
+            evaluator_registry: EvaluatorRegistry::with_default_evaluators(),
+        }
     }
 }
 
@@ -101,6 +106,22 @@ impl InsertExecutor {
                         return Err(DbError::ConstraintViolation(format!(
                             "Foreign key violation: Value {} in '{}.{}' references non-existent key in '{}.{}'",
                             val, insert.table_name, column.name, fk.table, fk.column
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Validate CHECK constraints (NULL = pass)
+        if !schema.checks().is_empty() {
+            let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, None, &ctx.params);
+            for row in &rows {
+                for check in schema.checks() {
+                    let value = eval_ctx.evaluate(check, row, schema.schema()).await?;
+                    if matches!(value, Value::Boolean(false)) {
+                        return Err(DbError::ConstraintViolation(format!(
+                            "CHECK constraint violation: {}",
+                            check
                         )));
                     }
                 }
@@ -269,6 +290,19 @@ impl InsertExecutor {
         match expr {
             Expr::Literal(val) => {
                 expected_type.cast_value(val)
+            }
+            Expr::UnaryOp { op, expr } => {
+                match (&**expr, op) {
+                    (Expr::Literal(Value::Integer(i)), crate::parser::ast::UnaryOp::Minus) => {
+                        expected_type.cast_value(&Value::Integer(-i))
+                    }
+                    (Expr::Literal(Value::Float(f)), crate::parser::ast::UnaryOp::Minus) => {
+                        expected_type.cast_value(&Value::Float(-f))
+                    }
+                    _ => Err(DbError::UnsupportedOperation(
+                        "Only unary minus for numeric literals supported in INSERT".into(),
+                    )),
+                }
             }
             Expr::Parameter(idx) => {
                 if *idx == 0 || *idx > ctx.params.len() {

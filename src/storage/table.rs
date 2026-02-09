@@ -1,4 +1,5 @@
 use crate::core::{Column, DbError, Result, Row, Schema, Snapshot, Value};
+use crate::parser::ast::Expr;
 use crate::planner::logical_plan::IndexOp;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet};
@@ -59,7 +60,7 @@ impl Table {
         Ok(())
     }
 
-    pub fn add_column(&mut self, column: Column) -> Result<()> {
+    pub fn add_column(&mut self, column: Column, check: Option<Expr>) -> Result<()> {
         if self.schema.schema.find_column_index(&column.name).is_some() {
             return Err(DbError::ExecutionError(format!("Column '{}' already exists", column.name)));
         }
@@ -68,6 +69,9 @@ impl Table {
         let mut columns = self.schema.schema.columns.clone();
         columns.push(column.clone());
         self.schema.schema = Schema::new(columns);
+        if let Some(expr) = check {
+            self.schema.checks.push(expr);
+        }
 
         // Update all existing rows with default value (or NULL)
         // Since we use persistent data structures, we need to be careful about performance.
@@ -99,6 +103,10 @@ impl Table {
 
         for (id, new_versions) in updates {
             self.rows.insert(id, new_versions);
+        }
+
+        if column.primary_key || column.unique {
+            let _ = self.create_index(&column.name);
         }
 
         Ok(())
@@ -199,8 +207,9 @@ impl Table {
         // To modify, we effectively need to clone the vector (CoW), modify it, and re-insert.
 
         if let Some(versions) = self.rows.get(&id) {
-             let mut new_versions = versions.clone();
-             if let Some(latest) = new_versions.last_mut() {
+            let mut new_versions = versions.clone();
+            if !new_versions.is_empty() {
+                let latest = new_versions.last_mut().unwrap();
                 if latest.xmax.is_some() {
                     return Ok(false);
                 }
@@ -209,7 +218,7 @@ impl Table {
                 // Update the map with the modified versions
                 self.rows.insert(id, new_versions);
                 return Ok(true);
-             }
+            }
         }
         Ok(false)
     }
@@ -221,26 +230,32 @@ impl Table {
         let (row_to_index_add, new_version_idx) = if let Some(versions) = self.rows.get(&id) {
             let mut new_versions = versions.clone();
 
-            if let Some(latest) = new_versions.last_mut() {
+            if !new_versions.is_empty() {
+                let old_version_idx = new_versions.len() - 1;
+                let old_visible = self.is_visible(&new_versions[old_version_idx], snapshot);
+                let latest = new_versions.get_mut(old_version_idx).unwrap();
                 if latest.xmax.is_some() {
                     return Ok(false);
                 }
+                if !old_visible && latest.xmin != snapshot.tx_id {
+                    return Ok(false);
+                }
                 latest.xmax = Some(snapshot.tx_id);
+                let new_version = MvccRow {
+                    row: new_row.clone(),
+                    xmin: snapshot.tx_id,
+                    xmax: None,
+                };
+                new_versions.push(new_version);
+                let version_idx = new_versions.len() - 1;
+
+                // Update map
+                self.rows.insert(id, new_versions);
+                (Some(new_row), Some(version_idx))
             } else {
                 return Ok(false);
             }
 
-            let new_version = MvccRow {
-                row: new_row.clone(),
-                xmin: snapshot.tx_id,
-                xmax: None,
-            };
-            new_versions.push(new_version);
-            let version_idx = new_versions.len() - 1;
-
-            // Update map
-            self.rows.insert(id, new_versions);
-            (Some(new_row), Some(version_idx))
         } else {
             return Ok(false);
         };
@@ -328,9 +343,15 @@ impl Table {
         if snapshot.aborted.contains(&row.xmin) {
             return false;
         }
+        if row.xmin != snapshot.tx_id && snapshot.active.contains(&row.xmin) {
+            return false;
+        }
 
         if let Some(xmax) = row.xmax {
             if snapshot.aborted.contains(&xmax) {
+                return true;
+            }
+            if snapshot.active.contains(&xmax) {
                 return true;
             }
             if self.is_committed(xmax, snapshot) {
@@ -382,6 +403,17 @@ impl Table {
 
     pub fn row_count(&self) -> usize {
         self.rows.len()
+    }
+
+    pub fn row_count_visible(&self, snapshot: &Snapshot) -> usize {
+        self.rows
+            .values()
+            .filter(|versions| versions.iter().rev().any(|v| self.is_visible(v, snapshot)))
+            .count()
+    }
+
+    pub fn version_count(&self) -> usize {
+        self.rows.values().map(|versions| versions.len()).sum()
     }
 
     fn validate_row(&self, row: &Row) -> Result<()> {
@@ -519,6 +551,8 @@ impl Table {
         }
     }
 
+    // Index cleanup happens during VACUUM via rebuild_indexes.
+
     fn get_version(&self, entry: IndexEntry) -> Option<&MvccRow> {
         self.rows
             .get(&entry.row_id)
@@ -589,6 +623,8 @@ pub struct TableSchema {
     pub name: String,
     pub schema: Schema,
     pub indexes: Vec<String>,
+    #[serde(default)]
+    pub checks: Vec<Expr>,
 }
 
 impl TableSchema {
@@ -597,11 +633,54 @@ impl TableSchema {
             name: name.into(),
             schema: Schema::new(columns),
             indexes: Vec::new(),
+            checks: Vec::new(),
         }
     }
     pub fn name(&self) -> &str { &self.name }
     pub fn schema(&self) -> &Schema { &self.schema }
     pub fn is_indexed(&self, column: &str) -> bool {
         self.indexes.iter().any(|idx| idx == column)
+    }
+    pub fn checks(&self) -> &[Expr] { &self.checks }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{Column, DataType, Snapshot, Value};
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    fn snapshot(tx_id: u64) -> Snapshot {
+        Snapshot {
+            tx_id,
+            active: Arc::new(HashSet::new()),
+            aborted: Arc::new(HashSet::new()),
+            max_tx_id: tx_id + 1,
+        }
+    }
+
+    #[test]
+    fn fail_11_index_entries_should_be_removed_on_vacuum() {
+        let schema = TableSchema::new(
+            "t",
+            vec![
+                Column::new("id", DataType::Integer).primary_key(),
+                Column::new("v", DataType::Integer).unique(),
+            ],
+        );
+        let mut table = Table::new(schema);
+        let tx1 = snapshot(1);
+        let row_id = table.insert(vec![Value::Integer(1), Value::Integer(10)], &tx1).unwrap();
+
+        let tx2 = snapshot(2);
+        table.update(row_id, vec![Value::Integer(1), Value::Integer(20)], &tx2).unwrap();
+
+        let freed = table.vacuum(3, &HashSet::new());
+        assert!(freed > 0, "expected vacuum to remove old versions");
+
+        let index = table.get_index("v").unwrap();
+        let old_entries = index.get(&Value::Integer(10)).cloned().unwrap_or_default();
+        assert!(old_entries.is_empty(), "expected stale index entries to be removed on vacuum");
     }
 }

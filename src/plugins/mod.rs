@@ -157,6 +157,28 @@ impl ExpressionConverter {
                      .collect::<Result<Vec<_>>>()?;
                  return Ok(Expr::Array(list));
             }
+            sql_ast::Expr::UnaryOp { op, expr } => {
+                use crate::parser::ast::UnaryOp as AstUnary;
+                if matches!(op, sql_ast::UnaryOperator::Not) {
+                    return Ok(Expr::Not {
+                        expr: Box::new(self.convert(*expr.clone(), query_converter)?),
+                    });
+                }
+                let converted = self.convert(*expr.clone(), query_converter)?;
+                let op = match op {
+                    sql_ast::UnaryOperator::Minus => AstUnary::Minus,
+                    sql_ast::UnaryOperator::Plus => AstUnary::Plus,
+                    _ => {
+                        return Err(crate::core::DbError::UnsupportedOperation(
+                            "Unsupported unary operator".into(),
+                        ))
+                    }
+                };
+                return Ok(Expr::UnaryOp {
+                    op,
+                    expr: Box::new(converted),
+                });
+            }
             _ => {}
         }
 

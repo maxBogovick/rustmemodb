@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use std::sync::{Arc};
 use tokio::sync::RwLock;
 use lazy_static::lazy_static;
+use serde::{Serialize, Deserialize};
+use std::path::PathBuf;
 
 /// User permission level
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Permission {
     /// Execute SELECT queries
     Select,
@@ -24,7 +26,7 @@ pub enum Permission {
 }
 
 /// User account
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     username: String,
     password_hash: String,
@@ -111,7 +113,34 @@ impl AuthManager {
 
     /// Creates a new manager with default administrator
     pub fn new() -> Self {
-        Self::with_admin(Self::DEFAULT_ADMIN_USERNAME, Self::DEFAULT_ADMIN_PASSWORD)
+        let mut users = if Self::default_admin_enabled() {
+            let mut map = HashMap::new();
+            let admin_hash = Self::hash_password(Self::DEFAULT_ADMIN_PASSWORD)
+                .unwrap_or_else(|e| panic!("Failed to hash default admin password: {}", e));
+            let admin_user = User::new(
+                Self::DEFAULT_ADMIN_USERNAME.to_string(),
+                admin_hash,
+                vec![Permission::Admin],
+            );
+            map.insert(Self::DEFAULT_ADMIN_USERNAME.to_string(), admin_user);
+            map
+        } else {
+            HashMap::new()
+        };
+
+        if let Some(path) = Self::auth_file_path() {
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                if let Ok(loaded) = serde_json::from_str::<HashMap<String, User>>(&contents) {
+                    users = loaded;
+                }
+            } else if !users.is_empty() {
+                let _ = Self::persist_users_to_path(&users, &path);
+            }
+        }
+
+        Self {
+            users: RwLock::new(users),
+        }
     }
 
     /// Creates a manager with custom administrator credentials
@@ -147,6 +176,36 @@ impl AuthManager {
     /// Returns true if the password matches the hash, false otherwise.
     fn verify_password(password: &str, hash: &str) -> bool {
         bcrypt::verify(password, hash).unwrap_or(false)
+    }
+
+    fn default_admin_enabled() -> bool {
+        match std::env::var("RUSTMEMODB_DISABLE_DEFAULT_ADMIN") {
+            Ok(val) => {
+                let val = val.to_ascii_lowercase();
+                !(val == "1" || val == "true" || val == "yes")
+            }
+            Err(_) => true,
+        }
+    }
+
+    fn auth_file_path() -> Option<PathBuf> {
+        std::env::var("RUSTMEMODB_AUTH_FILE").ok().map(PathBuf::from)
+    }
+
+    fn persist_users_to_path(users: &HashMap<String, User>, path: &PathBuf) -> Result<()> {
+        let serialized = serde_json::to_string_pretty(users)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to serialize users: {}", e)))?;
+        std::fs::write(path, serialized)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to write users file: {}", e)))?;
+        Ok(())
+    }
+
+    async fn persist_if_configured(&self) -> Result<()> {
+        let Some(path) = Self::auth_file_path() else {
+            return Ok(());
+        };
+        let users = self.users.read().await;
+        Self::persist_users_to_path(&users, &path)
     }
 
     /// Authenticates a user
@@ -189,6 +248,8 @@ impl AuthManager {
 
         users.insert(username.to_string(), user);
 
+        drop(users);
+        self.persist_if_configured().await?;
         Ok(())
     }
 
@@ -214,6 +275,8 @@ impl AuthManager {
 
         users.remove(username);
 
+        drop(users);
+        self.persist_if_configured().await?;
         Ok(())
     }
 
@@ -230,6 +293,8 @@ impl AuthManager {
 
         user.set_password_hash(Self::hash_password(new_password)?);
 
+        drop(users);
+        self.persist_if_configured().await?;
         Ok(())
     }
 
@@ -242,8 +307,11 @@ impl AuthManager {
                 format!("User '{}' not found", username)
             ))?;
 
-        user.add_permission(permission);
-
+        let changed = user.add_permission(permission);
+        drop(users);
+        if changed {
+            self.persist_if_configured().await?;
+        }
         Ok(())
     }
 
@@ -269,8 +337,11 @@ impl AuthManager {
 
         // Now we can safely get mutable reference
         let user = users.get_mut(username).unwrap();
-        user.remove_permission(permission);
-
+        let changed = user.remove_permission(permission);
+        drop(users);
+        if changed {
+            self.persist_if_configured().await?;
+        }
         Ok(())
     }
 

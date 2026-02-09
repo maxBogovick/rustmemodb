@@ -406,6 +406,18 @@ impl InMemoryDB {
         matches!(stmt, Statement::Query(_) | Statement::Explain(_))
     }
 
+    pub fn is_ddl_stmt(stmt: &Statement) -> bool {
+        matches!(
+            stmt,
+            Statement::CreateTable(_)
+                | Statement::DropTable(_)
+                | Statement::CreateView(_)
+                | Statement::DropView(_)
+                | Statement::CreateIndex(_)
+                | Statement::AlterTable(_)
+        )
+    }
+
     pub async fn execute_readonly_with_params(
         &self,
         sql: &str,
@@ -470,6 +482,9 @@ impl InMemoryDB {
                 vec![Column::new("version", DataType::Text)],
                 vec![vec![Value::Text("PostgreSQL 14.0 (RustMemDB MVP)".to_string())]]
             ));
+        }
+        if sql.trim().eq_ignore_ascii_case("SELECT * FROM system_metrics") {
+            return self.system_metrics().await;
         }
 
         let statement = self.parse_first(sql)?;
@@ -566,7 +581,39 @@ impl InMemoryDB {
                 .with_params(params)
         };
 
-        self.executor_pipeline.execute(statement, &ctx).await
+        let result = self.executor_pipeline.execute(statement, &ctx).await?;
+        if !InMemoryDB::is_read_only_stmt(statement) {
+            self.maybe_autovacuum().await?;
+        }
+        Ok(result)
+    }
+
+    pub async fn execute_parsed_with_params_shared(
+        &self,
+        statement: &Statement,
+        transaction_id: Option<crate::transaction::TransactionId>,
+        params: Vec<Value>,
+    ) -> Result<QueryResult> {
+        if Self::is_ddl_stmt(statement) {
+            return Err(DbError::ExecutionError("DDL requires exclusive access".into()));
+        }
+
+        let persistence_ref = self.persistence.as_ref();
+        let ctx = if let Some(txn_id) = transaction_id {
+            let snapshot = self.transaction_manager.get_snapshot(txn_id).await?;
+            ExecutionContext::with_transaction(&self.storage, &self.transaction_manager, txn_id, persistence_ref, snapshot)
+                .with_params(params)
+        } else {
+            let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+            ExecutionContext::new(&self.storage, &self.transaction_manager, persistence_ref, snapshot)
+                .with_params(params)
+        };
+
+        let result = self.executor_pipeline.execute(statement, &ctx).await?;
+        if !InMemoryDB::is_read_only_stmt(statement) {
+            self.maybe_autovacuum().await?;
+        }
+        Ok(result)
     }
 
     pub async fn execute_with_transaction(
@@ -602,11 +649,17 @@ impl InMemoryDB {
                 if let Some(ref fk) = col.references {
                     column = column.references(fk.table.clone(), fk.column.clone());
                 }
+                column.default = col.default.clone();
                 column
             })
             .collect();
 
         let mut schema = TableSchema::new(create.table_name.clone(), columns);
+        for col in &create.columns {
+            if let Some(expr) = &col.check {
+                schema.checks.push(expr.clone());
+            }
+        }
 
         // Pre-populate indexes metadata for PK/Unique columns
         // This ensures the Catalog knows about these indexes immediately for query planning
@@ -816,7 +869,8 @@ impl InMemoryDB {
     }
 
     pub async fn table_stats(&self, name: &str) -> Result<TableStats> {
-        let row_count = self.storage.row_count(name).await?;
+        let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+        let row_count = self.storage.row_count_visible(name, &snapshot).await?;
         let schema = self.catalog.get_table(name)?;
 
         Ok(TableStats {
@@ -1000,6 +1054,49 @@ impl InMemoryDB {
             }
         }
         Ok(())
+    }
+
+    async fn maybe_autovacuum(&self) -> Result<()> {
+        let threshold = std::env::var("RUSTMEMODB_AUTOVAC_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0);
+        let Some(threshold) = threshold else {
+            return Ok(());
+        };
+
+        let total_versions = self.storage.version_count().await;
+        if total_versions < threshold {
+            return Ok(());
+        }
+
+        let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+        let min_active = snapshot.active.iter().min().cloned().unwrap_or(snapshot.max_tx_id);
+        let _ = self.storage.vacuum_all_tables(min_active, &snapshot.aborted).await?;
+        Ok(())
+    }
+
+    async fn system_metrics(&self) -> Result<QueryResult> {
+        let snapshot = self.transaction_manager.get_auto_commit_snapshot().await?;
+        let mut total_rows = 0usize;
+        for table in self.catalog.list_tables() {
+            total_rows += self.storage.row_count_visible(table, &snapshot).await?;
+        }
+        let total_versions = self.storage.version_count().await;
+        let active_tx = snapshot.active.len();
+
+        Ok(QueryResult::new(
+            vec![
+                Column::new("name", DataType::Text),
+                Column::new("value", DataType::Text),
+            ],
+            vec![
+                vec![Value::Text("table_count".to_string()), Value::Text(self.catalog.list_tables().len().to_string())],
+                vec![Value::Text("row_count".to_string()), Value::Text(total_rows.to_string())],
+                vec![Value::Text("version_count".to_string()), Value::Text(total_versions.to_string())],
+                vec![Value::Text("active_transactions".to_string()), Value::Text(active_tx.to_string())],
+            ],
+        ))
     }
 
     /// Run garbage collection to remove dead row versions

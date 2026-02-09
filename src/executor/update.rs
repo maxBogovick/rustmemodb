@@ -79,6 +79,45 @@ impl UpdateExecutor {
                     new_row[col_idx] = target_type.cast_value(&new_value)?;
                 }
 
+                // Enforce FK constraints on updated row
+                for (i, column) in schema.schema().columns().iter().enumerate() {
+                    if let Some(ref fk) = column.references {
+                        let val = &new_row[i];
+                        if val.is_null() {
+                            continue;
+                        }
+                        if !ctx.storage.table_exists(&fk.table) {
+                            return Err(crate::core::DbError::TableNotFound(fk.table.clone()));
+                        }
+                        let exists = if let Some(rows) = ctx.storage.scan_index(&fk.table, &fk.column, val, &None, &crate::planner::logical_plan::IndexOp::Eq, &ctx.snapshot).await? {
+                            !rows.is_empty()
+                        } else {
+                            let all_rows = ctx.storage.scan_table(&fk.table, &ctx.snapshot).await?;
+                            let ref_schema = ctx.storage.get_schema(&fk.table).await?;
+                            let col_idx = ref_schema.schema().find_column_index(&fk.column)
+                                .ok_or_else(|| crate::core::DbError::ColumnNotFound(fk.column.clone(), fk.table.clone()))?;
+                            all_rows.iter().any(|r| &r[col_idx] == val)
+                        };
+                        if !exists {
+                            return Err(crate::core::DbError::ConstraintViolation(format!(
+                                "Foreign key violation: Value {} in '{}.{}' references non-existent key in '{}.{}'",
+                                val, update.table_name, column.name, fk.table, fk.column
+                            )));
+                        }
+                    }
+                }
+
+                // Enforce CHECK constraints (NULL = pass)
+                for check in schema.checks() {
+                    let value = eval_ctx.evaluate(check, &new_row, schema.schema()).await?;
+                    if matches!(value, Value::Boolean(false)) {
+                        return Err(crate::core::DbError::ConstraintViolation(format!(
+                            "CHECK constraint violation: {}",
+                            check
+                        )));
+                    }
+                }
+
                 updates.push((id, row, new_row));
             }
         }
@@ -120,7 +159,14 @@ impl UpdateExecutor {
                 logged_any = true;
             }
 
-            let _success = ctx.storage.update_row(&update.table_name, *idx, new_row.clone(), &ctx.snapshot).await?;
+            let success = ctx.storage.update_row(&update.table_name, *idx, new_row.clone(), &ctx.snapshot).await?;
+            if !success {
+                if let Some(tx_id) = ctx.transaction_id {
+                    ctx.transaction_manager.mark_conflict(tx_id).await;
+                } else {
+                    return Err(crate::core::DbError::ExecutionError("Write-write conflict detected".into()));
+                }
+            }
         }
 
         if autocommit && logged_any {

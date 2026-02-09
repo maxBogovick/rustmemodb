@@ -544,8 +544,8 @@ impl QueryPlanner {
             
             match predicate {
                 Expr::BinaryOp { left, op, right } => {
-                    // Check for col op val
-                    if let (Expr::Column(col_name), Expr::Literal(val)) = (&**left, &**right) {
+                    // Check for col op val/param
+                    if let (Expr::Column(col_name), Expr::Literal(_) | Expr::Parameter(_)) = (&**left, &**right) {
                         if schema.is_indexed(col_name) {
                             let index_op = match op {
                                 BinaryOp::Eq => Some(IndexOp::Eq),
@@ -560,8 +560,8 @@ impl QueryPlanner {
                                 let mut new_scan = scan.clone();
                                 new_scan.index_scan = Some(IndexScanInfo {
                                     column: col_name.clone(),
-                                    value: val.clone(),
-                                    end_value: None,
+                                    value_expr: (**right).clone(),
+                                    end_value_expr: None,
                                     op,
                                 });
                                 return Ok(LogicalPlan::TableScan(new_scan));
@@ -570,7 +570,7 @@ impl QueryPlanner {
                     }
 
                     // Check for val op col
-                    if let (Expr::Literal(val), Expr::Column(col_name)) = (&**left, &**right) {
+                    if let (Expr::Literal(_) | Expr::Parameter(_), Expr::Column(col_name)) = (&**left, &**right) {
                         if schema.is_indexed(col_name) {
                              let index_op = match op {
                                  BinaryOp::Eq => Some(IndexOp::Eq),
@@ -585,8 +585,8 @@ impl QueryPlanner {
                                 let mut new_scan = scan.clone();
                                 new_scan.index_scan = Some(IndexScanInfo {
                                     column: col_name.clone(),
-                                    value: val.clone(),
-                                    end_value: None,
+                                    value_expr: (**left).clone(),
+                                    end_value_expr: None,
                                     op,
                                 });
                                 return Ok(LogicalPlan::TableScan(new_scan));
@@ -596,13 +596,13 @@ impl QueryPlanner {
                 }
                 Expr::Between { expr, low, high, negated } => {
                     if !*negated {
-                        if let (Expr::Column(col_name), Expr::Literal(low_val), Expr::Literal(high_val)) = (&**expr, &**low, &**high) {
+                        if let (Expr::Column(col_name), Expr::Literal(_) | Expr::Parameter(_), Expr::Literal(_) | Expr::Parameter(_)) = (&**expr, &**low, &**high) {
                             if schema.is_indexed(col_name) {
                                 let mut new_scan = scan.clone();
                                 new_scan.index_scan = Some(IndexScanInfo {
                                     column: col_name.clone(),
-                                    value: low_val.clone(),
-                                    end_value: Some(high_val.clone()),
+                                    value_expr: (**low).clone(),
+                                    end_value_expr: Some((**high).clone()),
                                     op: IndexOp::Between,
                                 });
                                 return Ok(LogicalPlan::TableScan(new_scan));

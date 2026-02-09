@@ -37,12 +37,27 @@ impl ExpressionEvaluator for BooleanEvaluator {
                 match (left_val, right_val) {
                     (Value::Boolean(a), Value::Boolean(b)) => {
                         let result = match op {
-                            BinaryOp::And => a && b,
-                            BinaryOp::Or => a || b,
+                            BinaryOp::And => Value::Boolean(a && b),
+                            BinaryOp::Or => Value::Boolean(a || b),
                             _ => unreachable!(),
                         };
-                        Ok(Value::Boolean(result))
+                        Ok(result)
                     }
+                    (Value::Null, Value::Boolean(b)) => {
+                        Ok(match op {
+                            BinaryOp::And => if b { Value::Null } else { Value::Boolean(false) },
+                            BinaryOp::Or => if b { Value::Boolean(true) } else { Value::Null },
+                            _ => unreachable!(),
+                        })
+                    }
+                    (Value::Boolean(a), Value::Null) => {
+                        Ok(match op {
+                            BinaryOp::And => if a { Value::Null } else { Value::Boolean(false) },
+                            BinaryOp::Or => if a { Value::Boolean(true) } else { Value::Null },
+                            _ => unreachable!(),
+                        })
+                    }
+                    (Value::Null, Value::Null) => Ok(Value::Null),
                     (a, b) => Err(DbError::TypeMismatch(format!(
                         "Boolean operation requires boolean types, got {} and {}",
                         a.type_name(), b.type_name()
@@ -56,6 +71,7 @@ impl ExpressionEvaluator for BooleanEvaluator {
 
                 match val {
                     Value::Boolean(b) => Ok(Value::Boolean(!b)),
+                    Value::Null => Ok(Value::Null),
                     other => Err(DbError::TypeMismatch(format!(
                         "NOT operation requires boolean type, got {}",
                         other.type_name()

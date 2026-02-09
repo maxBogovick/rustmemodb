@@ -100,10 +100,21 @@ impl AlterTableExecutor {
     ) -> Result<QueryResult> {
         match &alter.operation {
             AlterTableOperation::AddColumn(col_def) => {
-                let column = crate::core::Column::new(col_def.name.clone(), col_def.data_type.clone());
-                // TODO: Handle constraints like NOT NULL, DEFAULT, etc.
-                // For now, basic column addition.
-                ctx.storage.add_column(&alter.table_name, column).await?;
+                let mut column = crate::core::Column::new(col_def.name.clone(), col_def.data_type.clone());
+                if !col_def.nullable {
+                    column = column.not_null();
+                }
+                if col_def.primary_key {
+                    column = column.primary_key();
+                }
+                if col_def.unique {
+                    column = column.unique();
+                }
+                if let Some(ref fk) = col_def.references {
+                    column = column.references(fk.table.clone(), fk.column.clone());
+                }
+                column.default = col_def.default.clone();
+                ctx.storage.add_column(&alter.table_name, column, col_def.check.clone()).await?;
             }
             AlterTableOperation::DropColumn(col_name) => {
                 ctx.storage.drop_column(&alter.table_name, col_name).await?;

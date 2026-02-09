@@ -84,18 +84,19 @@ impl Connection {
 
         enforce_permissions(&self.user, &statement)?;
 
-        {
+        let result = {
             let db = self.db.read().await;
             if InMemoryDB::is_read_only_stmt(&statement) {
-                return db.execute_parsed_readonly_with_params(&statement, self.transaction_id, vec![]).await;
+                db.execute_parsed_readonly_with_params(&statement, self.transaction_id, vec![]).await
+            } else if !InMemoryDB::is_ddl_stmt(&statement) {
+                db.execute_parsed_with_params_shared(&statement, self.transaction_id, vec![]).await
+            } else {
+                drop(db);
+                let mut db = self.db.write().await;
+                db.execute_parsed_with_params(&statement, self.transaction_id, vec![]).await
             }
-        }
+        };
 
-        let mut db = self.db.write().await;
-        let result = db
-            .execute_parsed_with_params(&statement, self.transaction_id, vec![])
-            .await;
-        drop(db);
         match result {
             Ok(result) => Ok(result),
             Err(err) => {
@@ -161,9 +162,13 @@ impl Connection {
 
         let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
 
-        if let Some(persistence) = self.db.read().await.persistence() {
-            let mut persistence_guard = persistence.lock().await;
-            persistence_guard.log(&crate::storage::WalEntry::Commit(txn_id.0))?;
+        {
+            let db = self.db.read().await;
+            if db.transaction_manager().is_conflicted(txn_id).await {
+                drop(db);
+                let _ = self.rollback().await;
+                return Err(DbError::ExecutionError("Write-write conflict detected".into()));
+            }
         }
 
         // Commit transaction via TransactionManager
@@ -171,6 +176,11 @@ impl Connection {
             let db = self.db.write().await;
             let txn_mgr = Arc::clone(db.transaction_manager());
             txn_mgr.commit(txn_id).await?;
+        }
+
+        if let Some(persistence) = self.db.read().await.persistence() {
+            let mut persistence_guard = persistence.lock().await;
+            persistence_guard.log(&crate::storage::WalEntry::Commit(txn_id.0))?;
         }
 
         self.state = ConnectionState::Active;
@@ -246,7 +256,24 @@ impl Drop for Connection {
         if self.state == ConnectionState::InTransaction {
             // We cannot rollback asynchronously in Drop without spawning, which is risky.
             // Users should call close() explicitly.
-            eprintln!("Warning: Connection dropped while in transaction. Transaction may hang. Use connection.close() or commit/rollback explicitly.");
+            if let Some(tx_id) = self.transaction_id {
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    let db = Arc::clone(&self.db);
+                    handle.spawn(async move {
+                        if let Some(persistence) = db.read().await.persistence() {
+                            let mut guard = persistence.lock().await;
+                            let _ = guard.log(&crate::storage::WalEntry::Rollback(tx_id.0));
+                        }
+                        let txn_mgr = {
+                            let db_guard = db.read().await;
+                            Arc::clone(db_guard.transaction_manager())
+                        };
+                        let _ = txn_mgr.rollback(tx_id).await;
+                    });
+                } else {
+                    eprintln!("Warning: Connection dropped in transaction without runtime; rollback skipped.");
+                }
+            }
         }
         self.state = ConnectionState::Closed;
     }
@@ -282,6 +309,9 @@ impl PreparedStatement {
             enforce_permissions(&self.user, &statement)?;
             if InMemoryDB::is_read_only_stmt(&statement) {
                 return db_guard.execute_parsed_readonly_with_params(&statement, None, params).await;
+            }
+            if !InMemoryDB::is_ddl_stmt(&statement) {
+                return db_guard.execute_parsed_with_params_shared(&statement, None, params).await;
             }
         }
 

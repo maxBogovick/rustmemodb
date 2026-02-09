@@ -249,6 +249,13 @@ impl QueryExecutor {
 
         let left_rows = self.execute_plan(&join.left, ctx).await?;
         let right_rows = self.execute_plan(&join.right, ctx).await?;
+
+        if let Some(limit) = self.join_row_limit() {
+            let estimated = left_rows.len().saturating_mul(right_rows.len());
+            if estimated > limit {
+                return Err(DbError::ExecutionError("Join exceeded configured memory limit".into()));
+            }
+        }
         
         let mut build_map = std::collections::HashMap::with_capacity(right_rows.len());
         let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
@@ -284,6 +291,13 @@ impl QueryExecutor {
         }
 
         Ok(result)
+    }
+
+    fn join_row_limit(&self) -> Option<usize> {
+        std::env::var("RUSTMEMODB_JOIN_ROW_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
     }
 
     /// Extract join keys from ON clause if it's a simple equality
@@ -340,11 +354,16 @@ impl QueryExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         if let Some(ref idx) = scan.index_scan {
+            let value = self.evaluate_index_expr(&idx.value_expr, &idx.column, scan.schema.columns(), ctx)?;
+            let end_value = match &idx.end_value_expr {
+                Some(expr) => Some(self.evaluate_index_expr(expr, &idx.column, scan.schema.columns(), ctx)?),
+                None => None,
+            };
             if let Some(rows) = ctx.storage.scan_index(
                 &scan.table_name,
                 &idx.column,
-                &idx.value,
-                &idx.end_value,
+                &value,
+                &end_value,
                 &idx.op,
                 &ctx.snapshot
             ).await? {
@@ -352,6 +371,46 @@ impl QueryExecutor {
             }
         }
         ctx.storage.scan_table(&scan.table_name, &ctx.snapshot).await
+    }
+
+    fn evaluate_index_expr(
+        &self,
+        expr: &Expr,
+        column_name: &str,
+        columns: &[crate::core::Column],
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<crate::core::Value> {
+        let raw = match expr {
+            Expr::Literal(val) => val.clone(),
+            Expr::Parameter(idx) => {
+                if *idx == 0 || *idx > ctx.params.len() {
+                    return Err(crate::core::DbError::ExecutionError(format!("Parameter index out of range: ${}", idx)));
+                }
+                ctx.params[*idx - 1].clone()
+            }
+            Expr::UnaryOp { op, expr } => {
+                match (&**expr, op) {
+                    (Expr::Literal(crate::core::Value::Integer(i)), crate::parser::ast::UnaryOp::Minus) => {
+                        crate::core::Value::Integer(-i)
+                    }
+                    (Expr::Literal(crate::core::Value::Float(f)), crate::parser::ast::UnaryOp::Minus) => {
+                        crate::core::Value::Float(-f)
+                    }
+                    _ => return Err(crate::core::DbError::UnsupportedOperation(
+                        "Only literal/parameter index expressions supported".into(),
+                    )),
+                }
+            }
+            _ => {
+                return Err(crate::core::DbError::UnsupportedOperation(
+                    "Only literal/parameter index expressions supported".into(),
+                ));
+            }
+        };
+        if let Some(col) = columns.iter().find(|c| c.name == column_name) {
+            return col.data_type.cast_value(&raw);
+        }
+        Ok(raw)
     }
 
     /// Execute filter operation

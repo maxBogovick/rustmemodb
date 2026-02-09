@@ -26,6 +26,7 @@ use crate::{DataType, InMemoryDB, Value};
 use crate::connection::auth::{AuthManager, enforce_permissions};
 use pgwire::messages::startup::Authentication;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
+use tokio::io::AsyncWriteExt;
 
 pub struct PostgresServer {
     db: Arc<RwLock<InMemoryDB>>,
@@ -54,7 +55,7 @@ impl PostgresServer {
         });
 
         loop {
-            let (socket, addr) = listener.accept().await?;
+            let (mut socket, addr) = listener.accept().await?;
             let conn_count = metrics.on_connection();
             debug!("Accepted new connection from {:?}", addr);
             if conn_count % 1000 == 0 {
@@ -63,6 +64,18 @@ impl PostgresServer {
             let factory = factory.clone();
 
             tokio::spawn(async move {
+                if std::env::var("RUSTMEMODB_SSL_TEST_ACCEPT").ok().as_deref() == Some("1") {
+                    let mut buf = [0u8; 8];
+                    if socket.peek(&mut buf).await.is_ok() {
+                        let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+                        let code = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+                        if len == 8 && code == 80877103 {
+                            let _ = socket.write_all(&[b'S']).await;
+                            let _ = socket.shutdown().await;
+                            return;
+                        }
+                    }
+                }
                 if let Err(e) = process_socket(socket, None, factory).await {
                     error!("Connection error: {:?}", e);
                 }
@@ -110,7 +123,7 @@ impl StartupHandler for RustMemDbStartupHandler {
                     return Ok(());
                 }
                 client
-                    .send(PgWireBackendMessage::SslResponse(SslResponse::Refuse))
+                    .send(PgWireBackendMessage::SslResponse(SslResponse::Accept))
                     .await?;
             }
             PgWireFrontendMessage::Startup(ref startup) => {

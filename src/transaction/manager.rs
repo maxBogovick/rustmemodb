@@ -21,6 +21,8 @@ pub struct TransactionManager {
     // Optimization: Cache aborted IDs.
     // Uses Copy-on-Write (Arc).
     aborted_ids: Arc<RwLock<Arc<HashSet<u64>>>>,
+    // Track transactions with write-write conflicts.
+    conflicted_ids: Arc<RwLock<Arc<HashSet<u64>>>>,
 
     global_version: Arc<RwLock<u64>>,
 }
@@ -37,6 +39,7 @@ impl TransactionManager {
             transactions: Arc::new(RwLock::new(HashMap::new())),
             active_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             aborted_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
+            conflicted_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             global_version: Arc::new(RwLock::new(0)),
         }
     }
@@ -102,12 +105,13 @@ impl TransactionManager {
         let aborted = self.aborted_ids.read().await.clone();
 
         let this_id = TransactionId::new().0;
+        let next_id = TransactionId::next_raw();
 
         Ok(Snapshot {
             tx_id: this_id,
             active,
             aborted,
-            max_tx_id: this_id,
+            max_tx_id: next_id,
         })
     }
 
@@ -117,6 +121,14 @@ impl TransactionManager {
     }
 
     pub async fn commit(&self, txn_id: TransactionId) -> Result<()> {
+        {
+            let conflicts = self.conflicted_ids.read().await;
+            if conflicts.contains(&txn_id.0) {
+                drop(conflicts);
+                self.rollback(txn_id).await?;
+                return Err(DbError::ExecutionError("Write-write conflict detected".into()));
+            }
+        }
         let mut transactions = self.transactions.write().await;
         let transaction = transactions
             .get_mut(&txn_id)
@@ -128,6 +140,14 @@ impl TransactionManager {
 
         transaction.commit()?;
         transactions.remove(&txn_id);
+        {
+            let mut conflicts = self.conflicted_ids.write().await;
+            if conflicts.contains(&txn_id.0) {
+                let mut new_set = (**conflicts).clone();
+                new_set.remove(&txn_id.0);
+                *conflicts = Arc::new(new_set);
+            }
+        }
 
         // Update active cache (COW)
         {
@@ -171,14 +191,36 @@ impl TransactionManager {
              }
 
              // Update aborted cache (COW) - add to aborted
-             {
-                 let mut aborted_lock = self.aborted_ids.write().await;
-                 let mut new_set = (**aborted_lock).clone();
-                 new_set.insert(txn_id.0);
-                 *aborted_lock = Arc::new(new_set);
-             }
+            {
+                let mut aborted_lock = self.aborted_ids.write().await;
+                let mut new_set = (**aborted_lock).clone();
+                new_set.insert(txn_id.0);
+                *aborted_lock = Arc::new(new_set);
+            }
+            {
+                let mut conflicts = self.conflicted_ids.write().await;
+                if conflicts.contains(&txn_id.0) {
+                    let mut new_set = (**conflicts).clone();
+                    new_set.remove(&txn_id.0);
+                    *conflicts = Arc::new(new_set);
+                }
+            }
         }
         Ok(())
+    }
+
+    pub async fn mark_conflict(&self, txn_id: TransactionId) {
+        let mut conflicts = self.conflicted_ids.write().await;
+        if !conflicts.contains(&txn_id.0) {
+            let mut new_set = (**conflicts).clone();
+            new_set.insert(txn_id.0);
+            *conflicts = Arc::new(new_set);
+        }
+    }
+
+    pub async fn is_conflicted(&self, txn_id: TransactionId) -> bool {
+        let conflicts = self.conflicted_ids.read().await;
+        conflicts.contains(&txn_id.0)
     }
 
     pub async fn get_transaction_info(&self, txn_id: TransactionId) -> Result<Option<TransactionInfo>> {
@@ -210,6 +252,7 @@ impl TransactionManager {
             transactions: Arc::new(RwLock::new(HashMap::new())), // No active transactions in fork
             active_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             aborted_ids: Arc::new(RwLock::new(Arc::new(new_aborted))),
+            conflicted_ids: Arc::new(RwLock::new(Arc::new(HashSet::new()))),
             global_version: Arc::new(RwLock::new(*self.global_version.read().await)),
         }
     }

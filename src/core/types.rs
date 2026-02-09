@@ -96,6 +96,11 @@ impl DataType {
                 if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
                     return Ok(Value::Timestamp(dt.with_timezone(&Utc)));
                 }
+                if let Some(stripped) = s.strip_suffix(" UTC") {
+                    if let Ok(dt) = NaiveDateTime::parse_from_str(stripped, "%Y-%m-%d %H:%M:%S%.f") {
+                        return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                    }
+                }
                 if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
                      return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
                 }

@@ -477,8 +477,21 @@ impl SnapshotManager {
 fn apply_alter_table(table: &mut Table, operation: AlterTableOperation) -> Result<()> {
     match operation {
         AlterTableOperation::AddColumn(col_def) => {
-            let column = Column::new(col_def.name, col_def.data_type);
-            table.add_column(column)?;
+            let mut column = Column::new(col_def.name, col_def.data_type);
+            if !col_def.nullable {
+                column = column.not_null();
+            }
+            if col_def.primary_key {
+                column = column.primary_key();
+            }
+            if col_def.unique {
+                column = column.unique();
+            }
+            if let Some(ref fk) = col_def.references {
+                column = column.references(fk.table.clone(), fk.column.clone());
+            }
+            column.default = col_def.default.clone();
+            table.add_column(column, col_def.check.clone())?;
         }
         AlterTableOperation::DropColumn(col_name) => {
             table.drop_column(&col_name)?;

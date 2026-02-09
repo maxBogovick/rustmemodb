@@ -39,10 +39,10 @@ impl InMemoryStorage {
     }
 
     /// Добавить колонку в таблицу
-    pub async fn add_column(&self, table_name: &str, column: Column) -> Result<()> {
+    pub async fn add_column(&self, table_name: &str, column: Column, check: Option<crate::parser::ast::Expr>) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
-        table.add_column(column)
+        table.add_column(column, check)
     }
 
     /// Удалить колонку из таблицы
@@ -100,6 +100,7 @@ impl InMemoryStorage {
     pub async fn insert_row(&self, table_name: &str, row: Row, snapshot: &Snapshot) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
+        Self::maybe_sleep_on_write().await;
         table.insert(row, snapshot)?;
         Ok(())
     }
@@ -155,10 +156,18 @@ impl InMemoryStorage {
         Ok(table.row_count())
     }
 
+    /// Количество видимых строк (MVCC snapshot)
+    pub async fn row_count_visible(&self, table_name: &str, snapshot: &Snapshot) -> Result<usize> {
+        let table_handle = self.get_table(table_name)?;
+        let table = table_handle.read().await;
+        Ok(table.row_count_visible(snapshot))
+    }
+
     /// Update row (MVCC)
     pub async fn update_row(&self, table_name: &str, id: usize, new_row: Row, snapshot: &Snapshot) -> Result<bool> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
+        Self::maybe_sleep_on_write().await;
         table.update(id, new_row, snapshot)
     }
 
@@ -166,7 +175,18 @@ impl InMemoryStorage {
     pub async fn delete_row(&self, table_name: &str, id: usize, tx_id: u64) -> Result<bool> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
+        Self::maybe_sleep_on_write().await;
         table.delete(id, tx_id)
+    }
+
+    async fn maybe_sleep_on_write() {
+        let ms = std::env::var("RUSTMEMODB_TEST_SLOW_WRITE_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0);
+        if let Some(ms) = ms {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
     }
 
     /// Create an index on a column
@@ -225,6 +245,16 @@ impl InMemoryStorage {
             total_freed += table.vacuum(min_active_tx_id, aborted);
         }
         Ok(total_freed)
+    }
+
+    /// Total number of MVCC row versions across all tables
+    pub async fn version_count(&self) -> usize {
+        let mut total = 0;
+        for table_handle in self.tables.values() {
+            let table = table_handle.read().await;
+            total += table.version_count();
+        }
+        total
     }
 
     /// Fork the storage (Copy-On-Write)

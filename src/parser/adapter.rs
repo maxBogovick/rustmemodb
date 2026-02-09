@@ -284,6 +284,8 @@ impl SqlParserAdapter {
         let mut primary_key = false;
         let mut unique = false;
         let mut references = None;
+        let mut default = None;
+        let mut check = None;
 
         for opt in &col.options {
             match &opt.option {
@@ -302,6 +304,13 @@ impl SqlParserAdapter {
                     let column = referred_columns[0].value.clone();
                     references = Some(ForeignKey { table, column });
                 }
+                sql_ast::ColumnOption::Default(expr) => {
+                    default = Some(self.convert_default_expr(expr)?);
+                }
+                sql_ast::ColumnOption::Check(expr) => {
+                    let converted = self.expr_converter.convert(expr.clone(), self)?;
+                    check = Some(converted);
+                }
                 _ => {}
             }
         }
@@ -310,11 +319,44 @@ impl SqlParserAdapter {
             name: col.name.value,
             data_type,
             nullable,
-            default: None,
+            default,
             primary_key,
             unique,
             references,
+            check,
         })
+    }
+
+    fn convert_default_expr(&self, expr: &sql_ast::Expr) -> Result<crate::core::Value> {
+        use sql_ast::{Expr, UnaryOperator, Value as SqlValue};
+        match expr {
+            Expr::Value(v) => match &v.value {
+                SqlValue::Number(n, _) => crate::core::Value::parse_number(n),
+                SqlValue::SingleQuotedString(s) => Ok(crate::core::Value::Text(s.clone())),
+                SqlValue::Boolean(b) => Ok(crate::core::Value::Boolean(*b)),
+                SqlValue::Null => Ok(crate::core::Value::Null),
+                _ => Err(DbError::UnsupportedOperation("Unsupported DEFAULT literal".into())),
+            },
+            Expr::UnaryOp { op: UnaryOperator::Minus, expr } => {
+                match &**expr {
+                    Expr::Value(v) => match &v.value {
+                        SqlValue::Number(n, _) => {
+                            let val = crate::core::Value::parse_number(n)?;
+                            match val {
+                                crate::core::Value::Integer(i) => Ok(crate::core::Value::Integer(-i)),
+                                crate::core::Value::Float(f) => Ok(crate::core::Value::Float(-f)),
+                                _ => Err(DbError::TypeMismatch("Invalid default numeric literal".into())),
+                            }
+                        }
+                        _ => Err(DbError::UnsupportedOperation("Only numeric literals supported in DEFAULT".into())),
+                    },
+                    _ => Err(DbError::UnsupportedOperation("Only numeric literals supported in DEFAULT".into())),
+                }
+            }
+            _ => Err(DbError::UnsupportedOperation(
+                "Only literal DEFAULT expressions supported".into(),
+            )),
+        }
     }
 
     fn convert_data_type(&self, dt: &sql_ast::DataType) -> Result<DataType> {

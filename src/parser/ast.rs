@@ -98,6 +98,7 @@ pub struct ColumnDef {
     pub primary_key: bool,
     pub unique: bool,
     pub references: Option<ForeignKey>,
+    pub check: Option<Expr>,
 }
 
 /// INSERT statement
