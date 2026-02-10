@@ -1,7 +1,7 @@
-use super::super::{ExpressionEvaluator, EvaluationContext};
-use crate::parser::ast::{Expr, BinaryOp};
-use crate::core::{Result, Value, Row, Schema};
+use super::super::{EvaluationContext, ExpressionEvaluator};
+use crate::core::{Result, Row, Schema, Value};
 use crate::evaluator::plugins::comparison::ComparisonEvaluator;
+use crate::parser::ast::{BinaryOp, Expr};
 
 use async_trait::async_trait;
 
@@ -17,8 +17,20 @@ impl ExpressionEvaluator for BetweenEvaluator {
         matches!(expr, Expr::Between { .. })
     }
 
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
-        let Expr::Between { expr, low, high, negated } = expr else {
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value> {
+        let Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } = expr
+        else {
             unreachable!();
         };
 

@@ -56,14 +56,14 @@ impl ExpressionEvaluator for SubqueryEvaluator {
             } => {
                 let left_val = context.evaluate(left_expr, row, schema).await?;
                 let rows = handler.execute(subquery).await?;
-                
+
                 // Check if any row in subquery matches left_val
                 // Assuming subquery returns 1 column
                 // Optimization: Hash Set for large results? For now linear scan.
                 let mut found = false;
                 for r in rows {
                     if r.len() != 1 {
-                         return Err(DbError::ExecutionError(
+                        return Err(DbError::ExecutionError(
                             "Subquery in IN clause must return exactly one column".into(),
                         ));
                     }
@@ -72,7 +72,7 @@ impl ExpressionEvaluator for SubqueryEvaluator {
                         break;
                     }
                 }
-                
+
                 if *negated {
                     Ok(Value::Boolean(!found))
                 } else {
@@ -82,7 +82,7 @@ impl ExpressionEvaluator for SubqueryEvaluator {
             Expr::Exists { subquery, negated } => {
                 let rows = handler.execute(subquery).await?;
                 let exists = !rows.is_empty();
-                
+
                 if *negated {
                     Ok(Value::Boolean(!exists))
                 } else {

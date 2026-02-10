@@ -1,26 +1,28 @@
+use super::autocomplete::Autocompleter;
+use super::ui;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    text::{Line, Span},
-    style::{Color, Style, Modifier},
     Terminal,
+    backend::{Backend, CrosstermBackend},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
 };
-use std::{error::Error, io};
-use tui_textarea::{TextArea, Input, Key};
 use rustmemodb::facade::InMemoryDB;
-use super::ui;
-use super::autocomplete::Autocompleter;
+use std::{error::Error, io};
+use tui_textarea::{Input, Key, TextArea};
 
 pub struct App<'a> {
     pub textarea: TextArea<'a>,
     pub messages: Vec<Line<'static>>,
     pub db: InMemoryDB,
     pub exit: bool,
-    
+
     // Autocomplete State
     pub autocompleter: Autocompleter,
     pub suggestions: Vec<String>,
@@ -35,9 +37,12 @@ impl<'a> App<'a> {
         Self {
             textarea,
             messages: vec![
-                Line::from(vec![
-                    Span::styled("Welcome to RustMemDB CLI!", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                ]),
+                Line::from(vec![Span::styled(
+                    "Welcome to RustMemDB CLI!",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )]),
                 Line::from("Type your SQL query below and press Ctrl+E to execute."),
                 Line::from("--------------------------------------------------"),
             ],
@@ -49,10 +54,12 @@ impl<'a> App<'a> {
             popup_open: false,
         }
     }
-    
+
     fn new_textarea() -> TextArea<'static> {
         let mut textarea = TextArea::default();
-        textarea.set_placeholder_text("Enter SQL query (Press 'Ctrl+E' to execute, 'Tab' for autocomplete, 'Esc' to quit)");
+        textarea.set_placeholder_text(
+            "Enter SQL query (Press 'Ctrl+E' to execute, 'Tab' for autocomplete, 'Esc' to quit)",
+        );
         textarea.set_block(
             ratatui::widgets::Block::default()
                 .borders(ratatui::widgets::Borders::ALL)
@@ -60,7 +67,7 @@ impl<'a> App<'a> {
         );
         textarea
     }
-    
+
     fn reset_textarea(&mut self) {
         self.textarea = Self::new_textarea();
     }
@@ -102,13 +109,16 @@ impl<'a> App<'a> {
                         match key.code {
                             KeyCode::Down => {
                                 if !self.suggestions.is_empty() {
-                                    self.suggestion_index = (self.suggestion_index + 1) % self.suggestions.len();
+                                    self.suggestion_index =
+                                        (self.suggestion_index + 1) % self.suggestions.len();
                                 }
                                 continue;
                             }
                             KeyCode::Up => {
                                 if !self.suggestions.is_empty() {
-                                    self.suggestion_index = (self.suggestion_index + self.suggestions.len() - 1) % self.suggestions.len();
+                                    self.suggestion_index =
+                                        (self.suggestion_index + self.suggestions.len() - 1)
+                                            % self.suggestions.len();
                                 }
                                 continue;
                             }
@@ -122,7 +132,7 @@ impl<'a> App<'a> {
                             }
                             _ => {
                                 // Close popup if user types something else, but let it pass to textarea
-                                self.popup_open = false; 
+                                self.popup_open = false;
                             }
                         }
                     }
@@ -137,24 +147,24 @@ impl<'a> App<'a> {
                             self.execute_query().await;
                         }
                         KeyCode::Tab => {
-                             // Trigger autocomplete manually
-                             self.update_suggestions().await;
-                             if !self.suggestions.is_empty() {
-                                 self.popup_open = true;
-                                 self.suggestion_index = 0;
-                             }
+                            // Trigger autocomplete manually
+                            self.update_suggestions().await;
+                            if !self.suggestions.is_empty() {
+                                self.popup_open = true;
+                                self.suggestion_index = 0;
+                            }
                         }
                         _ => {
                             self.textarea.input(key);
                             // Auto-trigger on typing letters
                             if let KeyCode::Char(c) = key.code {
                                 if c.is_alphabetic() || c == '_' {
-                                     self.update_suggestions().await;
-                                     if !self.suggestions.is_empty() {
-                                         self.popup_open = true;
-                                     } else {
-                                         self.popup_open = false;
-                                     }
+                                    self.update_suggestions().await;
+                                    if !self.suggestions.is_empty() {
+                                        self.popup_open = true;
+                                    } else {
+                                        self.popup_open = false;
+                                    }
                                 } else {
                                     self.popup_open = false;
                                 }
@@ -187,30 +197,35 @@ impl<'a> App<'a> {
         }
         let suggestion = self.suggestions[self.suggestion_index].clone();
         let (word, _start_col) = self.get_current_word();
-        
+
         let cursor = self.textarea.cursor();
         let _line = cursor.0;
         let _col = cursor.1;
-        
+
         // Delete characters
         for _ in 0..word.chars().count() {
-            self.textarea.input(Input { key: Key::Backspace, ctrl: false, alt: false, shift: false });
+            self.textarea.input(Input {
+                key: Key::Backspace,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
         }
-        
+
         // Insert complete suggestion
         self.textarea.insert_str(&suggestion);
         self.popup_open = false;
     }
-    
+
     fn get_current_word(&self) -> (String, usize) {
         let cursor = self.textarea.cursor();
         let line_idx = cursor.0;
         let col_idx = cursor.1;
-        
+
         if line_idx >= self.textarea.lines().len() {
             return (String::new(), 0);
         }
-        
+
         let line = &self.textarea.lines()[line_idx];
         if col_idx == 0 {
             return (String::new(), 0);
@@ -221,7 +236,10 @@ impl<'a> App<'a> {
         let prefix_str: String = prefix_chars.iter().collect();
 
         // Search backwards
-        if let Some(start_char_idx) = prefix_chars.iter().rposition(|&c| !c.is_alphanumeric() && c != '_') {
+        if let Some(start_char_idx) = prefix_chars
+            .iter()
+            .rposition(|&c| !c.is_alphanumeric() && c != '_')
+        {
             // start_char_idx is the index of the separator
             let word: String = prefix_chars[start_char_idx + 1..].iter().collect();
             (word, start_char_idx + 1)
@@ -251,21 +269,22 @@ impl<'a> App<'a> {
                 if result.rows().is_empty() {
                     self.messages.push(Line::from(Span::styled(
                         format!("OK. Rows affected: {}", result.row_count()),
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(Color::Green),
                     )));
                 } else {
                     self.messages.push(Line::from(Span::styled(
                         format!("Success. {} rows found:", result.row_count()),
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(Color::Green),
                     )));
-                    
+
                     // Header
-                    let header: Vec<String> = result.columns().iter().map(|c| c.name.clone()).collect();
+                    let header: Vec<String> =
+                        result.columns().iter().map(|c| c.name.clone()).collect();
                     self.messages.push(Line::from(Span::styled(
                         format!("| {:?} |", header),
-                        Style::default().add_modifier(Modifier::BOLD)
+                        Style::default().add_modifier(Modifier::BOLD),
                     )));
-                    
+
                     // Rows
                     for row in result.rows() {
                         let row_str: Vec<String> = row.iter().map(|v| v.to_string()).collect();
@@ -276,13 +295,13 @@ impl<'a> App<'a> {
             Err(e) => {
                 self.messages.push(Line::from(Span::styled(
                     format!("Error: {}", e),
-                    Style::default().fg(Color::Red)
+                    Style::default().fg(Color::Red),
                 )));
             }
         }
         self.messages.push(Line::from(Span::styled(
             "-".repeat(50),
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::DarkGray),
         )));
     }
 }

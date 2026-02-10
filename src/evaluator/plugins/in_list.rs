@@ -16,8 +16,19 @@ impl ExpressionEvaluator for InListEvaluator {
         matches!(expr, Expr::In { .. })
     }
 
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
-        let Expr::In { expr, list, negated } = expr else {
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value> {
+        let Expr::In {
+            expr,
+            list,
+            negated,
+        } = expr
+        else {
             return Err(DbError::ExecutionError("Invalid IN expression".into()));
         };
 

@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::env;
+use uuid::Uuid;
 
 // ============================================================================
 // Domain Models (Pure Rust, no DB dependencies)
@@ -82,7 +82,7 @@ pub struct PostgresRepository {
 impl PostgresRepository {
     pub async fn connect(config: &str) -> anyhow::Result<Self> {
         let (client, connection) = tokio_postgres::connect(config, tokio_postgres::NoTls).await?;
-        
+
         // Spawn the connection handler
         tokio::spawn(async move {
             if let Err(e) = connection.await {
@@ -97,28 +97,35 @@ impl PostgresRepository {
 #[async_trait]
 impl TodoRepository for PostgresRepository {
     async fn init(&self) -> anyhow::Result<()> {
-        self.client.execute(
-            "CREATE TABLE IF NOT EXISTS todos (
+        self.client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS todos (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 completed BOOLEAN NOT NULL
             )",
-            &[]
-        ).await?;
+                &[],
+            )
+            .await?;
         Ok(())
     }
 
     async fn create(&self, todo: &Todo) -> anyhow::Result<()> {
-        self.client.execute(
-            "INSERT INTO todos (id, title, completed) VALUES ($1, $2, $3)",
-            &[&todo.id, &todo.title, &todo.completed],
-        ).await?;
+        self.client
+            .execute(
+                "INSERT INTO todos (id, title, completed) VALUES ($1, $2, $3)",
+                &[&todo.id, &todo.title, &todo.completed],
+            )
+            .await?;
         Ok(())
     }
 
     async fn list(&self) -> anyhow::Result<Vec<Todo>> {
-        let rows = self.client.query("SELECT id, title, completed FROM todos", &[]).await?;
-        
+        let rows = self
+            .client
+            .query("SELECT id, title, completed FROM todos", &[])
+            .await?;
+
         let mut todos = Vec::new();
         for row in rows {
             todos.push(Todo {
@@ -131,10 +138,9 @@ impl TodoRepository for PostgresRepository {
     }
 
     async fn complete(&self, id: &str) -> anyhow::Result<()> {
-        self.client.execute(
-            "UPDATE todos SET completed = true WHERE id = $1",
-            &[&id],
-        ).await?;
+        self.client
+            .execute("UPDATE todos SET completed = true WHERE id = $1", &[&id])
+            .await?;
         Ok(())
     }
 }
@@ -153,7 +159,9 @@ pub struct RustMemDbRepository {
 impl RustMemDbRepository {
     pub async fn new_isolated() -> Self {
         // Connect to an isolated in-memory instance
-        let client = rustmemodb::Client::connect_local("admin", "adminpass").await.unwrap();
+        let client = rustmemodb::Client::connect_local("admin", "adminpass")
+            .await
+            .unwrap();
         Self { client }
     }
 }
@@ -162,19 +170,21 @@ impl RustMemDbRepository {
 impl TodoRepository for RustMemDbRepository {
     async fn init(&self) -> anyhow::Result<()> {
         // RustMemDB SQL syntax is compatible for this simple case
-        self.client.execute(
-            "CREATE TABLE todos (
+        self.client
+            .execute(
+                "CREATE TABLE todos (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 completed BOOLEAN NOT NULL
-            )"
-        ).await?;
+            )",
+            )
+            .await?;
         Ok(())
     }
 
     async fn create(&self, todo: &Todo) -> anyhow::Result<()> {
-        // RustMemDB currently supports basic SQL. Parameterized queries 
-        // via `prepared` are not yet fully exposed in the simplified client API, 
+        // RustMemDB currently supports basic SQL. Parameterized queries
+        // via `prepared` are not yet fully exposed in the simplified client API,
         // so we format the string (safe in this controlled env, but generic client supports it).
         // Note: In a full impl, we would use the parameterized API if available.
         let sql = format!(
@@ -186,8 +196,11 @@ impl TodoRepository for RustMemDbRepository {
     }
 
     async fn list(&self) -> anyhow::Result<Vec<Todo>> {
-        let result = self.client.query("SELECT id, title, completed FROM todos").await?;
-        
+        let result = self
+            .client
+            .query("SELECT id, title, completed FROM todos")
+            .await?;
+
         let mut todos = Vec::new();
         for row in result.rows() {
             // Row is Vec<Value>
@@ -214,26 +227,29 @@ impl TodoRepository for RustMemDbRepository {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 1. Try to connect to real Postgres
-    let conn_str = env::var("DATABASE_URL").unwrap_or_else(|_| "host=localhost user=postgres password=postgres".to_string());
-    
+    let conn_str = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "host=localhost user=postgres password=postgres".to_string());
+
     println!("Connecting to PostgreSQL at: {}", conn_str);
-    
+
     match PostgresRepository::connect(&conn_str).await {
         Ok(repo) => {
             println!("Connected to PostgreSQL successfully!");
             let service = TodoService::new(Box::new(repo));
-            
+
             // Run the app logic
             service.init().await?;
             let t = service.add_todo("Learn Rust".to_string()).await?;
             println!("Created: {:?}", t);
-            
+
             let list = service.get_all_todos().await?;
             println!("Current todos: {} items", list.len());
         }
         Err(e) => {
             eprintln!("Failed to connect to PostgreSQL: {}", e);
-            eprintln!("(This is expected if no Postgres is running. Run unit tests to see RustMemDB in action.)");
+            eprintln!(
+                "(This is expected if no Postgres is running. Run unit tests to see RustMemDB in action.)"
+            );
         }
     }
 
@@ -254,30 +270,30 @@ mod tests {
 
         // 1. Dependency Injection: Use RustMemDB implementation
         let repository = RustMemDbRepository::new_isolated().await;
-        
+
         // 2. Initialize Service with the mock DB
         let service = TodoService::new(Box::new(repository));
-        
+
         // 3. Perform Business Logic Tests
         service.init().await?;
-        
+
         // Create
         let todo = service.add_todo("Test generic app".to_string()).await?;
         assert_eq!(todo.title, "Test generic app");
         assert!(!todo.completed);
-        
+
         // List
         let list = service.get_all_todos().await?;
         assert_eq!(list.len(), 1);
-        
+
         // Update
         service.mark_completed(&todo.id).await?;
-        
+
         // Verify
         let list_after = service.get_all_todos().await?;
         let updated = list_after.first().unwrap();
         assert!(updated.completed);
-        
+
         println!("Test Passed: Application logic verified using In-Memory Database!");
         Ok(())
     }

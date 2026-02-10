@@ -3,7 +3,6 @@
 /// This example demonstrates user creation, authentication, and permissions.
 ///
 /// Run: cargo run --example user_management
-
 use rustmemodb::{Client, Permission, Result};
 
 #[tokio::main]
@@ -29,11 +28,8 @@ async fn main() -> Result<()> {
     println!("2. Creating new users...");
 
     // Read-only user
-    auth.create_user(
-        "alice",
-        "alice_password",
-        vec![Permission::Select],
-    ).await?;
+    auth.create_user("alice", "alice_password", vec![Permission::Select])
+        .await?;
     println!("   ✓ Created user 'alice' (SELECT only)");
 
     // Read-write user
@@ -46,7 +42,8 @@ async fn main() -> Result<()> {
             Permission::Update,
             Permission::Delete,
         ],
-    ).await?;
+    )
+    .await?;
     println!("   ✓ Created user 'bob' (full DML)");
 
     // Schema admin
@@ -59,7 +56,8 @@ async fn main() -> Result<()> {
             Permission::CreateTable,
             Permission::DropTable,
         ],
-    ).await?;
+    )
+    .await?;
     println!("   ✓ Created user 'charlie' (DDL + DML)\n");
 
     // ============================================================================
@@ -90,9 +88,18 @@ async fn main() -> Result<()> {
 
     let alice = auth.get_user("alice").await?;
     println!("   Alice permissions:");
-    println!("     - SELECT: {}", alice.has_permission(Permission::Select));
-    println!("     - INSERT: {}", alice.has_permission(Permission::Insert));
-    println!("     - CREATE TABLE: {}", alice.has_permission(Permission::CreateTable));
+    println!(
+        "     - SELECT: {}",
+        alice.has_permission(Permission::Select)
+    );
+    println!(
+        "     - INSERT: {}",
+        alice.has_permission(Permission::Insert)
+    );
+    println!(
+        "     - CREATE TABLE: {}",
+        alice.has_permission(Permission::CreateTable)
+    );
     println!();
 
     let bob = auth.get_user("bob").await?;
@@ -108,20 +115,41 @@ async fn main() -> Result<()> {
     // ============================================================================
     println!("5. Modifying permissions...");
 
-    println!("{}", "   Alice before: INSERT = "
-        .to_string() + &auth.get_user("alice").await?.has_permission(Permission::Insert).to_string());
+    println!(
+        "{}",
+        "   Alice before: INSERT = ".to_string()
+            + &auth
+                .get_user("alice")
+                .await?
+                .has_permission(Permission::Insert)
+                .to_string()
+    );
 
     auth.grant_permission("alice", Permission::Insert).await?;
     println!("   ✓ Granted INSERT to Alice");
 
-    println!("{}", "   Alice after: INSERT = "
-        .to_string() + &auth.get_user("alice").await?.has_permission(Permission::Insert).to_string());
+    println!(
+        "{}",
+        "   Alice after: INSERT = ".to_string()
+            + &auth
+                .get_user("alice")
+                .await?
+                .has_permission(Permission::Insert)
+                .to_string()
+    );
 
     auth.revoke_permission("alice", Permission::Insert).await?;
     println!("   ✓ Revoked INSERT from Alice");
 
-    println!("{}", "   Alice final: INSERT = "
-        .to_string() + &auth.get_user("alice").await?.has_permission(Permission::Insert).to_string());
+    println!(
+        "{}",
+        "   Alice final: INSERT = ".to_string()
+            + &auth
+                .get_user("alice")
+                .await?
+                .has_permission(Permission::Insert)
+                .to_string()
+    );
     println!();
 
     // ============================================================================
@@ -185,7 +213,7 @@ async fn main() -> Result<()> {
 
     match auth.get_user("charlie").await {
         Ok(_) => println!("   ✗ Charlie still exists!"),
-        Err(_) => println!("   ✓ Charlie no longer exists")
+        Err(_) => println!("   ✓ Charlie no longer exists"),
     }
     println!();
 

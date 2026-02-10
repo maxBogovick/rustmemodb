@@ -12,10 +12,10 @@
 //
 // ============================================================================
 
+pub mod change;
 pub mod manager;
 pub mod state;
-pub mod change;
 
-pub use manager::TransactionManager;
-pub use state::{Transaction, TransactionState, TransactionId};
 pub use change::Change;
+pub use manager::TransactionManager;
+pub use state::{Transaction, TransactionId, TransactionState};

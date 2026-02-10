@@ -44,7 +44,7 @@ impl Executor for BeginExecutor {
         // Check for nested transaction
         if ctx.is_in_transaction() {
             return Err(DbError::ExecutionError(
-                "Nested transactions are not supported. Use COMMIT or ROLLBACK first.".into()
+                "Nested transactions are not supported. Use COMMIT or ROLLBACK first.".into(),
             ));
         }
 
@@ -52,7 +52,9 @@ impl Executor for BeginExecutor {
         // This executor just validates the statement is legal
         // The actual BEGIN is handled in the Client/Connection
 
-        Ok(QueryResult::empty_with_message("Transaction started".to_string()))
+        Ok(QueryResult::empty_with_message(
+            "Transaction started".to_string(),
+        ))
     }
 }
 
@@ -81,14 +83,16 @@ impl Executor for CommitExecutor {
         // Must be in a transaction to commit
         if !ctx.is_in_transaction() {
             return Err(DbError::ExecutionError(
-                "No active transaction. Use BEGIN to start a transaction.".into()
+                "No active transaction. Use BEGIN to start a transaction.".into(),
             ));
         }
 
         // Actual commit is handled at the connection level
         // This executor just validates the statement is legal
 
-        Ok(QueryResult::empty_with_message("Transaction committed".to_string()))
+        Ok(QueryResult::empty_with_message(
+            "Transaction committed".to_string(),
+        ))
     }
 }
 
@@ -117,14 +121,16 @@ impl Executor for RollbackExecutor {
         // Rollback without active transaction is a no-op (SQL standard behavior)
         if !ctx.is_in_transaction() {
             return Ok(QueryResult::empty_with_message(
-                "No active transaction to rollback".to_string()
+                "No active transaction to rollback".to_string(),
             ));
         }
 
         // Actual rollback is handled at the connection level
         // This executor just validates the statement is legal
 
-        Ok(QueryResult::empty_with_message("Transaction rolled back".to_string()))
+        Ok(QueryResult::empty_with_message(
+            "Transaction rolled back".to_string(),
+        ))
     }
 }
 
@@ -182,7 +188,12 @@ mod tests {
 
         let result = executor.execute(&Statement::Commit, &ctx).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No active transaction"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No active transaction")
+        );
     }
 
     #[tokio::test]

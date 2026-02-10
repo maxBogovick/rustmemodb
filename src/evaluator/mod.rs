@@ -22,7 +22,13 @@ pub trait ExpressionEvaluator: Send + Sync {
     fn can_evaluate(&self, expr: &Expr) -> bool;
 
     /// Вычислить выражение
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value>;
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value>;
 }
 
 /// Контекст для оценки выражений
@@ -33,11 +39,16 @@ pub struct EvaluationContext<'a> {
     pub subquery_handler: Option<&'a dyn SubqueryHandler>,
     /// Параметры запроса ($1, $2...)
     pub params: &'a [Value],
-    column_cache: std::sync::Mutex<std::collections::HashMap<usize, std::collections::HashMap<String, usize>>>,
+    column_cache: std::sync::Mutex<
+        std::collections::HashMap<usize, std::collections::HashMap<String, usize>>,
+    >,
 }
 
 impl<'a> EvaluationContext<'a> {
-    pub fn new(registry: &'a EvaluatorRegistry, subquery_handler: Option<&'a dyn SubqueryHandler>) -> Self {
+    pub fn new(
+        registry: &'a EvaluatorRegistry,
+        subquery_handler: Option<&'a dyn SubqueryHandler>,
+    ) -> Self {
         Self {
             registry,
             subquery_handler,
@@ -46,7 +57,11 @@ impl<'a> EvaluationContext<'a> {
         }
     }
 
-    pub fn with_params(registry: &'a EvaluatorRegistry, subquery_handler: Option<&'a dyn SubqueryHandler>, params: &'a [Value]) -> Self {
+    pub fn with_params(
+        registry: &'a EvaluatorRegistry,
+        subquery_handler: Option<&'a dyn SubqueryHandler>,
+        params: &'a [Value],
+    ) -> Self {
         Self {
             registry,
             subquery_handler,
@@ -60,22 +75,18 @@ impl<'a> EvaluationContext<'a> {
         // Базовые случаи (всегда напрямую)
         match expr {
             Expr::Column(name) => {
-                let idx = self
-                    .find_column_index_cached(schema, name)
-                    .ok_or_else(|| crate::core::DbError::ColumnNotFound(
-                        name.clone(),
-                        "table".into()
-                    ))?;
+                let idx = self.find_column_index_cached(schema, name).ok_or_else(|| {
+                    crate::core::DbError::ColumnNotFound(name.clone(), "table".into())
+                })?;
                 return Ok(row[idx].clone());
             }
             Expr::CompoundIdentifier(parts) => {
                 let name = parts.join(".");
                 let idx = self
                     .find_column_index_cached(schema, &name)
-                    .ok_or_else(|| crate::core::DbError::ColumnNotFound(
-                        name.clone(),
-                        "table".into()
-                    ))?;
+                    .ok_or_else(|| {
+                        crate::core::DbError::ColumnNotFound(name.clone(), "table".into())
+                    })?;
                 return Ok(row[idx].clone());
             }
             Expr::Literal(val) => {
@@ -85,7 +96,8 @@ impl<'a> EvaluationContext<'a> {
                 // Parameters are 1-based in SQL ($1), but 0-based in array
                 if *idx == 0 || *idx > self.params.len() {
                     return Err(crate::core::DbError::ExecutionError(format!(
-                        "Parameter index out of range: ${}", idx
+                        "Parameter index out of range: ${}",
+                        idx
                     )));
                 }
                 return Ok(self.params[*idx - 1].clone());
@@ -106,16 +118,23 @@ impl<'a> EvaluationContext<'a> {
 
     fn find_column_index_cached(&self, schema: &Schema, name: &str) -> Option<usize> {
         let key = schema as *const Schema as usize;
-        let mut cache = self.column_cache.lock().expect("column cache mutex poisoned");
-        let entry = cache.entry(key).or_insert_with(|| build_column_index_cache(schema));
+        let mut cache = self
+            .column_cache
+            .lock()
+            .expect("column cache mutex poisoned");
+        let entry = cache
+            .entry(key)
+            .or_insert_with(|| build_column_index_cache(schema));
         entry.get(name).copied()
     }
 }
 
 fn build_column_index_cache(schema: &Schema) -> std::collections::HashMap<String, usize> {
     let mut exact = std::collections::HashMap::new();
-    let mut suffix_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut suffix_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut suffix_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut suffix_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     for (idx, col) in schema.columns().iter().enumerate() {
         exact.insert(col.name.clone(), idx);

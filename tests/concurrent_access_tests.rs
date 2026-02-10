@@ -2,21 +2,29 @@
 ///
 /// Tests for multi-threaded database access and connection pool behavior
 /// Run with: cargo test --test concurrent_access_tests
-
 use rustmemodb::{Client, ConnectionConfig};
-use std::sync::{Arc};
-use tokio::sync::Barrier;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Barrier;
 
 #[tokio::test]
 async fn test_concurrent_reads() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute("CREATE TABLE concurrent_read (id INTEGER, data TEXT)").await.unwrap();
+    client
+        .execute("CREATE TABLE concurrent_read (id INTEGER, data TEXT)")
+        .await
+        .unwrap();
 
     // Insert test data
     for i in 0..100 {
-        client.execute(&format!("INSERT INTO concurrent_read VALUES ({}, 'data_{}')", i, i)).await.unwrap();
+        client
+            .execute(&format!(
+                "INSERT INTO concurrent_read VALUES ({}, 'data_{}')",
+                i, i
+            ))
+            .await
+            .unwrap();
     }
 
     let mut handles = vec![];
@@ -27,8 +35,16 @@ async fn test_concurrent_reads() {
 
         let handle = tokio::spawn(async move {
             for _ in 0..50 {
-                let result = client_clone.query("SELECT * FROM concurrent_read").await.unwrap();
-                assert_eq!(result.row_count(), 100, "Task {} read incorrect count", task_id);
+                let result = client_clone
+                    .query("SELECT * FROM concurrent_read")
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result.row_count(),
+                    100,
+                    "Task {} read incorrect count",
+                    task_id
+                );
             }
         });
 
@@ -44,7 +60,10 @@ async fn test_concurrent_reads() {
 async fn test_concurrent_writes() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute("CREATE TABLE concurrent_write (id INTEGER, thread_id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE concurrent_write (id INTEGER, thread_id INTEGER)")
+        .await
+        .unwrap();
 
     let mut handles = vec![];
     let num_tasks = 5;
@@ -56,10 +75,13 @@ async fn test_concurrent_writes() {
         let handle = tokio::spawn(async move {
             for i in 0..writes_per_task {
                 let id = task_id * 1000 + i;
-                client_clone.execute(&format!(
-                    "INSERT INTO concurrent_write VALUES ({}, {})",
-                    id, task_id
-                )).await.unwrap();
+                client_clone
+                    .execute(&format!(
+                        "INSERT INTO concurrent_write VALUES ({}, {})",
+                        id, task_id
+                    ))
+                    .await
+                    .unwrap();
             }
         });
 
@@ -71,7 +93,10 @@ async fn test_concurrent_writes() {
     }
 
     // Verify all writes succeeded
-    let result = client.query("SELECT * FROM concurrent_write").await.unwrap();
+    let result = client
+        .query("SELECT * FROM concurrent_write")
+        .await
+        .unwrap();
     assert_eq!(result.row_count(), num_tasks * writes_per_task);
 }
 
@@ -79,11 +104,21 @@ async fn test_concurrent_writes() {
 async fn test_concurrent_read_write_mix() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute("CREATE TABLE concurrent_mix (id INTEGER, value INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE concurrent_mix (id INTEGER, value INTEGER)")
+        .await
+        .unwrap();
 
     // Pre-populate with some data
     for i in 0..50 {
-        client.execute(&format!("INSERT INTO concurrent_mix VALUES ({}, {})", i, i * 10)).await.unwrap();
+        client
+            .execute(&format!(
+                "INSERT INTO concurrent_mix VALUES ({}, {})",
+                i,
+                i * 10
+            ))
+            .await
+            .unwrap();
     }
 
     let mut handles = vec![];
@@ -98,7 +133,10 @@ async fn test_concurrent_read_write_mix() {
             barrier_clone.wait().await;
 
             for _ in 0..30 {
-                let result = client_clone.query("SELECT * FROM concurrent_mix WHERE value > 100").await.unwrap();
+                let result = client_clone
+                    .query("SELECT * FROM concurrent_mix WHERE value > 100")
+                    .await
+                    .unwrap();
                 assert!(!result.columns().is_empty(), "Reader {} failed", task_id);
             }
         });
@@ -116,10 +154,14 @@ async fn test_concurrent_read_write_mix() {
 
             for i in 0..10 {
                 let id = 1000 + task_id * 100 + i;
-                client_clone.execute(&format!(
-                    "INSERT INTO concurrent_mix VALUES ({}, {})",
-                    id, id * 10
-                )).await.unwrap();
+                client_clone
+                    .execute(&format!(
+                        "INSERT INTO concurrent_mix VALUES ({}, {})",
+                        id,
+                        id * 10
+                    ))
+                    .await
+                    .unwrap();
             }
         });
 
@@ -143,7 +185,10 @@ async fn test_connection_pool_under_load() {
 
     let client = Arc::new(Client::connect_with_config(config).await.unwrap());
 
-    client.execute("CREATE TABLE pool_load (id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE pool_load (id INTEGER)")
+        .await
+        .unwrap();
 
     let mut handles = vec![];
     let num_tasks = 20;
@@ -154,7 +199,10 @@ async fn test_connection_pool_under_load() {
         let handle = tokio::spawn(async move {
             for i in 0..10 {
                 let id = task_id * 100 + i;
-                client_clone.execute(&format!("INSERT INTO pool_load VALUES ({})", id)).await.unwrap();
+                client_clone
+                    .execute(&format!("INSERT INTO pool_load VALUES ({})", id))
+                    .await
+                    .unwrap();
 
                 // Small sleep to simulate real workload
                 tokio::time::sleep(Duration::from_millis(1)).await;
@@ -180,13 +228,18 @@ async fn test_connection_pool_reuse() {
 
     let client = Client::connect_with_config(config).await.unwrap();
 
-    client.execute("CREATE TABLE pool_reuse (id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE pool_reuse (id INTEGER)")
+        .await
+        .unwrap();
 
     // Get connection, use it, and return to pool
     {
         let mut conn = client.get_connection().await.unwrap();
         let _conn_id = conn.connection().id();
-        conn.execute("INSERT INTO pool_reuse VALUES (1)").await.unwrap();
+        conn.execute("INSERT INTO pool_reuse VALUES (1)")
+            .await
+            .unwrap();
     }
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -195,7 +248,9 @@ async fn test_connection_pool_reuse() {
     {
         let mut conn = client.get_connection().await.unwrap();
         let _conn_id2 = conn.connection().id();
-        conn.execute("INSERT INTO pool_reuse VALUES (2)").await.unwrap();
+        conn.execute("INSERT INTO pool_reuse VALUES (2)")
+            .await
+            .unwrap();
     }
 
     let stats = client.stats().await;
@@ -213,10 +268,13 @@ async fn test_concurrent_table_creation() {
 
         let handle = tokio::spawn(async move {
             let table_name = format!("concurrent_table_{}", i);
-            client_clone.execute(&format!(
-                "CREATE TABLE {} (id INTEGER, data TEXT)",
-                table_name
-            )).await.unwrap();
+            client_clone
+                .execute(&format!(
+                    "CREATE TABLE {} (id INTEGER, data TEXT)",
+                    table_name
+                ))
+                .await
+                .unwrap();
         });
 
         handles.push(handle);
@@ -240,16 +298,24 @@ async fn test_concurrent_queries_different_tables() {
 
     // Create multiple tables
     for i in 0..5 {
-        client.execute(&format!(
-            "CREATE TABLE multi_table_{} (id INTEGER, value INTEGER)",
-            i
-        )).await.unwrap();
+        client
+            .execute(&format!(
+                "CREATE TABLE multi_table_{} (id INTEGER, value INTEGER)",
+                i
+            ))
+            .await
+            .unwrap();
 
         for j in 0..20 {
-            client.execute(&format!(
-                "INSERT INTO multi_table_{} VALUES ({}, {})",
-                i, j, j * 10
-            )).await.unwrap();
+            client
+                .execute(&format!(
+                    "INSERT INTO multi_table_{} VALUES ({}, {})",
+                    i,
+                    j,
+                    j * 10
+                ))
+                .await
+                .unwrap();
         }
     }
 
@@ -260,10 +326,13 @@ async fn test_concurrent_queries_different_tables() {
 
         let handle = tokio::spawn(async move {
             for _ in 0..50 {
-                let result = client_clone.query(&format!(
-                    "SELECT * FROM multi_table_{} WHERE value > 50",
-                    table_id
-                )).await.unwrap();
+                let result = client_clone
+                    .query(&format!(
+                        "SELECT * FROM multi_table_{} WHERE value > 50",
+                        table_id
+                    ))
+                    .await
+                    .unwrap();
 
                 assert!(result.row_count() > 0);
             }
@@ -281,7 +350,10 @@ async fn test_concurrent_queries_different_tables() {
 async fn test_concurrent_transactions() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute("CREATE TABLE concurrent_tx (id INTEGER, thread_id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE concurrent_tx (id INTEGER, thread_id INTEGER)")
+        .await
+        .unwrap();
 
     let mut handles = vec![];
     let num_tasks = 5;
@@ -299,7 +371,9 @@ async fn test_concurrent_transactions() {
                 conn.execute(&format!(
                     "INSERT INTO concurrent_tx VALUES ({}, {})",
                     id, task_id
-                )).await.unwrap();
+                ))
+                .await
+                .unwrap();
             }
 
             conn.commit().await.unwrap();
@@ -324,7 +398,10 @@ async fn test_concurrent_stress_test() {
 
     let client = Arc::new(Client::connect_with_config(config).await.unwrap());
 
-    client.execute("CREATE TABLE stress_test (id INTEGER, thread_id INTEGER, operation TEXT)").await.unwrap();
+    client
+        .execute("CREATE TABLE stress_test (id INTEGER, thread_id INTEGER, operation TEXT)")
+        .await
+        .unwrap();
 
     let mut handles = vec![];
     let num_tasks = 15;
@@ -340,16 +417,22 @@ async fn test_concurrent_stress_test() {
                 // Mix of operations
                 if i % 3 == 0 {
                     // Write
-                    client_clone.execute(&format!(
-                        "INSERT INTO stress_test VALUES ({}, {}, 'insert')",
-                        id, task_id
-                    )).await.unwrap();
+                    client_clone
+                        .execute(&format!(
+                            "INSERT INTO stress_test VALUES ({}, {}, 'insert')",
+                            id, task_id
+                        ))
+                        .await
+                        .unwrap();
                 } else {
                     // Read
-                    let _result = client_clone.query(&format!(
-                        "SELECT * FROM stress_test WHERE thread_id = {}",
-                        task_id
-                    )).await.unwrap();
+                    let _result = client_clone
+                        .query(&format!(
+                            "SELECT * FROM stress_test WHERE thread_id = {}",
+                            task_id
+                        ))
+                        .await
+                        .unwrap();
                 }
             }
         });
@@ -365,7 +448,9 @@ async fn test_concurrent_stress_test() {
 
     // Should have inserted operations_per_task / 3 rows per task
     let expected = num_tasks * (operations_per_task / 3 + 1);
-    assert!(result.row_count() >= expected - num_tasks && result.row_count() <= expected + num_tasks);
+    assert!(
+        result.row_count() >= expected - num_tasks && result.row_count() <= expected + num_tasks
+    );
 }
 
 #[tokio::test]
@@ -377,7 +462,10 @@ async fn test_pool_exhaustion_recovery() {
 
     let client = Arc::new(Client::connect_with_config(config).await.unwrap());
 
-    client.execute("CREATE TABLE pool_exhaustion (id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE pool_exhaustion (id INTEGER)")
+        .await
+        .unwrap();
 
     // Hold all connections
     let conn1 = client.get_connection().await.unwrap();
@@ -413,12 +501,21 @@ async fn test_pool_exhaustion_recovery() {
 async fn test_concurrent_order_by_queries() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute("CREATE TABLE concurrent_sort (id INTEGER, value INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE concurrent_sort (id INTEGER, value INTEGER)")
+        .await
+        .unwrap();
 
     // Insert unsorted data
     for i in 0..100 {
         let value = 100 - i;
-        client.execute(&format!("INSERT INTO concurrent_sort VALUES ({}, {})", i, value)).await.unwrap();
+        client
+            .execute(&format!(
+                "INSERT INTO concurrent_sort VALUES ({}, {})",
+                i, value
+            ))
+            .await
+            .unwrap();
     }
 
     let mut handles = vec![];
@@ -428,9 +525,10 @@ async fn test_concurrent_order_by_queries() {
 
         let handle = tokio::spawn(async move {
             for _ in 0..20 {
-                let result = client_clone.query(
-                    "SELECT * FROM concurrent_sort ORDER BY value DESC LIMIT 10"
-                ).await.unwrap();
+                let result = client_clone
+                    .query("SELECT * FROM concurrent_sort ORDER BY value DESC LIMIT 10")
+                    .await
+                    .unwrap();
 
                 assert_eq!(result.row_count(), 10, "Task {} got wrong count", task_id);
             }
@@ -448,15 +546,18 @@ async fn test_concurrent_order_by_queries() {
 async fn test_concurrent_complex_queries() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute(
-        "CREATE TABLE concurrent_complex (
+    client
+        .execute(
+            "CREATE TABLE concurrent_complex (
             id INTEGER,
             category TEXT,
             price FLOAT,
             stock INTEGER,
             featured BOOLEAN
-        )"
-    ).await.unwrap();
+        )",
+        )
+        .await
+        .unwrap();
 
     // Insert diverse data
     for i in 0..200 {
@@ -470,10 +571,13 @@ async fn test_concurrent_complex_queries() {
         let stock = i % 100;
         let featured = i % 10 == 0;
 
-        client.execute(&format!(
-            "INSERT INTO concurrent_complex VALUES ({}, '{}', {}, {}, {})",
-            i, category, price, stock, featured
-        )).await.unwrap();
+        client
+            .execute(&format!(
+                "INSERT INTO concurrent_complex VALUES ({}, '{}', {}, {}, {})",
+                i, category, price, stock, featured
+            ))
+            .await
+            .unwrap();
     }
 
     let mut handles = vec![];
@@ -483,16 +587,23 @@ async fn test_concurrent_complex_queries() {
 
         let handle = tokio::spawn(async move {
             for _ in 0..25 {
-                let result = client_clone.query(
-                    "SELECT * FROM concurrent_complex
+                let result = client_clone
+                    .query(
+                        "SELECT * FROM concurrent_complex
                      WHERE category = 'Electronics' AND price > 50
                         OR featured = true AND stock > 20
                      ORDER BY price DESC
-                     LIMIT 20"
-                ).await.unwrap();
+                     LIMIT 20",
+                    )
+                    .await
+                    .unwrap();
 
-                assert!(result.row_count() > 0 && result.row_count() <= 20,
-                    "Task {} got unexpected count: {}", task_id, result.row_count());
+                assert!(
+                    result.row_count() > 0 && result.row_count() <= 20,
+                    "Task {} got unexpected count: {}",
+                    task_id,
+                    result.row_count()
+                );
             }
         });
 
@@ -508,7 +619,10 @@ async fn test_concurrent_complex_queries() {
 async fn test_barrier_synchronized_access() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute("CREATE TABLE barrier_test (id INTEGER, timestamp INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE barrier_test (id INTEGER, timestamp INTEGER)")
+        .await
+        .unwrap();
 
     let num_tasks = 10;
     let barrier = Arc::new(Barrier::new(num_tasks));
@@ -528,10 +642,13 @@ async fn test_barrier_synchronized_access() {
                 .unwrap()
                 .as_millis() as i64;
 
-            client_clone.execute(&format!(
-                "INSERT INTO barrier_test VALUES ({}, {})",
-                task_id, timestamp
-            )).await.unwrap();
+            client_clone
+                .execute(&format!(
+                    "INSERT INTO barrier_test VALUES ({}, {})",
+                    task_id, timestamp
+                ))
+                .await
+                .unwrap();
         });
 
         handles.push(handle);
@@ -549,7 +666,10 @@ async fn test_barrier_synchronized_access() {
 async fn test_connection_state_isolation() {
     let client = Arc::new(Client::connect("admin", "adminpass").await.unwrap());
 
-    client.execute("CREATE TABLE state_isolation (id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE state_isolation (id INTEGER)")
+        .await
+        .unwrap();
 
     let mut conn1 = client.get_connection().await.unwrap();
     let mut conn2 = client.get_connection().await.unwrap();

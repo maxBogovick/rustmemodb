@@ -1,8 +1,8 @@
+use super::ExecutionContext;
+use crate::core::Result;
 use crate::parser::ast::Statement;
 use crate::result::QueryResult;
 use crate::storage::Catalog;
-use crate::core::Result;
-use super::ExecutionContext;
 
 use async_trait::async_trait;
 
@@ -31,7 +31,11 @@ impl ExecutorPipeline {
         self.executors.push(executor);
     }
 
-    pub async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
+    pub async fn execute(
+        &self,
+        stmt: &Statement,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<QueryResult> {
         for executor in &self.executors {
             if executor.can_handle(stmt) {
                 return executor.execute(stmt, ctx).await;
@@ -39,7 +43,7 @@ impl ExecutorPipeline {
         }
 
         Err(crate::core::DbError::UnsupportedOperation(
-            "No executor found for statement".into()
+            "No executor found for statement".into(),
         ))
     }
 

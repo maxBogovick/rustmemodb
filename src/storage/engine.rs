@@ -1,5 +1,5 @@
-use crate::core::{Result, Row};
 use super::table::TableSchema;
+use crate::core::{Result, Row};
 
 /// Storage engine trait - allows pluggable storage backends
 pub trait StorageEngine: Send + Sync {

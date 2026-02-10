@@ -4,7 +4,6 @@
 /// and performance characteristics.
 ///
 /// Run: cargo run --example connection_pooling
-
 use rustmemodb::{Client, ConnectionConfig, Result};
 use std::thread;
 use std::time::Duration;
@@ -36,7 +35,9 @@ async fn main() -> Result<()> {
     println!();
 
     // Setup test table
-    client.execute("CREATE TABLE test (id INTEGER, data TEXT)").await?;
+    client
+        .execute("CREATE TABLE test (id INTEGER, data TEXT)")
+        .await?;
 
     // ============================================================================
     // 3. Pool Utilization
@@ -56,9 +57,15 @@ async fn main() -> Result<()> {
     println!("   After conn3: {}", client.stats().await);
 
     // Use connections
-    conn1.execute("INSERT INTO test VALUES (1, 'data1')").await?;
-    conn2.execute("INSERT INTO test VALUES (2, 'data2')").await?;
-    conn3.execute("INSERT INTO test VALUES (3, 'data3')").await?;
+    conn1
+        .execute("INSERT INTO test VALUES (1, 'data1')")
+        .await?;
+    conn2
+        .execute("INSERT INTO test VALUES (2, 'data2')")
+        .await?;
+    conn3
+        .execute("INSERT INTO test VALUES (3, 'data3')")
+        .await?;
 
     // Return to pool
     drop(conn1);
@@ -114,7 +121,9 @@ async fn main() -> Result<()> {
         .connect_timeout(Duration::from_millis(100));
 
     let limited_client = Client::connect_with_config(config).await?;
-    limited_client.execute("CREATE TABLE limited_test (id INTEGER)").await?;
+    limited_client
+        .execute("CREATE TABLE limited_test (id INTEGER)")
+        .await?;
 
     println!("   Max connections: 3");
 
@@ -141,9 +150,8 @@ async fn main() -> Result<()> {
     // ============================================================================
     println!("6. Connecting via URL:");
 
-    let url_client = Client::connect_url(
-        "rustmemodb://admin:admin@localhost:5432/production"
-    ).await?;
+    let url_client =
+        Client::connect_url("rustmemodb://admin:admin@localhost:5432/production").await?;
 
     println!("   ✓ Connected via URL");
     println!("   Pool: {}", url_client.stats().await);
@@ -159,7 +167,9 @@ async fn main() -> Result<()> {
         .max_connections(4);
 
     let concurrent_client = Client::connect_with_config(config).await?;
-    concurrent_client.execute("CREATE TABLE concurrent_test (id INTEGER, thread_id INTEGER)").await?;
+    concurrent_client
+        .execute("CREATE TABLE concurrent_test (id INTEGER, thread_id INTEGER)")
+        .await?;
 
     let mut handles = vec![];
 
@@ -186,7 +196,9 @@ async fn main() -> Result<()> {
         handle.await.unwrap();
     }
 
-    let result = concurrent_client.query("SELECT * FROM concurrent_test").await?;
+    let result = concurrent_client
+        .query("SELECT * FROM concurrent_test")
+        .await?;
     println!("   ✓ Inserted {} rows concurrently", result.row_count());
     println!("   Final pool: {}", concurrent_client.stats().await);
     println!();

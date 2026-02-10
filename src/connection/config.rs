@@ -136,7 +136,10 @@ impl ConnectionConfig {
         } else if let Some(rest) = url.strip_prefix("mysql://") {
             ("mysql", rest)
         } else {
-            return Err("URL must start with 'rustmemodb://', 'postgres://', 'postgresql://' or 'mysql://'".to_string());
+            return Err(
+                "URL must start with 'rustmemodb://', 'postgres://', 'postgresql://' or 'mysql://'"
+                    .to_string(),
+            );
         };
 
         // Parse username:password@host:port/database
@@ -162,7 +165,9 @@ impl ConnectionConfig {
         let host_port: Vec<&str> = host_parts[0].split(':').collect();
         let host = host_port[0];
         let port = if host_port.len() > 1 {
-            host_port[1].parse().map_err(|_| "Invalid port".to_string())?
+            host_port[1]
+                .parse()
+                .map_err(|_| "Invalid port".to_string())?
         } else {
             match protocol {
                 "mysql" => 3306,
@@ -246,9 +251,9 @@ mod tests {
 
     #[test]
     fn test_from_url() {
-        let config = ConnectionConfig::from_url(
-            "rustmemodb://alice:secret@db.example.com:5432/production"
-        ).unwrap();
+        let config =
+            ConnectionConfig::from_url("rustmemodb://alice:secret@db.example.com:5432/production")
+                .unwrap();
 
         assert_eq!(config.username, "alice");
         assert_eq!(config.password, "secret");
@@ -259,39 +264,33 @@ mod tests {
 
     #[test]
     fn test_from_url_postgres() {
-        let config = ConnectionConfig::from_url(
-            "postgres://alice:secret@db.example.com:5432/production"
-        ).unwrap();
+        let config =
+            ConnectionConfig::from_url("postgres://alice:secret@db.example.com:5432/production")
+                .unwrap();
         assert_eq!(config.username, "alice");
         assert_eq!(config.port, 5432);
 
-        let config = ConnectionConfig::from_url(
-            "postgresql://bob:pass@localhost/mydb"
-        ).unwrap();
+        let config = ConnectionConfig::from_url("postgresql://bob:pass@localhost/mydb").unwrap();
         assert_eq!(config.username, "bob");
         assert_eq!(config.port, 5432); // Default port
     }
 
     #[test]
     fn test_from_url_mysql() {
-        let config = ConnectionConfig::from_url(
-            "mysql://charlie:key@mysql.example.com:3306/legacy"
-        ).unwrap();
+        let config =
+            ConnectionConfig::from_url("mysql://charlie:key@mysql.example.com:3306/legacy")
+                .unwrap();
         assert_eq!(config.username, "charlie");
         assert_eq!(config.port, 3306);
 
-        let config = ConnectionConfig::from_url(
-            "mysql://dave:word@127.0.0.1/test"
-        ).unwrap();
+        let config = ConnectionConfig::from_url("mysql://dave:word@127.0.0.1/test").unwrap();
         assert_eq!(config.username, "dave");
         assert_eq!(config.port, 3306); // Default port
     }
 
     #[test]
     fn test_from_url_default_port() {
-        let config = ConnectionConfig::from_url(
-            "rustmemodb://user:pass@localhost/testdb"
-        ).unwrap();
+        let config = ConnectionConfig::from_url("rustmemodb://user:pass@localhost/testdb").unwrap();
 
         assert_eq!(config.port, 5432);
     }
@@ -310,8 +309,7 @@ mod tests {
         let invalid_username = ConnectionConfig::new("", "pass");
         assert!(invalid_username.validate().is_err());
 
-        let invalid_max_conn = ConnectionConfig::new("user", "pass")
-            .max_connections(0);
+        let invalid_max_conn = ConnectionConfig::new("user", "pass").max_connections(0);
         assert!(invalid_max_conn.validate().is_err());
 
         let invalid_min_max = ConnectionConfig::new("user", "pass")

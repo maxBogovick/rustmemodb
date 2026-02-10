@@ -1,4 +1,4 @@
-use crate::core::{Row, Column};
+use crate::core::{Column, Row};
 
 #[derive(Debug, Clone)]
 pub struct QueryResult {
@@ -102,7 +102,8 @@ impl QueryResult {
     }
 
     fn print_header(&self, widths: &[usize]) {
-        let header: Vec<String> = self.columns
+        let header: Vec<String> = self
+            .columns
             .iter()
             .enumerate()
             .map(|(i, col)| format!("{:width$}", col.name, width = widths[i]))
@@ -169,7 +170,7 @@ mod tests {
     fn test_new_result() {
         let columns = vec![
             Column::new("id", DataType::Integer),
-            Column::new("name", DataType::Text)
+            Column::new("name", DataType::Text),
         ];
         let rows = vec![];
         let result = QueryResult::new(columns.clone(), rows);

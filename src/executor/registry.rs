@@ -1,7 +1,7 @@
+use super::{ExecutionContext, Executor};
+use crate::core::Result;
 use crate::parser::ast::Statement;
 use crate::result::QueryResult;
-use crate::core::Result;
-use super::{ExecutionContext, Executor};
 
 /// Registry для автоматической регистрации executors
 #[allow(dead_code)]
@@ -39,7 +39,11 @@ impl ExecutorRegistry {
     }
 
     /// Выполнить statement через подходящий executor
-    pub async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
+    pub async fn execute(
+        &self,
+        stmt: &Statement,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<QueryResult> {
         for executor in &self.executors {
             if executor.can_handle(stmt) {
                 return executor.execute(stmt, ctx).await;
@@ -47,7 +51,7 @@ impl ExecutorRegistry {
         }
 
         Err(crate::core::DbError::UnsupportedOperation(
-            "No executor found for statement".into()
+            "No executor found for statement".into(),
         ))
     }
 

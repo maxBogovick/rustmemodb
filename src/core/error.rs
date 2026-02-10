@@ -35,7 +35,6 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-
 impl<T> From<std::sync::PoisonError<T>> for DbError {
     fn from(err: std::sync::PoisonError<T>) -> Self {
         Self::LockError(err.to_string())

@@ -6,17 +6,21 @@
 //! - AllDocumentsStrategy: Thorough, analyzes all documents
 //! - SmartStrategy: Samples documents for balance
 
-use crate::core::{Column, DataType};
-use crate::storage::TableSchema;
 use super::error::{JsonError, JsonResult};
 use super::validator::validate_field_name;
+use crate::core::{Column, DataType};
+use crate::storage::TableSchema;
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
 /// Trait for schema inference strategies (Strategy Pattern)
 pub trait SchemaInferenceStrategy: Send + Sync {
     /// Infer schema from JSON documents
-    fn infer_schema(&self, collection_name: &str, documents: &[JsonValue]) -> JsonResult<TableSchema>;
+    fn infer_schema(
+        &self,
+        collection_name: &str,
+        documents: &[JsonValue],
+    ) -> JsonResult<TableSchema>;
 }
 
 /// Infers schema from the first document only (fast but less accurate)
@@ -25,16 +29,22 @@ pub trait SchemaInferenceStrategy: Send + Sync {
 pub struct FirstDocumentStrategy;
 
 impl SchemaInferenceStrategy for FirstDocumentStrategy {
-    fn infer_schema(&self, collection_name: &str, documents: &[JsonValue]) -> JsonResult<TableSchema> {
+    fn infer_schema(
+        &self,
+        collection_name: &str,
+        documents: &[JsonValue],
+    ) -> JsonResult<TableSchema> {
         if documents.is_empty() {
             return Err(JsonError::EmptyDocument);
         }
 
         let first = &documents[0];
-        let obj = first.as_object()
+        let obj = first
+            .as_object()
             .ok_or_else(|| JsonError::InvalidStructure("Expected JSON object".into()))?;
 
-        let columns = obj.iter()
+        let columns = obj
+            .iter()
             .map(|(key, value)| -> JsonResult<Column> {
                 validate_field_name(key)?;
                 let data_type = infer_type_from_value(value);
@@ -51,7 +61,11 @@ impl SchemaInferenceStrategy for FirstDocumentStrategy {
 pub struct AllDocumentsStrategy;
 
 impl SchemaInferenceStrategy for AllDocumentsStrategy {
-    fn infer_schema(&self, collection_name: &str, documents: &[JsonValue]) -> JsonResult<TableSchema> {
+    fn infer_schema(
+        &self,
+        collection_name: &str,
+        documents: &[JsonValue],
+    ) -> JsonResult<TableSchema> {
         if documents.is_empty() {
             return Err(JsonError::EmptyDocument);
         }
@@ -61,21 +75,21 @@ impl SchemaInferenceStrategy for AllDocumentsStrategy {
         let mut all_fields: HashSet<String> = HashSet::new();
 
         for doc in documents {
-            let obj = doc.as_object()
+            let obj = doc
+                .as_object()
                 .ok_or_else(|| JsonError::InvalidStructure("Expected JSON object".into()))?;
 
             for (key, value) in obj {
                 validate_field_name(key)?;
                 all_fields.insert(key.clone());
                 let data_type = infer_type_from_value(value);
-                field_types.entry(key.clone())
-                    .or_default()
-                    .push(data_type);
+                field_types.entry(key.clone()).or_default().push(data_type);
             }
         }
 
         // Determine the most general type for each field
-        let mut columns: Vec<Column> = all_fields.iter()
+        let mut columns: Vec<Column> = all_fields
+            .iter()
             .map(|field_name| {
                 let types = field_types.get(field_name).unwrap();
                 let most_general = find_most_general_type(types);
@@ -92,12 +106,10 @@ impl SchemaInferenceStrategy for AllDocumentsStrategy {
             .collect();
 
         // Sort columns for consistent ordering (id first if exists, then alphabetically)
-        columns.sort_by(|a, b| {
-            match (&a.name[..], &b.name[..]) {
-                ("id", _) => std::cmp::Ordering::Less,
-                (_, "id") => std::cmp::Ordering::Greater,
-                _ => a.name.cmp(&b.name),
-            }
+        columns.sort_by(|a, b| match (&a.name[..], &b.name[..]) {
+            ("id", _) => std::cmp::Ordering::Less,
+            (_, "id") => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
         });
 
         Ok(TableSchema::new(collection_name.to_string(), columns))
@@ -123,7 +135,11 @@ impl Default for SmartStrategy {
 }
 
 impl SchemaInferenceStrategy for SmartStrategy {
-    fn infer_schema(&self, collection_name: &str, documents: &[JsonValue]) -> JsonResult<TableSchema> {
+    fn infer_schema(
+        &self,
+        collection_name: &str,
+        documents: &[JsonValue],
+    ) -> JsonResult<TableSchema> {
         if documents.is_empty() {
             return Err(JsonError::EmptyDocument);
         }
@@ -133,12 +149,11 @@ impl SchemaInferenceStrategy for SmartStrategy {
             (0..documents.len()).collect::<Vec<_>>()
         } else {
             let step = documents.len() / self.sample_size;
-            (0..self.sample_size)
-                .map(|i| i * step)
-                .collect()
+            (0..self.sample_size).map(|i| i * step).collect()
         };
 
-        let sampled: Vec<JsonValue> = sample_indices.iter()
+        let sampled: Vec<JsonValue> = sample_indices
+            .iter()
             .map(|&i| documents[i].clone())
             .collect();
 
@@ -208,7 +223,7 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
     if has_boolean && (has_integer || has_float) {
         return DataType::Text;
     }
-    
+
     // Complex types mixed with anything else -> Text
     // (Unless we want to support coercion like Date -> Timestamp, but simplicity first)
     if has_timestamp && (has_integer || has_float || has_boolean || has_date || has_uuid) {
@@ -222,11 +237,21 @@ fn find_most_general_type(types: &[DataType]) -> DataType {
     }
 
     // Single complex types
-    if has_timestamp { return DataType::Timestamp; }
-    if has_date { return DataType::Date; }
-    if has_uuid { return DataType::Uuid; }
-    if has_array { return DataType::Array(Box::new(DataType::Text)); } // Fallback to array of text
-    if has_json { return DataType::Json; }
+    if has_timestamp {
+        return DataType::Timestamp;
+    }
+    if has_date {
+        return DataType::Date;
+    }
+    if has_uuid {
+        return DataType::Uuid;
+    }
+    if has_array {
+        return DataType::Array(Box::new(DataType::Text));
+    } // Fallback to array of text
+    if has_json {
+        return DataType::Json;
+    }
 
     // Numeric type hierarchy
     if has_float {
@@ -261,7 +286,11 @@ impl SchemaInferenceEngine {
     }
 
     /// Infer schema from JSON documents
-    pub fn infer_schema(&self, collection_name: &str, documents: &[JsonValue]) -> JsonResult<TableSchema> {
+    pub fn infer_schema(
+        &self,
+        collection_name: &str,
+        documents: &[JsonValue],
+    ) -> JsonResult<TableSchema> {
         self.strategy.infer_schema(collection_name, documents)
     }
 }

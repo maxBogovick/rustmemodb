@@ -1,8 +1,8 @@
-use crate::core::{Result, DbError};
+use crate::core::{DbError, Result};
 use lru::LruCache;
+use regex::Regex;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
-use regex::Regex;
 
 lazy_static::lazy_static! {
     static ref REGEX_LRU_CACHE: Arc<Mutex<LruCache<String, Arc<Regex>>>> =
@@ -53,10 +53,10 @@ fn fast_path_like(text: &str, pattern: &str, case_sensitive: bool) -> Option<boo
 
     // 2. Начинается с "prefix%"
     if pattern.ends_with('%')
-        && !pattern[..pattern.len()-1].contains('%')
+        && !pattern[..pattern.len() - 1].contains('%')
         && !pattern.contains('_')
     {
-        let prefix = &pattern[..pattern.len()-1];
+        let prefix = &pattern[..pattern.len() - 1];
         return Some(if case_sensitive {
             text.starts_with(prefix)
         } else {
@@ -65,10 +65,7 @@ fn fast_path_like(text: &str, pattern: &str, case_sensitive: bool) -> Option<boo
     }
 
     // 3. Заканчивается на "%suffix"
-    if pattern.starts_with('%')
-        && !pattern[1..].contains('%')
-        && !pattern.contains('_')
-    {
+    if pattern.starts_with('%') && !pattern[1..].contains('%') && !pattern.contains('_') {
         let suffix = &pattern[1..];
         return Some(if case_sensitive {
             text.ends_with(suffix)
@@ -83,7 +80,7 @@ fn fast_path_like(text: &str, pattern: &str, case_sensitive: bool) -> Option<boo
         && pattern.matches('%').count() == 2
         && !pattern.contains('_')
     {
-        let substring = &pattern[1..pattern.len()-1];
+        let substring = &pattern[1..pattern.len() - 1];
         return Some(if case_sensitive {
             text.contains(substring)
         } else {

@@ -1,6 +1,6 @@
-use super::super::{ExpressionEvaluator, EvaluationContext};
-use crate::parser::ast::{Expr, BinaryOp};
-use crate::core::{Result, Value, Row, Schema, DbError};
+use super::super::{EvaluationContext, ExpressionEvaluator};
+use crate::core::{DbError, Result, Row, Schema, Value};
+use crate::parser::ast::{BinaryOp, Expr};
 
 use async_trait::async_trait;
 
@@ -16,15 +16,24 @@ impl ExpressionEvaluator for ArithmeticEvaluator {
         if let Expr::BinaryOp { op, .. } = expr {
             matches!(
                 op,
-                BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply
-                | BinaryOp::Divide | BinaryOp::Modulo
+                BinaryOp::Add
+                    | BinaryOp::Subtract
+                    | BinaryOp::Multiply
+                    | BinaryOp::Divide
+                    | BinaryOp::Modulo
             )
         } else {
             false
         }
     }
 
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value> {
         let Expr::BinaryOp { left, op, right } = expr else {
             unreachable!();
         };
@@ -96,7 +105,8 @@ impl ExpressionEvaluator for ArithmeticEvaluator {
 
             (a, b) => Err(DbError::TypeMismatch(format!(
                 "Arithmetic requires numeric types, got {} and {}",
-                a.type_name(), b.type_name()
+                a.type_name(),
+                b.type_name()
             ))),
         }
     }

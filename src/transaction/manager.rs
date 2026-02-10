@@ -4,8 +4,8 @@
 
 use super::{Change, Transaction, TransactionId, TransactionState};
 use crate::core::{DbError, Result, Snapshot};
-use crate::storage::memory::InMemoryStorage;
 use crate::facade::InMemoryDB;
+use crate::storage::memory::InMemoryStorage;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 pub struct TransactionManager {
     // Stores full transaction state.
     transactions: Arc<RwLock<HashMap<TransactionId, Transaction>>>,
-    
+
     // Optimization: Cache active transaction IDs for O(1) snapshot creation.
     // Uses Copy-on-Write (Arc) to allow lock-free reading in snapshots.
     active_ids: Arc<RwLock<Arc<HashSet<u64>>>>,
@@ -47,11 +47,11 @@ impl TransactionManager {
     pub async fn begin(&self) -> Result<TransactionId> {
         let transaction_id = TransactionId::new();
         let txn_id_val = transaction_id.0;
-        
+
         // Create snapshot for Repeatable Read
         let active = self.active_ids.read().await.clone();
         let aborted = self.aborted_ids.read().await.clone();
-        
+
         let snapshot = Snapshot {
             tx_id: txn_id_val,
             active,
@@ -94,7 +94,7 @@ impl TransactionManager {
 
         Ok(Snapshot {
             tx_id: txn_id.0,
-            active, // Arc<HashSet<u64>>
+            active,  // Arc<HashSet<u64>>
             aborted, // Arc<HashSet<u64>>
             max_tx_id: next_id,
         })
@@ -126,7 +126,9 @@ impl TransactionManager {
             if conflicts.contains(&txn_id.0) {
                 drop(conflicts);
                 self.rollback(txn_id).await?;
-                return Err(DbError::ExecutionError("Write-write conflict detected".into()));
+                return Err(DbError::ExecutionError(
+                    "Write-write conflict detected".into(),
+                ));
             }
         }
         let mut transactions = self.transactions.write().await;
@@ -165,32 +167,40 @@ impl TransactionManager {
         Ok(())
     }
 
-    pub async fn rollback_database(&self, txn_id: TransactionId, _db: Arc<RwLock<InMemoryDB>>) -> Result<()> {
+    pub async fn rollback_database(
+        &self,
+        txn_id: TransactionId,
+        _db: Arc<RwLock<InMemoryDB>>,
+    ) -> Result<()> {
         self.rollback(txn_id).await
     }
 
-    pub async fn rollback_with_storage(&self, txn_id: TransactionId, _storage: &mut InMemoryStorage) -> Result<()> {
+    pub async fn rollback_with_storage(
+        &self,
+        txn_id: TransactionId,
+        _storage: &mut InMemoryStorage,
+    ) -> Result<()> {
         self.rollback(txn_id).await
     }
 
     pub async fn rollback(&self, txn_id: TransactionId) -> Result<()> {
         let mut transactions = self.transactions.write().await;
-        
-        if let Some(transaction) = transactions.get_mut(&txn_id) {
-             transaction.rollback()?;
-             transactions.remove(&txn_id);
-             
-             // Update active cache (COW) - remove from active
-             {
-                 let mut active_lock = self.active_ids.write().await;
-                 if active_lock.contains(&txn_id.0) {
-                     let mut new_set = (**active_lock).clone();
-                     new_set.remove(&txn_id.0);
-                     *active_lock = Arc::new(new_set);
-                 }
-             }
 
-             // Update aborted cache (COW) - add to aborted
+        if let Some(transaction) = transactions.get_mut(&txn_id) {
+            transaction.rollback()?;
+            transactions.remove(&txn_id);
+
+            // Update active cache (COW) - remove from active
+            {
+                let mut active_lock = self.active_ids.write().await;
+                if active_lock.contains(&txn_id.0) {
+                    let mut new_set = (**active_lock).clone();
+                    new_set.remove(&txn_id.0);
+                    *active_lock = Arc::new(new_set);
+                }
+            }
+
+            // Update aborted cache (COW) - add to aborted
             {
                 let mut aborted_lock = self.aborted_ids.write().await;
                 let mut new_set = (**aborted_lock).clone();
@@ -223,7 +233,10 @@ impl TransactionManager {
         conflicts.contains(&txn_id.0)
     }
 
-    pub async fn get_transaction_info(&self, txn_id: TransactionId) -> Result<Option<TransactionInfo>> {
+    pub async fn get_transaction_info(
+        &self,
+        txn_id: TransactionId,
+    ) -> Result<Option<TransactionInfo>> {
         let transactions = self.transactions.read().await;
         Ok(transactions.get(&txn_id).map(|txn| TransactionInfo {
             id: txn.id(),

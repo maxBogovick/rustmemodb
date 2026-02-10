@@ -2,18 +2,19 @@
 // src/executor/query.rs - Refactored QueryExecutor with improved architecture
 // ============================================================================
 
-use crate::parser::ast::{Statement, Expr, QueryStmt, OrderByExpr};
-use crate::planner::{LogicalPlan, QueryPlanner};
-use crate::planner::logical_plan::{SortNode};
-use crate::storage::Catalog;
-use crate::core::{Result, DbError, Row, Value, Schema};
+use super::{ExecutionContext, Executor};
+use crate::core::{DbError, Result, Row, Schema, Value};
+use crate::evaluator::plugins::comparison::ComparisonEvaluator;
 use crate::evaluator::{EvaluationContext, EvaluatorRegistry, SubqueryHandler};
+use crate::parser::ast::{Expr, OrderByExpr, QueryStmt, Statement};
+use crate::planner::logical_plan::SortNode;
+use crate::planner::{LogicalPlan, QueryPlanner};
 use crate::result::QueryResult;
-use super::{Executor, ExecutionContext};
+use crate::storage::Catalog;
 use std::cmp::Ordering;
 
-use async_trait::async_trait;
 use async_recursion::async_recursion;
+use async_trait::async_trait;
 
 // ============================================================================
 // SUBQUERY HANDLER
@@ -27,7 +28,10 @@ struct ExecutorSubqueryHandler<'a> {
 #[async_trait]
 impl<'a> SubqueryHandler for ExecutorSubqueryHandler<'a> {
     async fn execute(&self, query: &QueryStmt) -> Result<Vec<Row>> {
-        let plan = self.executor.planner.plan(&Statement::Query(query.clone()), &self.executor.catalog)?;
+        let plan = self
+            .executor
+            .planner
+            .plan(&Statement::Query(query.clone()), &self.executor.catalog)?;
         self.executor.execute_plan(&plan, self.ctx).await
     }
 }
@@ -70,7 +74,11 @@ impl QueryExecutor {
 
     /// Execute logical plan - main entry point
     #[async_recursion]
-    pub async fn execute_plan(&self, plan: &LogicalPlan, ctx: &ExecutionContext<'_>) -> Result<Vec<Row>> {
+    pub async fn execute_plan(
+        &self,
+        plan: &LogicalPlan,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<Vec<Row>> {
         match plan {
             LogicalPlan::TableScan(scan) => self.execute_scan(scan, ctx).await,
             LogicalPlan::Filter(filter) => self.execute_filter(filter, ctx).await,
@@ -87,7 +95,11 @@ impl QueryExecutor {
     }
 
     /// Get output column names from plan
-    pub fn get_output_columns(&self, plan: &LogicalPlan, _ctx: &ExecutionContext<'_>) -> Result<Vec<crate::core::Column>> {
+    pub fn get_output_columns(
+        &self,
+        plan: &LogicalPlan,
+        _ctx: &ExecutionContext<'_>,
+    ) -> Result<Vec<crate::core::Column>> {
         let schema = plan.schema();
         Ok(schema.columns().to_vec())
     }
@@ -106,12 +118,20 @@ impl QueryExecutor {
     ) -> Result<Vec<Row>> {
         let input_rows = self.execute_plan(&aggr.input, ctx).await?;
         let input_schema = aggr.input.schema();
-        
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
 
         // 1. Group rows
-        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> = std::collections::HashMap::new();
+        let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> =
+            std::collections::HashMap::new();
 
         if aggr.group_exprs.is_empty() {
             // Implicit global group
@@ -132,17 +152,34 @@ impl QueryExecutor {
         for (group_key, group_rows) in groups {
             let mut row = group_key;
             row.reserve(aggr.aggr_exprs.len());
-            
+
             // Append aggregate results
             for expr in &aggr.aggr_exprs {
-                if let Expr::Function { name, args, distinct, over: _ } = expr {
-                    let val = self.evaluate_aggregate(name, args, *distinct, &group_rows, input_schema, &eval_ctx).await?;
+                if let Expr::Function {
+                    name,
+                    args,
+                    distinct,
+                    over: _,
+                } = expr
+                {
+                    let val = self
+                        .evaluate_aggregate(
+                            name,
+                            args,
+                            *distinct,
+                            &group_rows,
+                            input_schema,
+                            &eval_ctx,
+                        )
+                        .await?;
                     row.push(val);
                 } else {
-                    return Err(DbError::ExecutionError("Non-aggregate expression in aggregate list".into()));
+                    return Err(DbError::ExecutionError(
+                        "Non-aggregate expression in aggregate list".into(),
+                    ));
                 }
             }
-            
+
             result_rows.push(row);
         }
 
@@ -159,8 +196,12 @@ impl QueryExecutor {
 
         // Try Hash Join for Equi-Joins (Inner and Left only for now)
         if matches!(join.join_type, JoinType::Inner | JoinType::Left) {
-            if let Some((left_key_expr, right_key_expr)) = self.extract_join_keys(&join.on, &join.left.schema(), &join.right.schema()) {
-                return self.execute_hash_join(join, left_key_expr, right_key_expr, ctx).await;
+            if let Some((left_key_expr, right_key_expr)) =
+                self.extract_join_keys(&join.on, &join.left.schema(), &join.right.schema())
+            {
+                return self
+                    .execute_hash_join(join, left_key_expr, right_key_expr, ctx)
+                    .await;
             }
         }
 
@@ -169,9 +210,16 @@ impl QueryExecutor {
         let right_rows = self.execute_plan(&join.right, ctx).await?;
         let schema = &join.schema;
 
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
-        
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
+
         let mut result = Vec::new();
 
         match join.join_type {
@@ -180,7 +228,11 @@ impl QueryExecutor {
                     for right_row in &right_rows {
                         let combined_row = self.combine_rows(left_row, right_row);
 
-                        if join.join_type == JoinType::Cross || self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
+                        if join.join_type == JoinType::Cross
+                            || self
+                                .evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema)
+                                .await
+                        {
                             result.push(combined_row);
                         }
                     }
@@ -194,7 +246,10 @@ impl QueryExecutor {
                     for right_row in &right_rows {
                         let combined_row = self.combine_rows(left_row, right_row);
 
-                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
+                        if self
+                            .evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema)
+                            .await
+                        {
                             result.push(combined_row);
                             matched = true;
                         }
@@ -209,13 +264,16 @@ impl QueryExecutor {
             }
             JoinType::Right => {
                 let left_width = join.left.schema().column_count();
-                
+
                 for right_row in &right_rows {
                     let mut matched = false;
                     for left_row in &left_rows {
                         let combined_row = self.combine_rows(left_row, right_row);
 
-                        if self.evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema).await {
+                        if self
+                            .evaluate_predicate(&eval_ctx, &join.on, &combined_row, schema)
+                            .await
+                        {
                             result.push(combined_row);
                             matched = true;
                         }
@@ -230,7 +288,9 @@ impl QueryExecutor {
                 }
             }
             JoinType::Full => {
-                return Err(DbError::UnsupportedOperation("Full Outer Join not yet implemented".into()));
+                return Err(DbError::UnsupportedOperation(
+                    "Full Outer Join not yet implemented".into(),
+                ));
             }
         }
 
@@ -253,16 +313,27 @@ impl QueryExecutor {
         if let Some(limit) = self.join_row_limit() {
             let estimated = left_rows.len().saturating_mul(right_rows.len());
             if estimated > limit {
-                return Err(DbError::ExecutionError("Join exceeded configured memory limit".into()));
+                return Err(DbError::ExecutionError(
+                    "Join exceeded configured memory limit".into(),
+                ));
             }
         }
-        
+
         let mut build_map = std::collections::HashMap::with_capacity(right_rows.len());
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
-        
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
+
         for (idx, row) in right_rows.iter().enumerate() {
-            let key_val = eval_ctx.evaluate(&right_key_expr, row, join.right.schema()).await?;
+            let key_val = eval_ctx
+                .evaluate(&right_key_expr, row, join.right.schema())
+                .await?;
             if key_val.is_null() {
                 continue;
             }
@@ -274,7 +345,9 @@ impl QueryExecutor {
         let right_width = join.right.schema().column_count();
 
         for left_row in left_rows {
-            let key_val = eval_ctx.evaluate(&left_key_expr, &left_row, join.left.schema()).await?;
+            let key_val = eval_ctx
+                .evaluate(&left_key_expr, &left_row, join.left.schema())
+                .await?;
             let key = JoinKey(key_val);
 
             if let Some(matches) = build_map.get(&key) {
@@ -301,19 +374,29 @@ impl QueryExecutor {
     }
 
     /// Extract join keys from ON clause if it's a simple equality
-    fn extract_join_keys(&self, on: &Expr, left_schema: &Schema, right_schema: &Schema) -> Option<(Expr, Expr)> {
+    fn extract_join_keys(
+        &self,
+        on: &Expr,
+        left_schema: &Schema,
+        right_schema: &Schema,
+    ) -> Option<(Expr, Expr)> {
         use crate::parser::ast::BinaryOp;
-        
-        if let Expr::BinaryOp { left, op: BinaryOp::Eq, right } = on {
+
+        if let Expr::BinaryOp {
+            left,
+            op: BinaryOp::Eq,
+            right,
+        } = on
+        {
             if let (Some(l), Some(r)) = (
                 self.resolve_expr_to_schema(left, left_schema),
-                self.resolve_expr_to_schema(right, right_schema)
+                self.resolve_expr_to_schema(right, right_schema),
             ) {
                 return Some((l, r));
             }
             if let (Some(l), Some(r)) = (
                 self.resolve_expr_to_schema(right, left_schema),
-                self.resolve_expr_to_schema(left, right_schema)
+                self.resolve_expr_to_schema(left, right_schema),
             ) {
                 return Some((l, r));
             }
@@ -329,7 +412,7 @@ impl QueryExecutor {
                 } else {
                     None
                 }
-            },
+            }
             Expr::CompoundIdentifier(parts) => {
                 let name = parts.join(".");
                 if schema.find_column_index(&name).is_some() {
@@ -341,7 +424,7 @@ impl QueryExecutor {
                     }
                 }
                 None
-            },
+            }
             Expr::Literal(_) => Some(expr.clone()),
             _ => None,
         }
@@ -354,23 +437,32 @@ impl QueryExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         if let Some(ref idx) = scan.index_scan {
-            let value = self.evaluate_index_expr(&idx.value_expr, &idx.column, scan.schema.columns(), ctx)?;
+            let value =
+                self.evaluate_index_expr(&idx.value_expr, &idx.column, scan.schema.columns(), ctx)?;
             let end_value = match &idx.end_value_expr {
-                Some(expr) => Some(self.evaluate_index_expr(expr, &idx.column, scan.schema.columns(), ctx)?),
+                Some(expr) => {
+                    Some(self.evaluate_index_expr(expr, &idx.column, scan.schema.columns(), ctx)?)
+                }
                 None => None,
             };
-            if let Some(rows) = ctx.storage.scan_index(
-                &scan.table_name,
-                &idx.column,
-                &value,
-                &end_value,
-                &idx.op,
-                &ctx.snapshot
-            ).await? {
+            if let Some(rows) = ctx
+                .storage
+                .scan_index(
+                    &scan.table_name,
+                    &idx.column,
+                    &value,
+                    &end_value,
+                    &idx.op,
+                    &ctx.snapshot,
+                )
+                .await?
+            {
                 return Ok(rows);
             }
         }
-        ctx.storage.scan_table(&scan.table_name, &ctx.snapshot).await
+        ctx.storage
+            .scan_table(&scan.table_name, &ctx.snapshot)
+            .await
     }
 
     fn evaluate_index_expr(
@@ -384,23 +476,28 @@ impl QueryExecutor {
             Expr::Literal(val) => val.clone(),
             Expr::Parameter(idx) => {
                 if *idx == 0 || *idx > ctx.params.len() {
-                    return Err(crate::core::DbError::ExecutionError(format!("Parameter index out of range: ${}", idx)));
+                    return Err(crate::core::DbError::ExecutionError(format!(
+                        "Parameter index out of range: ${}",
+                        idx
+                    )));
                 }
                 ctx.params[*idx - 1].clone()
             }
-            Expr::UnaryOp { op, expr } => {
-                match (&**expr, op) {
-                    (Expr::Literal(crate::core::Value::Integer(i)), crate::parser::ast::UnaryOp::Minus) => {
-                        crate::core::Value::Integer(-i)
-                    }
-                    (Expr::Literal(crate::core::Value::Float(f)), crate::parser::ast::UnaryOp::Minus) => {
-                        crate::core::Value::Float(-f)
-                    }
-                    _ => return Err(crate::core::DbError::UnsupportedOperation(
+            Expr::UnaryOp { op, expr } => match (&**expr, op) {
+                (
+                    Expr::Literal(crate::core::Value::Integer(i)),
+                    crate::parser::ast::UnaryOp::Minus,
+                ) => crate::core::Value::Integer(-i),
+                (
+                    Expr::Literal(crate::core::Value::Float(f)),
+                    crate::parser::ast::UnaryOp::Minus,
+                ) => crate::core::Value::Float(-f),
+                _ => {
+                    return Err(crate::core::DbError::UnsupportedOperation(
                         "Only literal/parameter index expressions supported".into(),
-                    )),
+                    ));
                 }
-            }
+            },
             _ => {
                 return Err(crate::core::DbError::UnsupportedOperation(
                     "Only literal/parameter index expressions supported".into(),
@@ -422,12 +519,32 @@ impl QueryExecutor {
         let input_rows = self.execute_plan(&filter.input, ctx).await?;
         let schema = &filter.schema;
 
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+        if let Some(simple) = self.try_simple_predicate(&filter.predicate, schema, &ctx.params) {
+            let mut filtered_rows = Vec::with_capacity(input_rows.len());
+            for row in input_rows {
+                if simple.matches(&row) {
+                    filtered_rows.push(row);
+                }
+            }
+            return Ok(filtered_rows);
+        }
+
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
 
         let mut filtered_rows = Vec::with_capacity(input_rows.len());
         for row in input_rows {
-            if self.evaluate_predicate(&eval_ctx, &filter.predicate, &row, schema).await {
+            if self
+                .evaluate_predicate(&eval_ctx, &filter.predicate, &row, schema)
+                .await
+            {
                 filtered_rows.push(row);
             }
         }
@@ -444,25 +561,33 @@ impl QueryExecutor {
         let input_schema = proj.input.schema();
 
         if self.has_aggregate_functions(&proj.expressions) {
-            return self.execute_aggregation(&proj.expressions, &input_rows, input_schema, ctx).await;
+            return self
+                .execute_aggregation(&proj.expressions, &input_rows, input_schema, ctx)
+                .await;
         }
 
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
-        
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
+
         let mut projected_rows = Vec::with_capacity(input_rows.len());
         for row in input_rows {
-            projected_rows.push(self.project_row(&proj.expressions, &row, input_schema, &eval_ctx).await?);
+            projected_rows.push(
+                self.project_row(&proj.expressions, &row, input_schema, &eval_ctx)
+                    .await?,
+            );
         }
         Ok(projected_rows)
     }
 
     /// Execute sort operation
-    async fn execute_sort(
-        &self,
-        sort: &SortNode,
-        ctx: &ExecutionContext<'_>,
-    ) -> Result<Vec<Row>> {
+    async fn execute_sort(&self, sort: &SortNode, ctx: &ExecutionContext<'_>) -> Result<Vec<Row>> {
         let mut rows = self.execute_plan(&sort.input, ctx).await?;
 
         if sort.order_by.is_empty() {
@@ -470,10 +595,18 @@ impl QueryExecutor {
         }
 
         let schema = &sort.schema;
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
 
-        self.sort_rows(&mut rows, &sort.order_by, schema, &eval_ctx).await?;
+        self.sort_rows(&mut rows, &sort.order_by, schema, &eval_ctx)
+            .await?;
         Ok(rows)
     }
 
@@ -500,19 +633,19 @@ impl QueryExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
         let input_rows = self.execute_plan(&distinct.input, ctx).await?;
-        
+
         let mut seen = std::collections::HashSet::new();
         let mut result = Vec::with_capacity(input_rows.len());
-        
+
         for row in input_rows {
             // Wrap in JoinKey for hashing
             let key: Vec<JoinKey> = row.iter().map(|v| JoinKey(v.clone())).collect();
-            
+
             if seen.insert(key) {
                 result.push(row);
             }
         }
-        
+
         Ok(result)
     }
 
@@ -524,16 +657,32 @@ impl QueryExecutor {
     ) -> Result<Vec<Row>> {
         let mut rows = self.execute_plan(&window.input, ctx).await?;
         let input_schema = window.input.schema();
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
 
         for expr in &window.window_exprs {
-            if let Expr::Function { name, over: Some(spec), .. } = expr {
+            if let Expr::Function {
+                name,
+                over: Some(spec),
+                ..
+            } = expr
+            {
                 let func = name.to_uppercase();
                 // 1. Sort by Partition Keys + Order Keys
-                let mut sort_keys = Vec::with_capacity(spec.partition_by.len() + spec.order_by.len());
+                let mut sort_keys =
+                    Vec::with_capacity(spec.partition_by.len() + spec.order_by.len());
                 for expr in &spec.partition_by {
-                    sort_keys.push(OrderByExpr { expr: expr.clone(), descending: false });
+                    sort_keys.push(OrderByExpr {
+                        expr: expr.clone(),
+                        descending: false,
+                    });
                 }
                 sort_keys.extend(spec.order_by.clone());
 
@@ -546,7 +695,7 @@ impl QueryExecutor {
                     }
                     row_keys.push(keys);
                 }
-                
+
                 let mut indices: Vec<usize> = (0..rows.len()).collect();
                 indices.sort_by(|&i, &j| {
                     for (k, order_expr) in sort_keys.iter().enumerate() {
@@ -554,7 +703,11 @@ impl QueryExecutor {
                         let val_b = &row_keys[j][k];
                         let cmp = val_a.compare(val_b).unwrap_or(Ordering::Equal);
                         if cmp != Ordering::Equal {
-                            return if order_expr.descending { cmp.reverse() } else { cmp };
+                            return if order_expr.descending {
+                                cmp.reverse()
+                            } else {
+                                cmp
+                            };
                         }
                     }
                     Ordering::Equal
@@ -562,7 +715,7 @@ impl QueryExecutor {
 
                 // 3. Compute Window Function
                 let mut results: Vec<(usize, Value)> = Vec::with_capacity(rows.len());
-                
+
                 let mut current_partition: Option<Vec<Value>> = None;
                 let mut row_number = 0;
                 let mut rank = 0;
@@ -591,7 +744,7 @@ impl QueryExecutor {
                         Some(o) => o.as_slice() != order_keys,
                         None => true,
                     };
-                    
+
                     if order_changed {
                         rank = row_number;
                         last_order_values = Some(order_keys.to_vec());
@@ -621,8 +774,15 @@ impl QueryExecutor {
         values: &crate::planner::logical_plan::ValuesNode,
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
         let schema = &values.schema;
 
         let mut result = Vec::with_capacity(values.rows.len());
@@ -647,16 +807,17 @@ impl QueryExecutor {
     ) -> Result<Vec<Row>> {
         // 1. Execute Anchor
         let anchor_rows = self.execute_plan(&node.anchor_plan, ctx).await?;
-        
+
         // 2. Setup Working Table (Iterative)
         let mut working_table_rows = anchor_rows.clone();
         let mut total_rows = anchor_rows;
-        
-        let table_schema = crate::storage::TableSchema::new(node.cte_name.clone(), node.schema.columns().to_vec());
-        
+
+        let table_schema =
+            crate::storage::TableSchema::new(node.cte_name.clone(), node.schema.columns().to_vec());
+
         // Iteration limit to prevent infinite loops (safety)
-        let max_iterations = 100; 
-        
+        let max_iterations = 100;
+
         for _ in 0..max_iterations {
             if working_table_rows.is_empty() {
                 break;
@@ -665,47 +826,53 @@ impl QueryExecutor {
             // Create a forked storage for this iteration
             let mut iter_storage = ctx.storage.fork().await?;
             iter_storage.create_table(table_schema.clone()).await?;
-            
+
             let snapshot = ctx.snapshot.clone();
-            
+
             for row in &working_table_rows {
-                iter_storage.insert_row(&node.cte_name, row.clone(), &snapshot).await?;
+                iter_storage
+                    .insert_row(&node.cte_name, row.clone(), &snapshot)
+                    .await?;
             }
-            
+
             let iter_ctx = ExecutionContext::new(
                 &iter_storage,
                 ctx.transaction_manager,
                 ctx.persistence,
-                snapshot.clone()
-            ).with_params(ctx.params.clone());
-            
+                snapshot.clone(),
+            )
+            .with_params(ctx.params.clone());
+
             // Execute Recursive Term
             let new_rows = self.execute_plan(&node.recursive_plan, &iter_ctx).await?;
-            
+
             if new_rows.is_empty() {
                 break;
             }
-            
+
             total_rows.extend(new_rows.clone());
             working_table_rows = new_rows;
         }
-        
+
         // 3. Execute Final Query with Full CTE Table
         let mut final_storage = ctx.storage.fork().await?;
         final_storage.create_table(table_schema).await?;
-        
+
         let snapshot = ctx.snapshot.clone();
         for row in &total_rows {
-            final_storage.insert_row(&node.cte_name, row.clone(), &snapshot).await?;
+            final_storage
+                .insert_row(&node.cte_name, row.clone(), &snapshot)
+                .await?;
         }
-        
+
         let final_ctx = ExecutionContext::new(
             &final_storage,
             ctx.transaction_manager,
             ctx.persistence,
-            snapshot
-        ).with_params(ctx.params.clone());
-        
+            snapshot,
+        )
+        .with_params(ctx.params.clone());
+
         self.execute_plan(&node.final_plan, &final_ctx).await
     }
 }
@@ -759,9 +926,60 @@ impl QueryExecutor {
         Ok(result)
     }
 
+    fn try_simple_predicate(
+        &self,
+        predicate: &Expr,
+        schema: &Schema,
+        params: &[Value],
+    ) -> Option<SimplePredicate> {
+        let Expr::BinaryOp { left, op, right } = predicate else {
+            return None;
+        };
+        if *op != crate::parser::ast::BinaryOp::Eq {
+            return None;
+        }
+
+        let (col_expr, val_expr) = match (&**left, &**right) {
+            (
+                Expr::Column(_) | Expr::CompoundIdentifier(_),
+                Expr::Literal(_) | Expr::Parameter(_),
+            ) => (left.as_ref(), right.as_ref()),
+            (
+                Expr::Literal(_) | Expr::Parameter(_),
+                Expr::Column(_) | Expr::CompoundIdentifier(_),
+            ) => (right.as_ref(), left.as_ref()),
+            _ => return None,
+        };
+
+        let col_name = match col_expr {
+            Expr::Column(name) => name.clone(),
+            Expr::CompoundIdentifier(parts) => parts.join("."),
+            _ => return None,
+        };
+
+        let col_idx = schema.find_column_index(&col_name)?;
+        let column = &schema.columns()[col_idx];
+        let raw = match val_expr {
+            Expr::Literal(val) => val.clone(),
+            Expr::Parameter(idx) => {
+                let idx = *idx;
+                if idx == 0 || idx > params.len() {
+                    return None;
+                }
+                params[idx - 1].clone()
+            }
+            _ => return None,
+        };
+        let value = column.data_type.cast_value(&raw).ok()?;
+
+        Some(SimplePredicate { col_idx, value })
+    }
+
     /// Check if expressions contain aggregate functions
     fn has_aggregate_functions(&self, expressions: &[Expr]) -> bool {
-        expressions.iter().any(|expr| self.is_aggregate_function(expr))
+        expressions
+            .iter()
+            .any(|expr| self.is_aggregate_function(expr))
     }
 
     /// Check if expression is an aggregate function
@@ -787,7 +1005,9 @@ impl QueryExecutor {
             Expr::Like { expr, pattern, .. } => {
                 self.is_constant_expression(expr) && self.is_constant_expression(pattern)
             }
-            Expr::Between { expr, low, high, .. } => {
+            Expr::Between {
+                expr, low, high, ..
+            } => {
                 self.is_constant_expression(expr)
                     && self.is_constant_expression(low)
                     && self.is_constant_expression(high)
@@ -826,8 +1046,15 @@ impl QueryExecutor {
         schema: &Schema,
         ctx: &ExecutionContext<'_>,
     ) -> Result<Vec<Row>> {
-        let subquery_handler = ExecutorSubqueryHandler { executor: self, ctx };
-        let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, Some(&subquery_handler), &ctx.params);
+        let subquery_handler = ExecutorSubqueryHandler {
+            executor: self,
+            ctx,
+        };
+        let eval_ctx = EvaluationContext::with_params(
+            &self.evaluator_registry,
+            Some(&subquery_handler),
+            &ctx.params,
+        );
 
         for expr in expressions {
             if !self.is_aggregate_function(expr) && !self.is_constant_expression(expr) {
@@ -839,13 +1066,19 @@ impl QueryExecutor {
 
         let empty_row = Vec::new();
         let row_for_eval = rows.get(0).unwrap_or(&empty_row);
-        
+
         let mut result_row = Vec::with_capacity(expressions.len());
 
         for expr in expressions {
             let value = match expr {
-                Expr::Function { name, args, distinct, over: _ } => {
-                    self.evaluate_aggregate(name, args, *distinct, rows, schema, &eval_ctx).await?
+                Expr::Function {
+                    name,
+                    args,
+                    distinct,
+                    over: _,
+                } => {
+                    self.evaluate_aggregate(name, args, *distinct, rows, schema, &eval_ctx)
+                        .await?
                 }
                 _ => {
                     // Constant expressions evaluated once
@@ -869,11 +1102,26 @@ impl QueryExecutor {
         eval_ctx: &EvaluationContext<'_>,
     ) -> Result<Value> {
         match name.to_uppercase().as_str() {
-            "COUNT" => self.aggregate_count(args, distinct, rows, schema, eval_ctx).await,
-            "SUM" => self.aggregate_sum(args, distinct, rows, schema, eval_ctx).await,
-            "AVG" => self.aggregate_avg(args, distinct, rows, schema, eval_ctx).await,
-            "MIN" => self.aggregate_min(args, distinct, rows, schema, eval_ctx).await,
-            "MAX" => self.aggregate_max(args, distinct, rows, schema, eval_ctx).await,
+            "COUNT" => {
+                self.aggregate_count(args, distinct, rows, schema, eval_ctx)
+                    .await
+            }
+            "SUM" => {
+                self.aggregate_sum(args, distinct, rows, schema, eval_ctx)
+                    .await
+            }
+            "AVG" => {
+                self.aggregate_avg(args, distinct, rows, schema, eval_ctx)
+                    .await
+            }
+            "MIN" => {
+                self.aggregate_min(args, distinct, rows, schema, eval_ctx)
+                    .await
+            }
+            "MAX" => {
+                self.aggregate_max(args, distinct, rows, schema, eval_ctx)
+                    .await
+            }
             _ => Err(DbError::UnsupportedOperation(format!(
                 "Unknown aggregate function: {}",
                 name
@@ -891,13 +1139,15 @@ impl QueryExecutor {
     ) -> Result<Value> {
         if args.is_empty() || matches!(args[0], Expr::Literal(Value::Text(ref s)) if s == "*") {
             if distinct {
-                return Err(DbError::ExecutionError("COUNT(DISTINCT *) is not supported".into()));
+                return Err(DbError::ExecutionError(
+                    "COUNT(DISTINCT *) is not supported".into(),
+                ));
             }
             return Ok(Value::Integer(rows.len() as i64));
         }
 
         let mut count = 0i64;
-        
+
         if distinct {
             let mut seen = std::collections::HashSet::new();
             for row in rows {
@@ -935,11 +1185,15 @@ impl QueryExecutor {
         let mut int_sum: i64 = 0;
         let mut float_sum: f64 = 0.0;
         let mut is_integer = true;
-        let mut seen = if distinct { Some(std::collections::HashSet::new()) } else { None };
+        let mut seen = if distinct {
+            Some(std::collections::HashSet::new())
+        } else {
+            None
+        };
 
         for row in rows {
             let val = eval_ctx.evaluate(&args[0], row, schema).await?;
-            
+
             if let Some(ref mut set) = seen {
                 if !matches!(val, Value::Null) && !set.insert(JoinKey(val.clone())) {
                     continue;
@@ -988,11 +1242,15 @@ impl QueryExecutor {
 
         let mut sum = 0.0f64;
         let mut count = 0usize;
-        let mut seen = if distinct { Some(std::collections::HashSet::new()) } else { None };
+        let mut seen = if distinct {
+            Some(std::collections::HashSet::new())
+        } else {
+            None
+        };
 
         for row in rows {
             let val = eval_ctx.evaluate(&args[0], row, schema).await?;
-            
+
             if let Some(ref mut set) = seen {
                 if !matches!(val, Value::Null) && !set.insert(JoinKey(val.clone())) {
                     continue;
@@ -1176,12 +1434,14 @@ impl Executor for QueryExecutor {
     async fn execute(&self, stmt: &Statement, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
         let Statement::Query(query) = stmt else {
             return Err(DbError::ExecutionError(
-                "QueryExecutor called with non-query statement".into()
+                "QueryExecutor called with non-query statement".into(),
             ));
         };
 
         // Planning
-        let plan = self.planner.plan(&Statement::Query(query.clone()), &self.catalog)?;
+        let plan = self
+            .planner
+            .plan(&Statement::Query(query.clone()), &self.catalog)?;
 
         // Execute plan
         let rows = self.execute_plan(&plan, ctx).await?;
@@ -1190,6 +1450,21 @@ impl Executor for QueryExecutor {
         let columns = self.get_output_columns(&plan, ctx)?;
 
         Ok(QueryResult::new(columns, rows))
+    }
+}
+
+struct SimplePredicate {
+    col_idx: usize,
+    value: Value,
+}
+
+impl SimplePredicate {
+    fn matches(&self, row: &Row) -> bool {
+        let cell = &row[self.col_idx];
+        let comparator = ComparisonEvaluator;
+        comparator
+            .compare(cell, &self.value, &crate::parser::ast::BinaryOp::Eq)
+            .unwrap_or(false)
     }
 }
 

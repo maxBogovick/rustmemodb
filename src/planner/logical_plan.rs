@@ -1,5 +1,5 @@
-use crate::parser::ast::{Expr, OrderByExpr};
 use crate::core::Schema;
+use crate::parser::ast::{Expr, OrderByExpr};
 
 /// Logical plan nodes - high-level operations
 #[derive(Debug, Clone)]
@@ -177,38 +177,39 @@ pub enum JoinType {
 
 impl LogicalPlan {
     /// Get the output schema of this plan
-        pub fn schema(&self) -> &Schema {
-            match self {
-                LogicalPlan::TableScan(node) => &node.schema,
-                LogicalPlan::Filter(node) => &node.schema,
-                LogicalPlan::Projection(node) => &node.schema,
-                LogicalPlan::Sort(node) => &node.schema,
-                LogicalPlan::Limit(node) => &node.schema,
-                LogicalPlan::Join(node) => &node.schema,
-                LogicalPlan::Aggregate(node) => &node.schema,
-                LogicalPlan::Distinct(node) => &node.schema,
-                LogicalPlan::Window(node) => &node.schema,
-                LogicalPlan::Values(node) => &node.schema,
-                LogicalPlan::RecursiveQuery(node) => &node.schema,
-            }
+    pub fn schema(&self) -> &Schema {
+        match self {
+            LogicalPlan::TableScan(node) => &node.schema,
+            LogicalPlan::Filter(node) => &node.schema,
+            LogicalPlan::Projection(node) => &node.schema,
+            LogicalPlan::Sort(node) => &node.schema,
+            LogicalPlan::Limit(node) => &node.schema,
+            LogicalPlan::Join(node) => &node.schema,
+            LogicalPlan::Aggregate(node) => &node.schema,
+            LogicalPlan::Distinct(node) => &node.schema,
+            LogicalPlan::Window(node) => &node.schema,
+            LogicalPlan::Values(node) => &node.schema,
+            LogicalPlan::RecursiveQuery(node) => &node.schema,
         }
-    
-        /// Get child plans
-        #[allow(dead_code)]
-        pub fn children(&self) -> Vec<&LogicalPlan> {
-            match self {
-                LogicalPlan::TableScan(_) => vec![],
-                LogicalPlan::Filter(node) => vec![&*node.input],
-                LogicalPlan::Projection(node) => vec![&*node.input],
-                LogicalPlan::Sort(node) => vec![&*node.input],
-                LogicalPlan::Limit(node) => vec![&*node.input],
-                LogicalPlan::Join(node) => vec![&*node.left, &*node.right],
-                LogicalPlan::Aggregate(node) => vec![&*node.input],
-                LogicalPlan::Distinct(node) => vec![&*node.input],
-                LogicalPlan::Window(node) => vec![&*node.input],
-                LogicalPlan::Values(_) => vec![],
-                LogicalPlan::RecursiveQuery(node) => vec![&*node.anchor_plan, &*node.recursive_plan, &*node.final_plan],
+    }
+
+    /// Get child plans
+    #[allow(dead_code)]
+    pub fn children(&self) -> Vec<&LogicalPlan> {
+        match self {
+            LogicalPlan::TableScan(_) => vec![],
+            LogicalPlan::Filter(node) => vec![&*node.input],
+            LogicalPlan::Projection(node) => vec![&*node.input],
+            LogicalPlan::Sort(node) => vec![&*node.input],
+            LogicalPlan::Limit(node) => vec![&*node.input],
+            LogicalPlan::Join(node) => vec![&*node.left, &*node.right],
+            LogicalPlan::Aggregate(node) => vec![&*node.input],
+            LogicalPlan::Distinct(node) => vec![&*node.input],
+            LogicalPlan::Window(node) => vec![&*node.input],
+            LogicalPlan::Values(_) => vec![],
+            LogicalPlan::RecursiveQuery(node) => {
+                vec![&*node.anchor_plan, &*node.recursive_plan, &*node.final_plan]
             }
         }
     }
-    
+}

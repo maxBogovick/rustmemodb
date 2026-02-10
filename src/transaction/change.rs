@@ -20,10 +20,7 @@ use crate::storage::TableSchema;
 #[derive(Debug, Clone)]
 pub enum Change {
     /// Insert a new row into a table
-    InsertRow {
-        table: String,
-        row: Row,
-    },
+    InsertRow { table: String, row: Row },
 
     /// Update an existing row
     UpdateRow {
@@ -41,9 +38,7 @@ pub enum Change {
     },
 
     /// Create a new table
-    CreateTable {
-        table_schema: TableSchema,
-    },
+    CreateTable { table_schema: TableSchema },
 
     /// Drop an existing table
     DropTable {

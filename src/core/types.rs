@@ -1,9 +1,9 @@
 use super::{DbError, Result, Value};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
 use std::fmt;
-use chrono::{DateTime, NaiveDate, Utc, NaiveDateTime};
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 pub type Row = Vec<Value>;
@@ -91,55 +91,60 @@ impl DataType {
         match (self, value) {
             (Self::Float, Value::Integer(i)) => Ok(Value::Float(*i as f64)),
             (Self::Integer, Value::Float(f)) => Ok(Value::Integer(*f as i64)),
-            
+
             (Self::Timestamp, Value::Text(s)) => {
                 if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
                     return Ok(Value::Timestamp(dt.with_timezone(&Utc)));
                 }
                 if let Some(stripped) = s.strip_suffix(" UTC") {
-                    if let Ok(dt) = NaiveDateTime::parse_from_str(stripped, "%Y-%m-%d %H:%M:%S%.f") {
+                    if let Ok(dt) = NaiveDateTime::parse_from_str(stripped, "%Y-%m-%d %H:%M:%S%.f")
+                    {
                         return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
                     }
                 }
                 if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-                     return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                    return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
                 }
                 if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-                     return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                    return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
                 }
-                Err(DbError::TypeMismatch(format!("Invalid Timestamp format: {}", s)))
-            },
-            
+                Err(DbError::TypeMismatch(format!(
+                    "Invalid Timestamp format: {}",
+                    s
+                )))
+            }
+
             (Self::Date, Value::Text(s)) => {
                 if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
                     Ok(Value::Date(d))
                 } else {
                     Err(DbError::TypeMismatch(format!("Invalid Date format: {}", s)))
                 }
-            },
-            
+            }
+
             (Self::Uuid, Value::Text(s)) => {
                 if let Ok(u) = Uuid::parse_str(s) {
                     Ok(Value::Uuid(u))
                 } else {
                     Err(DbError::TypeMismatch(format!("Invalid UUID format: {}", s)))
                 }
-            },
-            
+            }
+
             (Self::Json, Value::Text(s)) => {
                 if let Ok(json) = serde_json::from_str(s) {
                     Ok(Value::Json(json))
                 } else {
                     Err(DbError::TypeMismatch(format!("Invalid JSON format: {}", s)))
                 }
-            },
-            
+            }
+
             (Self::Array(inner), Value::Text(s)) => {
                 // Basic array parsing "{a,b}"
                 let trimmed = s.trim();
-                if (trimmed.starts_with('{') && trimmed.ends_with('}')) ||
-                   (trimmed.starts_with('[') && trimmed.ends_with(']')) {
-                    let content = &trimmed[1..trimmed.len()-1];
+                if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+                    || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+                {
+                    let content = &trimmed[1..trimmed.len() - 1];
                     if content.is_empty() {
                         return Ok(Value::Array(vec![]));
                     }
@@ -152,13 +157,20 @@ impl DataType {
                     }
                     Ok(Value::Array(values))
                 } else {
-                    Err(DbError::TypeMismatch(format!("Invalid Array format: {}", s)))
+                    Err(DbError::TypeMismatch(format!(
+                        "Invalid Array format: {}",
+                        s
+                    )))
                 }
-            },
+            }
 
             (Self::Text, v) => Ok(Value::Text(v.to_string())),
 
-            _ => Err(DbError::TypeMismatch(format!("Cannot cast {} to {}", value.type_name(), self))),
+            _ => Err(DbError::TypeMismatch(format!(
+                "Cannot cast {} to {}",
+                value.type_name(),
+                self
+            ))),
         }
     }
 
@@ -210,7 +222,7 @@ pub struct Column {
     pub primary_key: bool,
     pub unique: bool,
     pub references: Option<ForeignKey>, // New field
-    pub default: Option<Value>
+    pub default: Option<Value>,
 }
 
 impl Column {
@@ -284,7 +296,10 @@ pub struct Schema {
 
 impl Schema {
     pub fn new(columns: Vec<Column>) -> Self {
-        Self { columns, cache: SchemaCache::default() }
+        Self {
+            columns,
+            cache: SchemaCache::default(),
+        }
     }
 
     pub fn columns(&self) -> &[Column] {
@@ -329,15 +344,28 @@ impl Schema {
     }
 
     pub fn qualify_columns(&self, table_name: &str) -> Self {
-        let columns = self.columns.iter().map(|col| {
-            let mut new_col = col.clone();
-            if !new_col.name.contains('.') {
-                new_col.name = format!("{}.{}", table_name, col.name);
-            }
-            new_col
-        }).collect();
+        let columns = self
+            .columns
+            .iter()
+            .map(|col| {
+                let mut new_col = col.clone();
+                if !new_col.name.contains('.') {
+                    new_col.name = format!("{}.{}", table_name, col.name);
+                }
+                new_col
+            })
+            .collect();
         Self::new(columns)
     }
+}
+
+pub fn estimated_row_bytes(row: &Row) -> usize {
+    std::mem::size_of::<Vec<Value>>()
+        + row.len().saturating_mul(std::mem::size_of::<Value>())
+        + row
+            .iter()
+            .map(|value| value.estimated_heap_bytes())
+            .sum::<usize>()
 }
 
 impl Clone for Schema {

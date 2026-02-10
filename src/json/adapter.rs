@@ -4,17 +4,17 @@
 //! Implements the Facade pattern to simplify complex interactions
 //! between schema inference, SQL conversion, and database execution.
 
-use crate::facade::InMemoryDB;
-use crate::result::QueryResult;
 use super::converter::{
-    CreateTableBuilder, InsertStatementBuilder, UpdateStatementBuilder,
-    DeleteStatementBuilder, JsonToValueConverter,
+    CreateTableBuilder, DeleteStatementBuilder, InsertStatementBuilder, JsonToValueConverter,
+    UpdateStatementBuilder,
 };
 use super::error::{JsonError, JsonResult};
 use super::schema_inference::{SchemaInferenceEngine, SchemaInferenceStrategy};
 use super::validator::{QueryValidator, validate_collection_name, validate_field_name};
+use crate::facade::InMemoryDB;
+use crate::result::QueryResult;
 use serde_json::Value as JsonValue;
-use std::sync::{Arc};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Configuration for JsonStorageAdapter
@@ -87,10 +87,9 @@ impl JsonStorageAdapter {
 
         // Parse JSON document
         let json_value: JsonValue = serde_json::from_str(document)?;
-        let documents = json_value.as_array()
-            .ok_or_else(|| JsonError::InvalidStructure(
-                "Expected JSON array of objects".to_string()
-            ))?;
+        let documents = json_value.as_array().ok_or_else(|| {
+            JsonError::InvalidStructure("Expected JSON array of objects".to_string())
+        })?;
 
         if documents.is_empty() {
             return Err(JsonError::EmptyDocument);
@@ -105,12 +104,14 @@ impl JsonStorageAdapter {
         // Create table if needed
         if !table_exists {
             if !self.config.auto_create_table {
-                return Err(JsonError::ValidationError(
-                    format!("Collection '{}' does not exist", collection_name)
-                ));
+                return Err(JsonError::ValidationError(format!(
+                    "Collection '{}' does not exist",
+                    collection_name
+                )));
             }
 
-            self.create_table_from_documents(collection_name, documents).await?;
+            self.create_table_from_documents(collection_name, documents)
+                .await?;
         }
 
         // Insert documents
@@ -146,10 +147,9 @@ impl JsonStorageAdapter {
 
         // Parse JSON document
         let json_value: JsonValue = serde_json::from_str(document)?;
-        let documents = json_value.as_array()
-            .ok_or_else(|| JsonError::InvalidStructure(
-                "Expected JSON array of objects".to_string()
-            ))?;
+        let documents = json_value.as_array().ok_or_else(|| {
+            JsonError::InvalidStructure("Expected JSON array of objects".to_string())
+        })?;
 
         if documents.is_empty() {
             return Ok(());
@@ -159,20 +159,23 @@ impl JsonStorageAdapter {
         {
             let db = self.db.read().await;
             if !db.table_exists(collection_name) {
-                return Err(JsonError::ValidationError(
-                    format!("Collection '{}' does not exist", collection_name)
-                ));
+                return Err(JsonError::ValidationError(format!(
+                    "Collection '{}' does not exist",
+                    collection_name
+                )));
             }
         }
 
         // Generate and execute UPDATE statements
         for doc in documents {
-            let obj = doc.as_object()
+            let obj = doc
+                .as_object()
                 .ok_or_else(|| JsonError::InvalidStructure("Expected JSON object".to_string()))?;
 
             // Extract ID (required for updates)
-            let id_value = obj.get("id")
-                .ok_or_else(|| JsonError::MissingField("id field is required for updates".to_string()))?;
+            let id_value = obj.get("id").ok_or_else(|| {
+                JsonError::MissingField("id field is required for updates".to_string())
+            })?;
 
             let id_string = match id_value.as_str() {
                 Some(s) => s.to_string(),
@@ -226,9 +229,10 @@ impl JsonStorageAdapter {
         {
             let db = self.db.read().await;
             if !db.table_exists(collection_name) {
-                return Err(JsonError::ValidationError(
-                    format!("Collection '{}' does not exist", collection_name)
-                ));
+                return Err(JsonError::ValidationError(format!(
+                    "Collection '{}' does not exist",
+                    collection_name
+                )));
             }
         }
 
@@ -276,7 +280,9 @@ impl JsonStorageAdapter {
         documents: &[JsonValue],
     ) -> JsonResult<()> {
         // Infer schema from documents
-        let schema = self.schema_engine.infer_schema(collection_name, documents)?;
+        let schema = self
+            .schema_engine
+            .infer_schema(collection_name, documents)?;
 
         // Generate CREATE TABLE statement
         let sql = CreateTableBuilder::from_schema(&schema).build();
@@ -299,20 +305,26 @@ impl JsonStorageAdapter {
             let db = self.db.read().await;
             db.table_exists(collection_name)
                 .then_some(())
-                .ok_or_else(|| JsonError::ValidationError(
-                    format!("Collection '{}' does not exist", collection_name)
-                ))?;
+                .ok_or_else(|| {
+                    JsonError::ValidationError(format!(
+                        "Collection '{}' does not exist",
+                        collection_name
+                    ))
+                })?;
             db.get_table_schema(collection_name).await?
         };
 
         // Convert JSON documents to rows
-        let rows: JsonResult<Vec<_>> = documents.iter()
+        let rows: JsonResult<Vec<_>> = documents
+            .iter()
             .map(|doc| JsonToValueConverter::json_to_row(doc, &schema))
             .collect();
         let rows = rows?;
 
         // Generate INSERT statements in batches
-        let column_names: Vec<String> = schema.schema().columns()
+        let column_names: Vec<String> = schema
+            .schema()
+            .columns()
             .iter()
             .map(|col| col.name.clone())
             .collect();
@@ -355,11 +367,9 @@ impl JsonStorageAdapter {
         match value {
             crate::core::Value::Null => JsonValue::Null,
             crate::core::Value::Integer(i) => JsonValue::Number((*i).into()),
-            crate::core::Value::Float(f) => {
-                serde_json::Number::from_f64(*f)
-                    .map(JsonValue::Number)
-                    .unwrap_or(JsonValue::Null)
-            }
+            crate::core::Value::Float(f) => serde_json::Number::from_f64(*f)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null),
             crate::core::Value::Text(s) => JsonValue::String(s.clone()),
             crate::core::Value::Boolean(b) => JsonValue::Bool(*b),
             crate::core::Value::Timestamp(t) => JsonValue::String(t.to_rfc3339()),
@@ -408,7 +418,9 @@ mod tests {
 
         adapter.create("users", doc).await.unwrap();
 
-        let result = adapter.read("users", "SELECT * FROM users WHERE age > 24").await;
+        let result = adapter
+            .read("users", "SELECT * FROM users WHERE age > 24")
+            .await;
         assert!(result.is_ok());
 
         let json = result.unwrap();

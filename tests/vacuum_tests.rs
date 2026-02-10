@@ -5,14 +5,20 @@ use rustmemodb::core::Value;
 async fn test_vacuum_reclaims_space() {
     let mut db = InMemoryDB::new();
 
-    db.execute("CREATE TABLE test (id INTEGER, val INTEGER)").await.unwrap();
+    db.execute("CREATE TABLE test (id INTEGER, val INTEGER)")
+        .await
+        .unwrap();
 
     // 1. Insert initial row
-    db.execute("INSERT INTO test VALUES (1, 100)").await.unwrap();
+    db.execute("INSERT INTO test VALUES (1, 100)")
+        .await
+        .unwrap();
 
     // 2. Update it 5 times
     for i in 1..=5 {
-        db.execute(&format!("UPDATE test SET val = {} WHERE id = 1", 100 + i)).await.unwrap();
+        db.execute(&format!("UPDATE test SET val = {} WHERE id = 1", 100 + i))
+            .await
+            .unwrap();
     }
 
     // At this point, we have 1 (insert) + 5 (updates) = 6 versions.
@@ -22,7 +28,7 @@ async fn test_vacuum_reclaims_space() {
 
     // 3. Run Vacuum
     let freed = db.vacuum().await.unwrap();
-    
+
     // We expect 5 old versions to be freed.
     // Version chain:
     // V6 (Head, visible)
@@ -30,26 +36,35 @@ async fn test_vacuum_reclaims_space() {
     // V4 (Dead, xmax=tx5)
     // ...
     // V1 (Dead, xmax=tx2)
-    
+
     println!("Vacuum freed {} versions", freed);
     assert_eq!(freed, 5);
 
     // 4. Verify data is still correct
-    let result = db.execute("SELECT val FROM test WHERE id = 1").await.unwrap();
+    let result = db
+        .execute("SELECT val FROM test WHERE id = 1")
+        .await
+        .unwrap();
     assert_eq!(result.rows()[0][0], Value::Integer(105));
 }
 
 #[tokio::test]
 async fn test_vacuum_respects_active_transactions() {
     use std::sync::Arc;
-    
+
     let db = Arc::new(tokio::sync::RwLock::new(InMemoryDB::new()));
 
     // Setup
     {
         let mut db_write = db.write().await;
-        db_write.execute("CREATE TABLE test (id INTEGER, val INTEGER)").await.unwrap();
-        db_write.execute("INSERT INTO test VALUES (1, 10)").await.unwrap();
+        db_write
+            .execute("CREATE TABLE test (id INTEGER, val INTEGER)")
+            .await
+            .unwrap();
+        db_write
+            .execute("INSERT INTO test VALUES (1, 10)")
+            .await
+            .unwrap();
     } // Drop write lock
 
     // 1. Start a long-running transaction (Reader)
@@ -60,19 +75,22 @@ async fn test_vacuum_respects_active_transactions() {
             let db_read = db_clone.read().await;
             db_read.transaction_manager().clone()
         };
-        
+
         let tx_id = tx_mgr.begin().await.unwrap();
-        
+
         // Sleep WITHOUT holding DB lock
         // This allows other updates to proceed while this transaction is effectively "open"
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        
+
         // Verify we still see old value
         // We need write lock to execute
         let mut db_write = db_clone.write().await;
-        let result = db_write.execute_with_transaction("SELECT val FROM test WHERE id = 1", Some(tx_id)).await.unwrap();
+        let result = db_write
+            .execute_with_transaction("SELECT val FROM test WHERE id = 1", Some(tx_id))
+            .await
+            .unwrap();
         assert_eq!(result.rows()[0][0], Value::Integer(10));
-        
+
         // Commit
         tx_mgr.commit(tx_id).await.unwrap();
     });
@@ -81,8 +99,14 @@ async fn test_vacuum_respects_active_transactions() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     {
         let mut db_write = db.write().await;
-        db_write.execute("UPDATE test SET val = 20 WHERE id = 1").await.unwrap();
-        db_write.execute("UPDATE test SET val = 30 WHERE id = 1").await.unwrap();
+        db_write
+            .execute("UPDATE test SET val = 20 WHERE id = 1")
+            .await
+            .unwrap();
+        db_write
+            .execute("UPDATE test SET val = 30 WHERE id = 1")
+            .await
+            .unwrap();
     }
 
     // 3. Run Vacuum while Reader is still active
@@ -107,9 +131,9 @@ async fn test_vacuum_respects_active_transactions() {
         // Snapshot logic: is_committed returns false if tx_id >= snapshot.max_tx_id.
         // So Reader thinks T_Update1 is NOT committed.
         // So Reader sees V1.
-        
+
         // Therefore, V1 CANNOT be vacuumed.
-        
+
         // What about V2?
         // V2 created by T_Update1.
         // V2 deleted by T_Update2.
@@ -123,7 +147,7 @@ async fn test_vacuum_respects_active_transactions() {
         // Vacuum condition: xmax < min_active.
         // T_Update2 is NOT < Reader.tx_id.
         // So V2 is preserved (conservatively).
-        
+
         // So Vacuum should free 0 versions.
         println!("Vacuum freed {} versions (expected 0)", freed);
         assert_eq!(freed, 0);

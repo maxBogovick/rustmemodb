@@ -1,29 +1,35 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use log::{debug, info, error};
-use tokio::net::TcpListener;
 use async_trait::async_trait;
-use pgwire::api::auth::{finish_authentication, save_startup_parameters_to_metadata, DefaultServerParameterProvider, LoginInfo, StartupHandler};
+use futures::Sink;
+use futures::{SinkExt, stream};
+use log::{debug, error, info};
 use pgwire::api::PgWireConnectionState;
-use pgwire::api::query::{SimpleQueryHandler, ExtendedQueryHandler};
+use pgwire::api::auth::{
+    DefaultServerParameterProvider, LoginInfo, StartupHandler, finish_authentication,
+    save_startup_parameters_to_metadata,
+};
 use pgwire::api::copy::NoopCopyHandler;
-use pgwire::api::results::{Response, Tag, FieldInfo, QueryResponse, DataRowEncoder, FieldFormat, DescribeStatementResponse, DescribePortalResponse, DescribeResponse};
-use pgwire::api::{ClientInfo, Type};
 use pgwire::api::portal::Portal;
-use pgwire::api::stmt::{StoredStatement, NoopQueryParser};
-use pgwire::error::{PgWireResult, PgWireError, ErrorInfo};
-use pgwire::tokio::process_socket;
-use tokio::sync::RwLock;
-use futures::{stream, SinkExt};
+use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
+use pgwire::api::results::{
+    DataRowEncoder, DescribePortalResponse, DescribeResponse, DescribeStatementResponse,
+    FieldFormat, FieldInfo, QueryResponse, Response, Tag,
+};
+use pgwire::api::stmt::{NoopQueryParser, StoredStatement};
+use pgwire::api::{ClientInfo, Type};
+use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
 use pgwire::messages::extendedquery::Sync as PgSync;
-use pgwire::messages::response::{ReadyForQuery, TransactionStatus, SslResponse};
-use futures::Sink;
+use pgwire::messages::response::{ReadyForQuery, SslResponse, TransactionStatus};
+use pgwire::tokio::process_socket;
 use std::fmt::Debug;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 
+use crate::connection::auth::{AuthManager, enforce_permissions};
 use crate::core::Column;
 use crate::{DataType, InMemoryDB, Value};
-use crate::connection::auth::{AuthManager, enforce_permissions};
 use pgwire::messages::startup::Authentication;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
 use tokio::io::AsyncWriteExt;
@@ -163,7 +169,10 @@ impl StartupHandler for RustMemDbStartupHandler {
                     .await?;
             }
             PgWireFrontendMessage::PasswordMessageFamily(pwd) => {
-                if !matches!(client.state(), PgWireConnectionState::AuthenticationInProgress) {
+                if !matches!(
+                    client.state(),
+                    PgWireConnectionState::AuthenticationInProgress
+                ) {
                     let error_info = ErrorInfo::new(
                         "ERROR".to_string(),
                         "08P01".to_string(),
@@ -179,8 +188,7 @@ impl StartupHandler for RustMemDbStartupHandler {
                 let pwd = pwd.into_password()?;
                 let login_info = LoginInfo::from_client_info(client);
                 let username = login_info.user().unwrap_or("");
-                let password = std::str::from_utf8(pwd.password.as_bytes())
-                    .unwrap_or_default();
+                let password = std::str::from_utf8(pwd.password.as_bytes()).unwrap_or_default();
 
                 if self.auth.authenticate(username, password).await.is_ok() {
                     debug!("PgWire auth succeeded for user '{}'", username);
@@ -213,11 +221,17 @@ impl pgwire::api::PgWireHandlerFactory for HandlerFactory {
     type CopyHandler = NoopCopyHandler;
 
     fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
-        Arc::new(QueryProcessor { db: self.db.clone(), metrics: Arc::clone(&self.metrics) })
+        Arc::new(QueryProcessor {
+            db: self.db.clone(),
+            metrics: Arc::clone(&self.metrics),
+        })
     }
 
     fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
-        Arc::new(QueryProcessor { db: self.db.clone(), metrics: Arc::clone(&self.metrics) })
+        Arc::new(QueryProcessor {
+            db: self.db.clone(),
+            metrics: Arc::clone(&self.metrics),
+        })
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
@@ -240,7 +254,11 @@ struct QueryProcessor {
 
 #[async_trait]
 impl SimpleQueryHandler for QueryProcessor {
-    async fn do_query<'a, 'b: 'a, C>(&'b self, _client: &mut C, query: &'a str) -> PgWireResult<Vec<Response<'a>>>
+    async fn do_query<'a, 'b: 'a, C>(
+        &'b self,
+        _client: &mut C,
+        query: &'a str,
+    ) -> PgWireResult<Vec<Response<'a>>>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
@@ -257,7 +275,8 @@ impl SimpleQueryHandler for QueryProcessor {
             FieldFormat::Text,
             username,
             &self.metrics,
-        ).await?;
+        )
+        .await?;
         Ok(vec![response])
     }
 }
@@ -288,16 +307,19 @@ impl ExtendedQueryHandler for QueryProcessor {
         }
 
         let mut params = Vec::new();
-        
+
         // Infer parameter types to decode correctly
         let db_arc = self.db.clone();
         let db = db_arc.read().await;
-        let (_, param_types) = db.plan_query(query).await.unwrap_or((crate::core::Schema::new(vec![]), vec![]));
+        let (_, param_types) = db
+            .plan_query(query)
+            .await
+            .unwrap_or((crate::core::Schema::new(vec![]), vec![]));
         drop(db);
 
         for i in 0..portal.parameter_len() {
             let dt = param_types.get(i).unwrap_or(&DataType::Unknown);
-            
+
             let val = match dt {
                 DataType::Integer => {
                     if let Some(n) = portal.parameter::<i64>(i, &Type::INT8)? {
@@ -341,7 +363,8 @@ impl ExtendedQueryHandler for QueryProcessor {
             FieldFormat::Binary,
             username,
             &self.metrics,
-        ).await
+        )
+        .await
     }
 
     async fn do_describe_statement<C>(
@@ -363,14 +386,17 @@ impl ExtendedQueryHandler for QueryProcessor {
         match db.plan_query(query).await {
             Ok((schema, params)) => {
                 let fields = create_field_infos(schema.columns(), FieldFormat::Binary);
-                let param_types = params.iter().map(|dt| match dt {
-                    DataType::Integer => Type::INT8,
-                    DataType::Float => Type::FLOAT8,
-                    DataType::Boolean => Type::BOOL,
-                    // Force other types to TEXT so client sends string representation
-                    // We parse them in InsertExecutor
-                    _ => Type::TEXT,
-                }).collect();
+                let param_types = params
+                    .iter()
+                    .map(|dt| match dt {
+                        DataType::Integer => Type::INT8,
+                        DataType::Float => Type::FLOAT8,
+                        DataType::Boolean => Type::BOOL,
+                        // Force other types to TEXT so client sends string representation
+                        // We parse them in InsertExecutor
+                        _ => Type::TEXT,
+                    })
+                    .collect();
                 Ok(DescribeStatementResponse::new(param_types, fields))
             }
             Err(e) => {
@@ -378,7 +404,7 @@ impl ExtendedQueryHandler for QueryProcessor {
                 Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "ERROR".to_string(),
                     "42P00".to_string(),
-                    e.to_string()
+                    e.to_string(),
                 ))))
             }
         }
@@ -410,17 +436,13 @@ impl ExtendedQueryHandler for QueryProcessor {
                 Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "ERROR".to_string(),
                     "42P00".to_string(),
-                    e.to_string()
+                    e.to_string(),
                 ))))
             }
         }
     }
 
-    async fn on_sync<C>(
-        &self,
-        _client: &mut C,
-        _message: PgSync
-    ) -> PgWireResult<()>
+    async fn on_sync<C>(&self, _client: &mut C, _message: PgSync) -> PgWireResult<()>
     where
         C: ClientInfo + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::Error: Debug,
@@ -474,7 +496,9 @@ async fn execute_query<'a>(
 
     let statement = {
         let db_guard = db.read().await;
-        db_guard.parse_first(query).map_err(|e| PgWireError::ApiError(Box::new(e)))?
+        db_guard
+            .parse_first(query)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?
     };
 
     enforce_permissions(&user, &statement).map_err(|e| {
@@ -489,7 +513,9 @@ async fn execute_query<'a>(
     {
         let db_guard = db.read().await;
         if InMemoryDB::is_read_only_stmt(&statement) {
-            let result = db_guard.execute_parsed_readonly_with_params(&statement, None, params).await
+            let result = db_guard
+                .execute_parsed_readonly_with_params(&statement, None, params)
+                .await
                 .map_err(|e| {
                     metrics.on_query_error();
                     PgWireError::ApiError(Box::new(e))
@@ -499,7 +525,10 @@ async fn execute_query<'a>(
     }
 
     let mut db_guard = db.write().await;
-    match db_guard.execute_parsed_with_params(&statement, None, params).await {
+    match db_guard
+        .execute_parsed_with_params(&statement, None, params)
+        .await
+    {
         Ok(result) => build_response_from_result(query, result, format),
         Err(e) => {
             metrics.on_query_error();
@@ -507,7 +536,7 @@ async fn execute_query<'a>(
             Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_string(),
                 "XX000".to_string(),
-                e.to_string()
+                e.to_string(),
             ))))
         }
     }
@@ -539,12 +568,19 @@ impl PgWireMetrics {
     }
 }
 
-fn build_response_from_result<'a>(query: &str, result: crate::result::QueryResult, format: FieldFormat) -> PgWireResult<Response<'a>> {
+fn build_response_from_result<'a>(
+    query: &str,
+    result: crate::result::QueryResult,
+    format: FieldFormat,
+) -> PgWireResult<Response<'a>> {
     debug!("Query successful, rows: {}", result.row_count());
     if result.rows().is_empty() {
         if !result.columns().is_empty() {
             let fields = Arc::new(create_field_infos(result.columns(), format));
-            return Ok(Response::Query(QueryResponse::new(fields, stream::iter(vec![]))));
+            return Ok(Response::Query(QueryResponse::new(
+                fields,
+                stream::iter(vec![]),
+            )));
         }
 
         let count = result.affected_rows().unwrap_or(0);
@@ -600,7 +636,11 @@ fn create_field_infos(columns: &[Column], default_format: FieldFormat) -> Vec<Fi
         .collect()
 }
 
-fn encode_value(encoder: &mut DataRowEncoder, value: &Value, format: FieldFormat) -> PgWireResult<()> {
+fn encode_value(
+    encoder: &mut DataRowEncoder,
+    value: &Value,
+    format: FieldFormat,
+) -> PgWireResult<()> {
     if format == FieldFormat::Text {
         if matches!(value, Value::Null) {
             return encoder.encode_field(&None::<String>);
@@ -618,12 +658,12 @@ fn encode_value(encoder: &mut DataRowEncoder, value: &Value, format: FieldFormat
         Value::Timestamp(t) => encoder.encode_field(&t.naive_utc()),
         Value::Date(d) => encoder.encode_field(d),
         Value::Uuid(u) => encoder.encode_field(u.as_bytes()),
-        
+
         Value::Array(_) | Value::Json(_) => {
-             // These should be handled by Text format check above because create_field_infos forces Text.
-             // But if we reached here with Binary, fallback to string bytes.
-             let s = format!("{}", value);
-             encoder.encode_field(&s)
+            // These should be handled by Text format check above because create_field_infos forces Text.
+            // But if we reached here with Binary, fallback to string bytes.
+            let s = format!("{}", value);
+            encoder.encode_field(&s)
         }
     }
 }

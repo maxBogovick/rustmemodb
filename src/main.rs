@@ -1,10 +1,12 @@
 mod cli;
+mod load_test;
 
 use crate::cli::app::App;
-use rustmemodb::server::pg_server::PostgresServer;
-use rustmemodb::InMemoryDB;
-use std::error::Error;
+use crate::load_test::{LoadTestConfig, run_load_test};
 use clap::{Parser, Subcommand};
+use rustmemodb::InMemoryDB;
+use rustmemodb::server::pg_server::PostgresServer;
+use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -25,10 +27,25 @@ enum Commands {
         /// Port to listen on
         #[arg(long, default_value_t = 5432)]
         port: u16,
-        
+
         /// Host to bind to
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+    },
+    /// Run a synthetic load test with latency percentiles
+    LoadTest {
+        #[arg(long, default_value_t = 10)]
+        duration_secs: u64,
+        #[arg(long, default_value_t = 4)]
+        concurrency: usize,
+        #[arg(long, default_value_t = 10000)]
+        rows: usize,
+        #[arg(long, default_value_t = 80)]
+        read_ratio: u8,
+        #[arg(long, default_value_t = 100000)]
+        sample_max: usize,
+        #[arg(long, default_value_t = 64)]
+        payload_size: usize,
     },
 }
 
@@ -42,6 +59,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let db = Arc::new(RwLock::new(InMemoryDB::new()));
             let server = PostgresServer::new(db, &host, port);
             server.run().await?;
+        }
+        Some(Commands::LoadTest {
+            duration_secs,
+            concurrency,
+            rows,
+            read_ratio,
+            sample_max,
+            payload_size,
+        }) => {
+            let config = LoadTestConfig {
+                duration_secs,
+                concurrency,
+                rows,
+                read_ratio,
+                sample_max,
+                payload_size,
+            };
+            run_load_test(config).await?;
         }
         _ => {
             // Default to CLI

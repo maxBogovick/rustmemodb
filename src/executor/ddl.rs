@@ -1,6 +1,8 @@
 use super::{ExecutionContext, Executor};
 use crate::core::Result;
-use crate::parser::ast::{AlterTableOperation, AlterTableStmt, CreateTableStmt, DropTableStmt, Statement};
+use crate::parser::ast::{
+    AlterTableOperation, AlterTableStmt, CreateTableStmt, DropTableStmt, Statement,
+};
 use crate::result::QueryResult;
 
 use async_trait::async_trait;
@@ -100,7 +102,8 @@ impl AlterTableExecutor {
     ) -> Result<QueryResult> {
         match &alter.operation {
             AlterTableOperation::AddColumn(col_def) => {
-                let mut column = crate::core::Column::new(col_def.name.clone(), col_def.data_type.clone());
+                let mut column =
+                    crate::core::Column::new(col_def.name.clone(), col_def.data_type.clone());
                 if !col_def.nullable {
                     column = column.not_null();
                 }
@@ -114,16 +117,22 @@ impl AlterTableExecutor {
                     column = column.references(fk.table.clone(), fk.column.clone());
                 }
                 column.default = col_def.default.clone();
-                ctx.storage.add_column(&alter.table_name, column, col_def.check.clone()).await?;
+                ctx.storage
+                    .add_column(&alter.table_name, column, col_def.check.clone())
+                    .await?;
             }
             AlterTableOperation::DropColumn(col_name) => {
                 ctx.storage.drop_column(&alter.table_name, col_name).await?;
             }
             AlterTableOperation::RenameColumn { old_name, new_name } => {
-                ctx.storage.rename_column(&alter.table_name, old_name, new_name).await?;
+                ctx.storage
+                    .rename_column(&alter.table_name, old_name, new_name)
+                    .await?;
             }
             AlterTableOperation::RenameTable(_) => {
-                return Err(crate::core::DbError::UnsupportedOperation("RENAME TABLE not implemented yet".into()));
+                return Err(crate::core::DbError::UnsupportedOperation(
+                    "RENAME TABLE not implemented yet".into(),
+                ));
             }
         }
         Ok(QueryResult::empty())

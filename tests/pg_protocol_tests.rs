@@ -2,8 +2,8 @@ use rustmemodb::facade::InMemoryDB;
 use rustmemodb::server::PostgresServer;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_postgres::SimpleQueryMessage;
 use tokio_postgres::NoTls;
+use tokio_postgres::SimpleQueryMessage;
 
 async fn start_server(port: u16) {
     let db = Arc::new(RwLock::new(InMemoryDB::new()));
@@ -95,11 +95,7 @@ async fn test_pg_protocol_interaction() -> Result<(), Box<dyn std::error::Error>
     client
         .simple_query("DELETE FROM pg_test WHERE id = 2")
         .await?;
-    let final_rows = collect_rows(
-        client
-            .simple_query("SELECT count(*) FROM pg_test")
-            .await?,
-    )?;
+    let final_rows = collect_rows(client.simple_query("SELECT count(*) FROM pg_test").await?)?;
     let count: i64 = final_rows[0][0].parse()?;
     assert_eq!(count, 1);
 

@@ -1,18 +1,18 @@
 //! Write-Ahead Logging (WAL) and persistence layer for RustMemDB
 
-use crate::core::{DbError, Result, Row, Snapshot, Column};
+use crate::core::{Column, DbError, Result, Row, Snapshot};
+use crate::parser::ast::{AlterTableOperation, QueryStmt};
 use crate::storage::table::{Table, TableSchema};
-use crate::parser::ast::{QueryStmt, AlterTableOperation};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // ============================================================================
@@ -25,21 +25,68 @@ pub enum WalEntry {
     BeginTransaction(u64),
     Commit(u64),
     Rollback(u64),
-    Insert { tx_id: u64, table: String, row: Row },
-    Update { tx_id: u64, table: String, row_index: usize, old_row: Row, new_row: Row },
-    Delete { tx_id: u64, table: String, row_indices: Vec<usize>, deleted_rows: Vec<Row> },
-    CreateTable { tx_id: u64, name: String, schema: TableSchema },
-    DropTable { tx_id: u64, name: String, table: Table },
-    CreateIndex { tx_id: u64, table_name: String, column_name: String },
-    CreateView { tx_id: u64, name: String, query: QueryStmt, columns: Vec<String>, or_replace: bool },
-    DropView { tx_id: u64, name: String },
-    RenameTable { tx_id: u64, old_name: String, new_name: String },
-    AlterTable { tx_id: u64, table_name: String, operation: AlterTableOperation },
+    Insert {
+        tx_id: u64,
+        table: String,
+        row: Row,
+    },
+    Update {
+        tx_id: u64,
+        table: String,
+        row_index: usize,
+        old_row: Row,
+        new_row: Row,
+    },
+    Delete {
+        tx_id: u64,
+        table: String,
+        row_indices: Vec<usize>,
+        deleted_rows: Vec<Row>,
+    },
+    CreateTable {
+        tx_id: u64,
+        name: String,
+        schema: TableSchema,
+    },
+    DropTable {
+        tx_id: u64,
+        name: String,
+        table: Table,
+    },
+    CreateIndex {
+        tx_id: u64,
+        table_name: String,
+        column_name: String,
+    },
+    CreateView {
+        tx_id: u64,
+        name: String,
+        query: QueryStmt,
+        columns: Vec<String>,
+        or_replace: bool,
+    },
+    DropView {
+        tx_id: u64,
+        name: String,
+    },
+    RenameTable {
+        tx_id: u64,
+        old_name: String,
+        new_name: String,
+    },
+    AlterTable {
+        tx_id: u64,
+        table_name: String,
+        operation: AlterTableOperation,
+    },
 }
 
 impl WalEntry {
     pub fn timestamp(&self) -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
     }
 }
 
@@ -63,16 +110,26 @@ pub struct SnapshotMetadata {
 }
 
 impl DatabaseSnapshot {
-    pub fn new(tables: HashMap<String, Table>, views: HashMap<String, (QueryStmt, Vec<String>)>) -> Self {
+    pub fn new(
+        tables: HashMap<String, Table>,
+        views: HashMap<String, (QueryStmt, Vec<String>)>,
+    ) -> Self {
         let row_count = tables.values().map(|t| t.row_count()).sum();
         let table_count = tables.len();
-        let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
 
         Self {
             version: 1,
             tables,
             views,
-            metadata: SnapshotMetadata { created_at, row_count, table_count },
+            metadata: SnapshotMetadata {
+                created_at,
+                row_count,
+                table_count,
+            },
         }
     }
 }
@@ -81,15 +138,13 @@ impl DatabaseSnapshot {
 // Durability Configuration
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DurabilityMode {
     Sync,
     #[default]
     Async,
     None,
 }
-
 
 // ============================================================================
 // WAL Manager
@@ -108,12 +163,18 @@ impl WalManager {
     pub fn new<P: AsRef<Path>>(wal_path: P, durability_mode: DurabilityMode) -> Result<Self> {
         let wal_path = wal_path.as_ref().to_path_buf();
         if let Some(parent) = wal_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| DbError::ExecutionError(format!("Failed to create WAL directory: {}", e)))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                DbError::ExecutionError(format!("Failed to create WAL directory: {}", e))
+            })?;
         }
 
         let metrics = Arc::new(WalMetrics::default());
         let writer = if durability_mode != DurabilityMode::None {
-            Some(WalWriter::start(wal_path.clone(), durability_mode, Arc::clone(&metrics))?)
+            Some(WalWriter::start(
+                wal_path.clone(),
+                durability_mode,
+                Arc::clone(&metrics),
+            )?)
         } else {
             None
         };
@@ -129,9 +190,12 @@ impl WalManager {
     }
 
     pub fn append(&mut self, entry: &WalEntry) -> Result<()> {
-        if self.durability_mode == DurabilityMode::None { return Ok(()); }
-        let serialized = rmp_serde::to_vec(entry)
-            .map_err(|e| DbError::ExecutionError(format!("Failed to serialize WAL entry: {}", e)))?;
+        if self.durability_mode == DurabilityMode::None {
+            return Ok(());
+        }
+        let serialized = rmp_serde::to_vec(entry).map_err(|e| {
+            DbError::ExecutionError(format!("Failed to serialize WAL entry: {}", e))
+        })?;
         let len = serialized.len() as u32;
         let mut payload = Vec::with_capacity(4 + serialized.len());
         payload.extend_from_slice(&len.to_le_bytes());
@@ -142,14 +206,19 @@ impl WalManager {
             let wait_for_sync = is_commit && self.durability_mode == DurabilityMode::Sync;
             writer.append(payload, is_commit, wait_for_sync)?;
             self.metrics.on_append(serialized.len() as u64, is_commit);
-            self.entries_since_checkpoint.fetch_add(1, Ordering::Relaxed);
+            self.entries_since_checkpoint
+                .fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
     }
 
     pub fn read_all(&self) -> Result<Vec<WalEntry>> {
-        if !self.wal_path.exists() { return Ok(Vec::new()); }
-        let file = File::open(&self.wal_path).map_err(|e| DbError::ExecutionError(format!("Failed to open WAL for reading: {}", e)))?;
+        if !self.wal_path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = File::open(&self.wal_path).map_err(|e| {
+            DbError::ExecutionError(format!("Failed to open WAL for reading: {}", e))
+        })?;
         let mut reader = BufReader::new(file);
         let mut entries = Vec::new();
         loop {
@@ -157,19 +226,30 @@ impl WalManager {
             match reader.read_exact(&mut len_bytes) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(DbError::ExecutionError(format!("Failed to read WAL entry length: {}", e))),
+                Err(e) => {
+                    return Err(DbError::ExecutionError(format!(
+                        "Failed to read WAL entry length: {}",
+                        e
+                    )));
+                }
             }
             let len = u32::from_le_bytes(len_bytes) as usize;
             let mut data = vec![0u8; len];
-            reader.read_exact(&mut data).map_err(|e| DbError::ExecutionError(format!("Failed to read WAL entry data: {}", e)))?;
-            let entry: WalEntry = rmp_serde::from_slice(&data).map_err(|e| DbError::ExecutionError(format!("Failed to deserialize WAL entry: {}", e)))?;
+            reader.read_exact(&mut data).map_err(|e| {
+                DbError::ExecutionError(format!("Failed to read WAL entry data: {}", e))
+            })?;
+            let entry: WalEntry = rmp_serde::from_slice(&data).map_err(|e| {
+                DbError::ExecutionError(format!("Failed to deserialize WAL entry: {}", e))
+            })?;
             entries.push(entry);
         }
         Ok(entries)
     }
 
     pub fn clear(&mut self) -> Result<()> {
-        if self.durability_mode == DurabilityMode::None { return Ok(()); }
+        if self.durability_mode == DurabilityMode::None {
+            return Ok(());
+        }
         if let Some(writer) = &self.writer {
             writer.truncate()?;
         }
@@ -241,9 +321,17 @@ pub struct WalMetricsSnapshot {
 }
 
 enum WalCommand {
-    Append { bytes: Vec<u8>, is_commit: bool, ack: Option<Sender<()>> },
-    Flush { ack: Sender<()> },
-    Truncate { ack: Sender<()> },
+    Append {
+        bytes: Vec<u8>,
+        is_commit: bool,
+        ack: Option<Sender<()>>,
+    },
+    Flush {
+        ack: Sender<()>,
+    },
+    Truncate {
+        ack: Sender<()>,
+    },
     Shutdown,
 }
 
@@ -263,14 +351,22 @@ impl WalWriter {
             .spawn(move || wal_writer_loop(path, durability, rx, metrics_clone))
             .map_err(|e| DbError::ExecutionError(format!("Failed to start WAL writer: {}", e)))?;
 
-        Ok(Self { sender: tx, join: Some(join), metrics })
+        Ok(Self {
+            sender: tx,
+            join: Some(join),
+            metrics,
+        })
     }
 
     fn append(&self, bytes: Vec<u8>, is_commit: bool, wait_for_sync: bool) -> Result<()> {
         if wait_for_sync {
             let (tx, rx) = mpsc::channel();
             self.sender
-                .send(WalCommand::Append { bytes, is_commit, ack: Some(tx) })
+                .send(WalCommand::Append {
+                    bytes,
+                    is_commit,
+                    ack: Some(tx),
+                })
                 .map_err(|e| DbError::ExecutionError(format!("Failed to send WAL entry: {}", e)))?;
             rx.recv()
                 .map_err(|e| DbError::ExecutionError(format!("Failed to wait WAL sync: {}", e)))?;
@@ -278,7 +374,11 @@ impl WalWriter {
         }
 
         self.sender
-            .send(WalCommand::Append { bytes, is_commit, ack: None })
+            .send(WalCommand::Append {
+                bytes,
+                is_commit,
+                ack: None,
+            })
             .map_err(|e| DbError::ExecutionError(format!("Failed to send WAL entry: {}", e)))?;
         Ok(())
     }
@@ -303,7 +403,12 @@ impl Drop for WalWriter {
     }
 }
 
-fn wal_writer_loop(path: PathBuf, durability: DurabilityMode, rx: Receiver<WalCommand>, metrics: Arc<WalMetrics>) {
+fn wal_writer_loop(
+    path: PathBuf,
+    durability: DurabilityMode,
+    rx: Receiver<WalCommand>,
+    metrics: Arc<WalMetrics>,
+) {
     let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(f) => BufWriter::new(f),
         Err(_) => return,
@@ -332,7 +437,11 @@ fn wal_writer_loop(path: PathBuf, durability: DurabilityMode, rx: Receiver<WalCo
                                pending_commit_acks: &mut Vec<Sender<()>>,
                                commit_pending: &mut bool| {
             match cmd {
-                WalCommand::Append { bytes, is_commit, ack } => {
+                WalCommand::Append {
+                    bytes,
+                    is_commit,
+                    ack,
+                } => {
                     let _ = file.write_all(&bytes);
                     if is_commit {
                         *commit_pending = true;
@@ -351,7 +460,8 @@ fn wal_writer_loop(path: PathBuf, durability: DurabilityMode, rx: Receiver<WalCo
                     metrics.on_flush();
                     let _ = file.get_mut().sync_all();
                     metrics.on_sync();
-                    if let Ok(new_file) = OpenOptions::new().write(true).truncate(true).open(&path) {
+                    if let Ok(new_file) = OpenOptions::new().write(true).truncate(true).open(&path)
+                    {
                         *file = BufWriter::new(new_file);
                     }
                     let _ = ack.send(());
@@ -360,7 +470,12 @@ fn wal_writer_loop(path: PathBuf, durability: DurabilityMode, rx: Receiver<WalCo
             }
         };
 
-        process_cmd(cmd, &mut file, &mut pending_commit_acks, &mut commit_pending);
+        process_cmd(
+            cmd,
+            &mut file,
+            &mut pending_commit_acks,
+            &mut commit_pending,
+        );
 
         if commit_pending {
             let mut saw_extra = false;
@@ -371,7 +486,12 @@ fn wal_writer_loop(path: PathBuf, durability: DurabilityMode, rx: Receiver<WalCo
                             return;
                         }
                         saw_extra = true;
-                        process_cmd(cmd, &mut file, &mut pending_commit_acks, &mut commit_pending);
+                        process_cmd(
+                            cmd,
+                            &mut file,
+                            &mut pending_commit_acks,
+                            &mut commit_pending,
+                        );
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return,
@@ -393,7 +513,12 @@ fn wal_writer_loop(path: PathBuf, durability: DurabilityMode, rx: Receiver<WalCo
                     if matches!(cmd, WalCommand::Shutdown) {
                         return;
                     }
-                    process_cmd(cmd, &mut file, &mut pending_commit_acks, &mut commit_pending);
+                    process_cmd(
+                        cmd,
+                        &mut file,
+                        &mut pending_commit_acks,
+                        &mut commit_pending,
+                    );
                 }
                 Err(_) => break,
             }
@@ -436,25 +561,43 @@ impl SnapshotManager {
 
     pub fn save(&self, snapshot: &DatabaseSnapshot) -> Result<()> {
         if let Some(parent) = self.snapshot_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| DbError::ExecutionError(format!("Failed to create snapshot directory: {}", e)))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                DbError::ExecutionError(format!("Failed to create snapshot directory: {}", e))
+            })?;
         }
         let temp_path = self.snapshot_path.with_extension("tmp");
-        let temp_file = File::create(&temp_path).map_err(|e| DbError::ExecutionError(format!("Failed to create temp file: {}", e)))?;
+        let temp_file = File::create(&temp_path)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to create temp file: {}", e)))?;
         let mut writer = BufWriter::new(temp_file);
-        let serialized = rmp_serde::to_vec(snapshot).map_err(|e| DbError::ExecutionError(format!("Failed to serialize snapshot: {}", e)))?;
-        writer.write_all(&serialized).map_err(|e| DbError::ExecutionError(format!("Failed to write snapshot: {}", e)))?;
-        writer.flush().map_err(|e| DbError::ExecutionError(format!("Failed to flush snapshot: {}", e)))?;
-        writer.get_mut().sync_all().map_err(|e| DbError::ExecutionError(format!("Failed to sync snapshot: {}", e)))?;
-        fs::rename(&temp_path, &self.snapshot_path).map_err(|e| DbError::ExecutionError(format!("Failed to rename snapshot: {}", e)))?;
+        let serialized = rmp_serde::to_vec(snapshot)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to serialize snapshot: {}", e)))?;
+        writer
+            .write_all(&serialized)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to write snapshot: {}", e)))?;
+        writer
+            .flush()
+            .map_err(|e| DbError::ExecutionError(format!("Failed to flush snapshot: {}", e)))?;
+        writer
+            .get_mut()
+            .sync_all()
+            .map_err(|e| DbError::ExecutionError(format!("Failed to sync snapshot: {}", e)))?;
+        fs::rename(&temp_path, &self.snapshot_path)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to rename snapshot: {}", e)))?;
         Ok(())
     }
 
     pub fn load(&self) -> Result<Option<DatabaseSnapshot>> {
-        if !self.snapshot_path.exists() { return Ok(None); }
-        let mut file = File::open(&self.snapshot_path).map_err(|e| DbError::ExecutionError(format!("Failed to open snapshot: {}", e)))?;
+        if !self.snapshot_path.exists() {
+            return Ok(None);
+        }
+        let mut file = File::open(&self.snapshot_path)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to open snapshot: {}", e)))?;
         let mut data = Vec::new();
-        file.read_to_end(&mut data).map_err(|e| DbError::ExecutionError(format!("Failed to read snapshot: {}", e)))?;
-        let snapshot: DatabaseSnapshot = rmp_serde::from_slice(&data).map_err(|e| DbError::ExecutionError(format!("Failed to deserialize snapshot: {}", e)))?;
+        file.read_to_end(&mut data)
+            .map_err(|e| DbError::ExecutionError(format!("Failed to read snapshot: {}", e)))?;
+        let snapshot: DatabaseSnapshot = rmp_serde::from_slice(&data).map_err(|e| {
+            DbError::ExecutionError(format!("Failed to deserialize snapshot: {}", e))
+        })?;
         Ok(Some(snapshot))
     }
 
@@ -464,7 +607,9 @@ impl SnapshotManager {
 
     pub fn delete(&self) -> Result<()> {
         if self.snapshot_path.exists() {
-            fs::remove_file(&self.snapshot_path).map_err(|e| DbError::ExecutionError(format!("Failed to delete snapshot: {}", e)))?;
+            fs::remove_file(&self.snapshot_path).map_err(|e| {
+                DbError::ExecutionError(format!("Failed to delete snapshot: {}", e))
+            })?;
         }
         Ok(())
     }
@@ -500,7 +645,9 @@ fn apply_alter_table(table: &mut Table, operation: AlterTableOperation) -> Resul
             table.rename_column(&old_name, &new_name)?;
         }
         AlterTableOperation::RenameTable(_) => {
-            return Err(DbError::UnsupportedOperation("Rename table is not supported in AlterTable recovery".into()));
+            return Err(DbError::UnsupportedOperation(
+                "Rename table is not supported in AlterTable recovery".into(),
+            ));
         }
     }
     Ok(())
@@ -519,15 +666,25 @@ impl PersistenceManager {
         let snapshot_path = data_dir.join("rustmemodb.snapshot");
         let wal = WalManager::new(wal_path, durability_mode)?;
         let snapshot = SnapshotManager::new(snapshot_path);
-        Ok(Self { wal, snapshot, durability_mode })
+        Ok(Self {
+            wal,
+            snapshot,
+            durability_mode,
+        })
     }
 
     pub fn log(&mut self, entry: &WalEntry) -> Result<()> {
         self.wal.append(entry)
     }
 
-    pub fn checkpoint(&mut self, tables: &HashMap<String, Table>, views: &HashMap<String, (QueryStmt, Vec<String>)>) -> Result<()> {
-        if self.durability_mode == DurabilityMode::None { return Ok(()); }
+    pub fn checkpoint(
+        &mut self,
+        tables: &HashMap<String, Table>,
+        views: &HashMap<String, (QueryStmt, Vec<String>)>,
+    ) -> Result<()> {
+        if self.durability_mode == DurabilityMode::None {
+            return Ok(());
+        }
         let snapshot = DatabaseSnapshot::new(tables.clone(), views.clone());
         self.snapshot.save(&snapshot)?;
         self.wal.clear()?;
@@ -546,7 +703,9 @@ impl PersistenceManager {
         };
 
         let wal_entries = self.wal.read_all()?;
-        if tables.is_empty() && views.is_empty() && wal_entries.is_empty() { return Ok(None); }
+        if tables.is_empty() && views.is_empty() && wal_entries.is_empty() {
+            return Ok(None);
+        }
 
         let mut committed = HashSet::new();
         let mut aborted = HashSet::new();
@@ -581,7 +740,13 @@ impl PersistenceManager {
                         }
                     }
                 }
-                WalEntry::Update { tx_id, table, row_index, new_row, .. } => {
+                WalEntry::Update {
+                    tx_id,
+                    table,
+                    row_index,
+                    new_row,
+                    ..
+                } => {
                     if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
                         if let Some(tbl) = tables.get_mut(&table) {
                             let snapshot = snapshot_for(tx_id);
@@ -589,7 +754,12 @@ impl PersistenceManager {
                         }
                     }
                 }
-                WalEntry::Delete { tx_id, table, row_indices, .. } => {
+                WalEntry::Delete {
+                    tx_id,
+                    table,
+                    row_indices,
+                    ..
+                } => {
                     if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
                         if let Some(tbl) = tables.get_mut(&table) {
                             for idx in row_indices {
@@ -598,7 +768,11 @@ impl PersistenceManager {
                         }
                     }
                 }
-                WalEntry::CreateTable { tx_id, name, schema } => {
+                WalEntry::CreateTable {
+                    tx_id,
+                    name,
+                    schema,
+                } => {
                     if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
                         let table = Table::new(schema);
                         tables.insert(name, table);
@@ -609,14 +783,24 @@ impl PersistenceManager {
                         tables.remove(&name);
                     }
                 }
-                WalEntry::CreateIndex { tx_id, table_name, column_name } => {
+                WalEntry::CreateIndex {
+                    tx_id,
+                    table_name,
+                    column_name,
+                } => {
                     if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
                         if let Some(tbl) = tables.get_mut(&table_name) {
                             let _ = tbl.create_index(&column_name);
                         }
                     }
                 }
-                WalEntry::CreateView { tx_id, name, query, columns, or_replace } => {
+                WalEntry::CreateView {
+                    tx_id,
+                    name,
+                    query,
+                    columns,
+                    or_replace,
+                } => {
                     if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
                         if or_replace || !views.contains_key(&name) {
                             views.insert(name, (query, columns));
@@ -628,14 +812,22 @@ impl PersistenceManager {
                         views.remove(&name);
                     }
                 }
-                WalEntry::RenameTable { tx_id, old_name, new_name } => {
+                WalEntry::RenameTable {
+                    tx_id,
+                    old_name,
+                    new_name,
+                } => {
                     if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
                         if let Some(table) = tables.remove(&old_name) {
                             tables.insert(new_name, table);
                         }
                     }
                 }
-                WalEntry::AlterTable { tx_id, table_name, operation } => {
+                WalEntry::AlterTable {
+                    tx_id,
+                    table_name,
+                    operation,
+                } => {
                     if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
                         if let Some(tbl) = tables.get_mut(&table_name) {
                             apply_alter_table(tbl, operation)?;
@@ -648,17 +840,25 @@ impl PersistenceManager {
         Ok(Some(DatabaseSnapshot::new(tables, views)))
     }
 
-    pub fn wal(&self) -> &WalManager { &self.wal }
-    pub fn wal_mut(&mut self) -> &mut WalManager { &mut self.wal }
-    pub fn snapshot(&self) -> &SnapshotManager { &self.snapshot }
-    pub fn durability_mode(&self) -> DurabilityMode { self.durability_mode }
+    pub fn wal(&self) -> &WalManager {
+        &self.wal
+    }
+    pub fn wal_mut(&mut self) -> &mut WalManager {
+        &mut self.wal
+    }
+    pub fn snapshot(&self) -> &SnapshotManager {
+        &self.snapshot
+    }
+    pub fn durability_mode(&self) -> DurabilityMode {
+        self.durability_mode
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::{Column, DataType};
-    use crate::parser::{SqlParserAdapter};
+    use crate::parser::SqlParserAdapter;
     use crate::parser::ast::Statement;
     use tempfile::TempDir;
 
@@ -671,8 +871,12 @@ mod tests {
         wal.append(&WalEntry::Insert {
             tx_id: 1,
             table: "users".to_string(),
-            row: vec![crate::core::Value::Integer(1), crate::core::Value::Text("Alice".to_string())],
-        }).unwrap();
+            row: vec![
+                crate::core::Value::Integer(1),
+                crate::core::Value::Text("Alice".to_string()),
+            ],
+        })
+        .unwrap();
         wal.append(&WalEntry::Commit(1)).unwrap();
         let entries = wal.read_all().unwrap();
         assert_eq!(entries.len(), 3);
@@ -703,7 +907,8 @@ mod tests {
     #[test]
     fn test_checkpoint_clears_wal() {
         let temp_dir = TempDir::new().unwrap();
-        let mut persistence = PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
+        let mut persistence =
+            PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
         persistence.log(&WalEntry::BeginTransaction(1)).unwrap();
         persistence.log(&WalEntry::Commit(1)).unwrap();
         assert_eq!(persistence.wal().entries_since_checkpoint(), 2);
@@ -715,7 +920,8 @@ mod tests {
     #[test]
     fn test_recovery() {
         let temp_dir = TempDir::new().unwrap();
-        let mut persistence = PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
+        let mut persistence =
+            PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
         let schema = TableSchema::new(
             "users",
             vec![
@@ -724,19 +930,23 @@ mod tests {
             ],
         );
         persistence.log(&WalEntry::BeginTransaction(1)).unwrap();
-        persistence.log(&WalEntry::CreateTable {
-            tx_id: 1,
-            name: "users".to_string(),
-            schema: schema.clone(),
-        }).unwrap();
-        persistence.log(&WalEntry::Insert {
-            tx_id: 1,
-            table: "users".to_string(),
-            row: vec![
-                crate::core::Value::Integer(1),
-                crate::core::Value::Text("Alice".to_string()),
-            ],
-        }).unwrap();
+        persistence
+            .log(&WalEntry::CreateTable {
+                tx_id: 1,
+                name: "users".to_string(),
+                schema: schema.clone(),
+            })
+            .unwrap();
+        persistence
+            .log(&WalEntry::Insert {
+                tx_id: 1,
+                table: "users".to_string(),
+                row: vec![
+                    crate::core::Value::Integer(1),
+                    crate::core::Value::Text("Alice".to_string()),
+                ],
+            })
+            .unwrap();
         persistence.log(&WalEntry::Commit(1)).unwrap();
         let mut tables = HashMap::new();
         tables.insert("users".to_string(), {
@@ -745,12 +955,17 @@ mod tests {
                 tx_id: 0,
                 active: Arc::new(HashSet::new()),
                 aborted: Arc::new(HashSet::new()),
-                max_tx_id: u64::MAX
+                max_tx_id: u64::MAX,
             };
-            table.insert(vec![
-                crate::core::Value::Integer(1),
-                crate::core::Value::Text("Alice".to_string()),
-            ], &snapshot).unwrap();
+            table
+                .insert(
+                    vec![
+                        crate::core::Value::Integer(1),
+                        crate::core::Value::Text("Alice".to_string()),
+                    ],
+                    &snapshot,
+                )
+                .unwrap();
             table
         });
         persistence.checkpoint(&tables, &HashMap::new()).unwrap();
@@ -764,7 +979,8 @@ mod tests {
     #[test]
     fn test_recovery_ignores_uncommitted() {
         let temp_dir = TempDir::new().unwrap();
-        let mut persistence = PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
+        let mut persistence =
+            PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
         let schema = TableSchema::new(
             "users",
             vec![
@@ -774,33 +990,39 @@ mod tests {
         );
 
         persistence.log(&WalEntry::BeginTransaction(1)).unwrap();
-        persistence.log(&WalEntry::CreateTable {
-            tx_id: 1,
-            name: "users".to_string(),
-            schema: schema.clone(),
-        }).unwrap();
+        persistence
+            .log(&WalEntry::CreateTable {
+                tx_id: 1,
+                name: "users".to_string(),
+                schema: schema.clone(),
+            })
+            .unwrap();
         persistence.log(&WalEntry::Commit(1)).unwrap();
 
         persistence.log(&WalEntry::BeginTransaction(2)).unwrap();
-        persistence.log(&WalEntry::Insert {
-            tx_id: 2,
-            table: "users".to_string(),
-            row: vec![
-                crate::core::Value::Integer(1),
-                crate::core::Value::Text("Alice".to_string()),
-            ],
-        }).unwrap();
+        persistence
+            .log(&WalEntry::Insert {
+                tx_id: 2,
+                table: "users".to_string(),
+                row: vec![
+                    crate::core::Value::Integer(1),
+                    crate::core::Value::Text("Alice".to_string()),
+                ],
+            })
+            .unwrap();
         persistence.log(&WalEntry::Rollback(2)).unwrap();
 
         persistence.log(&WalEntry::BeginTransaction(3)).unwrap();
-        persistence.log(&WalEntry::Insert {
-            tx_id: 3,
-            table: "users".to_string(),
-            row: vec![
-                crate::core::Value::Integer(2),
-                crate::core::Value::Text("Bob".to_string()),
-            ],
-        }).unwrap();
+        persistence
+            .log(&WalEntry::Insert {
+                tx_id: 3,
+                table: "users".to_string(),
+                row: vec![
+                    crate::core::Value::Integer(2),
+                    crate::core::Value::Text("Bob".to_string()),
+                ],
+            })
+            .unwrap();
         persistence.log(&WalEntry::Commit(3)).unwrap();
 
         let recovered = persistence.recover().unwrap().unwrap();
@@ -820,7 +1042,8 @@ mod tests {
     #[test]
     fn test_recovery_views() {
         let temp_dir = TempDir::new().unwrap();
-        let mut persistence = PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
+        let mut persistence =
+            PersistenceManager::new(temp_dir.path(), DurabilityMode::Sync).unwrap();
 
         let parser = SqlParserAdapter::new();
         let stmts = parser.parse("CREATE VIEW v AS SELECT 1").unwrap();
@@ -829,13 +1052,15 @@ mod tests {
         };
 
         persistence.log(&WalEntry::BeginTransaction(1)).unwrap();
-        persistence.log(&WalEntry::CreateView {
-            tx_id: 1,
-            name: create_view.name.clone(),
-            query: *create_view.query.clone(),
-            columns: create_view.columns.clone(),
-            or_replace: create_view.or_replace,
-        }).unwrap();
+        persistence
+            .log(&WalEntry::CreateView {
+                tx_id: 1,
+                name: create_view.name.clone(),
+                query: *create_view.query.clone(),
+                columns: create_view.columns.clone(),
+                or_replace: create_view.or_replace,
+            })
+            .unwrap();
         persistence.log(&WalEntry::Commit(1)).unwrap();
 
         let recovered = persistence.recover().unwrap().unwrap();

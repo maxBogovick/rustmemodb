@@ -1,11 +1,11 @@
-use super::{Connection, config::ConnectionConfig, auth::AuthManager};
+use super::{Connection, auth::AuthManager, config::ConnectionConfig};
 use crate::core::{DbError, Result};
 use crate::facade::InMemoryDB;
-use std::sync::{Arc};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::{RwLock, Mutex};
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, RwLock};
 
 /// Connection pool
 ///
@@ -70,9 +70,11 @@ impl ConnectionPool {
     }
 
     /// Create a new connection pool with a specific database instance
-    pub async fn new_with_db(config: ConnectionConfig, db: Arc<RwLock<InMemoryDB>>) -> Result<Self> {
-        config.validate()
-            .map_err(DbError::ExecutionError)?;
+    pub async fn new_with_db(
+        config: ConnectionConfig,
+        db: Arc<RwLock<InMemoryDB>>,
+    ) -> Result<Self> {
+        config.validate().map_err(DbError::ExecutionError)?;
 
         let available = Arc::new(Mutex::new(VecDeque::new()));
         let total_connections = Arc::new(AtomicUsize::new(0));
@@ -101,7 +103,10 @@ impl ConnectionPool {
     }
 
     /// Create a connection pool with custom authentication manager
-    #[deprecated(since = "0.1.0", note = "AuthManager is now a global singleton. Use ConnectionPool::new() instead.")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "AuthManager is now a global singleton. Use ConnectionPool::new() instead."
+    )]
     pub async fn with_auth_manager(
         config: ConnectionConfig,
         _auth_manager: AuthManager,
@@ -137,7 +142,7 @@ impl ConnectionPool {
             // Check timeout
             if start.elapsed() > self.config.connect_timeout {
                 return Err(DbError::ExecutionError(
-                    "Connection pool timeout: no connections available".into()
+                    "Connection pool timeout: no connections available".into(),
                 ));
             }
 
@@ -178,10 +183,9 @@ impl ConnectionPool {
         }
 
         // Authenticate user
-        let user = AuthManager::global().authenticate(
-            &self.config.username,
-            &self.config.password,
-        ).await?;
+        let user = AuthManager::global()
+            .authenticate(&self.config.username, &self.config.password)
+            .await?;
 
         // Get next connection ID
         let mut next_id = self.next_id.lock().await;
@@ -202,10 +206,9 @@ impl ConnectionPool {
 
         while self.total_connections.load(Ordering::SeqCst) < self.config.min_connections {
             // Authenticate user
-            let user = AuthManager::global().authenticate(
-                &self.config.username,
-                &self.config.password,
-            ).await?;
+            let user = AuthManager::global()
+                .authenticate(&self.config.username, &self.config.password)
+                .await?;
 
             let mut next_id = self.next_id.lock().await;
             let id = *next_id;
@@ -242,7 +245,7 @@ impl ConnectionPool {
     pub async fn fork(&self) -> Result<Self> {
         let db = self.db.read().await;
         let new_db = db.fork().await?;
-        
+
         Self::new_with_db(self.config.clone(), Arc::new(RwLock::new(new_db))).await
     }
 }
@@ -281,7 +284,9 @@ pub struct PoolGuard {
 impl PoolGuard {
     /// Get a reference to the connection
     pub fn connection(&mut self) -> &mut Connection {
-        self.connection.as_mut().expect("Connection already returned to pool")
+        self.connection
+            .as_mut()
+            .expect("Connection already returned to pool")
     }
 
     /// Execute a query (convenience method)
@@ -327,21 +332,25 @@ impl Drop for PoolGuard {
         if let Some(connection) = self.connection.take() {
             // If we are here, close() was not called.
             // Check if we can return it to the pool immediately (only if no transaction).
-            
+
             if connection.is_in_transaction() {
-                 eprintln!("Warning: PoolGuard dropped with active transaction. Connection dropped/leaked because async rollback is not possible in Drop. Use pool_guard.close().await.");
-                 // Connection is dropped here (leaked from pool perspective, but memory freed)
-                 // NOTE: We can't easily decrement total_connections here because we can't lock async mutex.
-                 self.total_connections.fetch_sub(1, Ordering::SeqCst);
-                 return;
+                eprintln!(
+                    "Warning: PoolGuard dropped with active transaction. Connection dropped/leaked because async rollback is not possible in Drop. Use pool_guard.close().await."
+                );
+                // Connection is dropped here (leaked from pool perspective, but memory freed)
+                // NOTE: We can't easily decrement total_connections here because we can't lock async mutex.
+                self.total_connections.fetch_sub(1, Ordering::SeqCst);
+                return;
             }
 
             // Try to return to pool if we can acquire the lock immediately
             if let Ok(mut pool) = self.pool.try_lock() {
                 pool.push_back(PooledConnection::new(connection));
             } else {
-                 eprintln!("Warning: PoolGuard dropped and pool lock busy. Connection dropped/leaked. Use pool_guard.close().await.");
-                 self.total_connections.fetch_sub(1, Ordering::SeqCst);
+                eprintln!(
+                    "Warning: PoolGuard dropped and pool lock busy. Connection dropped/leaked. Use pool_guard.close().await."
+                );
+                self.total_connections.fetch_sub(1, Ordering::SeqCst);
             }
         }
     }
@@ -366,8 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_connection() {
-        let config = ConnectionConfig::new("admin", "adminpass")
-            .max_connections(5);
+        let config = ConnectionConfig::new("admin", "adminpass").max_connections(5);
 
         let pool = ConnectionPool::new(config).await.unwrap();
         let mut conn = pool.get_connection().await.unwrap();

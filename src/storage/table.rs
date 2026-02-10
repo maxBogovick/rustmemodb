@@ -1,9 +1,9 @@
-use crate::core::{Column, DbError, Result, Row, Schema, Snapshot, Value};
+use crate::core::{Column, DbError, Result, Row, Schema, Snapshot, Value, estimated_row_bytes};
 use crate::parser::ast::Expr;
 use crate::planner::logical_plan::IndexOp;
+use im::{HashMap, OrdMap};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet};
-use im::{OrdMap, HashMap};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IndexEntry {
@@ -14,7 +14,7 @@ pub struct IndexEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MvccRow {
     pub row: Row,
-    pub xmin: u64,       // Transaction ID that created this row
+    pub xmin: u64,         // Transaction ID that created this row
     pub xmax: Option<u64>, // Transaction ID that deleted/updated this row
 }
 
@@ -25,6 +25,19 @@ pub struct Table {
     rows: OrdMap<usize, Vec<MvccRow>>,
     next_row_id: usize,
     indexes: HashMap<String, OrdMap<Value, Vec<IndexEntry>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableStorageEstimate {
+    pub table_name: String,
+    pub visible_rows: usize,
+    pub version_count: usize,
+    pub avg_row_bytes: usize,
+    pub estimated_row_bytes: usize,
+    pub index_count: usize,
+    pub index_entry_count: usize,
+    pub estimated_index_bytes: usize,
+    pub estimated_total_bytes: usize,
 }
 
 impl Table {
@@ -54,15 +67,23 @@ impl Table {
     }
 
     pub fn set_unique(&mut self, column_name: &str) -> Result<()> {
-        let col_idx = self.schema.schema.find_column_index(column_name)
-            .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone()))?;
+        let col_idx = self
+            .schema
+            .schema
+            .find_column_index(column_name)
+            .ok_or_else(|| {
+                DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone())
+            })?;
         self.schema.schema.columns[col_idx].unique = true;
         Ok(())
     }
 
     pub fn add_column(&mut self, column: Column, check: Option<Expr>) -> Result<()> {
         if self.schema.schema.find_column_index(&column.name).is_some() {
-            return Err(DbError::ExecutionError(format!("Column '{}' already exists", column.name)));
+            return Err(DbError::ExecutionError(format!(
+                "Column '{}' already exists",
+                column.name
+            )));
         }
 
         // Add column to schema with cache reset
@@ -113,8 +134,13 @@ impl Table {
     }
 
     pub fn drop_column(&mut self, column_name: &str) -> Result<()> {
-        let col_idx = self.schema.schema.find_column_index(column_name)
-            .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone()))?;
+        let col_idx = self
+            .schema
+            .schema
+            .find_column_index(column_name)
+            .ok_or_else(|| {
+                DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone())
+            })?;
 
         // Remove from schema with cache reset
         let mut columns = self.schema.schema.columns.clone();
@@ -153,11 +179,19 @@ impl Table {
     }
 
     pub fn rename_column(&mut self, old_name: &str, new_name: &str) -> Result<()> {
-        let col_idx = self.schema.schema.find_column_index(old_name)
-            .ok_or_else(|| DbError::ColumnNotFound(old_name.to_string(), self.schema.name.clone()))?;
+        let col_idx = self
+            .schema
+            .schema
+            .find_column_index(old_name)
+            .ok_or_else(|| {
+                DbError::ColumnNotFound(old_name.to_string(), self.schema.name.clone())
+            })?;
 
         if self.schema.schema.find_column_index(new_name).is_some() {
-            return Err(DbError::ExecutionError(format!("Column '{}' already exists", new_name)));
+            return Err(DbError::ExecutionError(format!(
+                "Column '{}' already exists",
+                new_name
+            )));
         }
 
         {
@@ -255,7 +289,6 @@ impl Table {
             } else {
                 return Ok(false);
             }
-
         } else {
             return Ok(false);
         };
@@ -306,7 +339,12 @@ impl Table {
         None
     }
 
-    fn check_uniqueness(&self, row: &Row, ignore_id: Option<usize>, snapshot: &Snapshot) -> Result<()> {
+    fn check_uniqueness(
+        &self,
+        row: &Row,
+        ignore_id: Option<usize>,
+        snapshot: &Snapshot,
+    ) -> Result<()> {
         for (col_idx, column) in self.schema.schema().columns().iter().enumerate() {
             if column.primary_key || column.unique {
                 let value = &row[col_idx];
@@ -315,17 +353,24 @@ impl Table {
                 }
 
                 let index = self.indexes.get(&column.name).ok_or_else(|| {
-                    DbError::ExecutionError(format!("Critical: Unique index missing for column '{}'", column.name))
+                    DbError::ExecutionError(format!(
+                        "Critical: Unique index missing for column '{}'",
+                        column.name
+                    ))
                 })?;
 
                 if let Some(entries) = index.get(value) {
                     for entry in entries {
-                        if let Some(ign) = ignore_id && entry.row_id == ign {
+                        if let Some(ign) = ignore_id
+                            && entry.row_id == ign
+                        {
                             continue;
                         }
 
                         if let Some(version) = self.get_version(*entry) {
-                            if &version.row[col_idx] == value && self.is_version_live(version, snapshot) {
+                            if &version.row[col_idx] == value
+                                && self.is_version_live(version, snapshot)
+                            {
                                 return Err(DbError::ConstraintViolation(format!(
                                     "Unique constraint violation: Column '{}' already contains value {}",
                                     column.name, value
@@ -366,9 +411,10 @@ impl Table {
     fn is_visible(&self, row: &MvccRow, snapshot: &Snapshot) -> bool {
         if row.xmin == snapshot.tx_id {
             if let Some(xmax) = row.xmax
-                && xmax == snapshot.tx_id {
-                    return false;
-                }
+                && xmax == snapshot.tx_id
+            {
+                return false;
+            }
             return true;
         }
 
@@ -416,6 +462,64 @@ impl Table {
         self.rows.values().map(|versions| versions.len()).sum()
     }
 
+    pub fn estimate_storage(
+        &self,
+        snapshot: &Snapshot,
+        sample_limit: usize,
+    ) -> TableStorageEstimate {
+        let mut visible_rows = 0usize;
+        let mut sample_rows = 0usize;
+        let mut sample_bytes = 0usize;
+        let mut version_count = 0usize;
+
+        for versions in self.rows.values() {
+            version_count += versions.len();
+            if let Some(visible) = versions
+                .iter()
+                .rev()
+                .find(|version| self.is_visible(version, snapshot))
+            {
+                visible_rows += 1;
+                if sample_rows < sample_limit {
+                    sample_bytes += estimated_row_bytes(&visible.row);
+                    sample_rows += 1;
+                }
+            }
+        }
+
+        let avg_row_bytes = if sample_rows > 0 {
+            sample_bytes / sample_rows
+        } else {
+            0
+        };
+        let estimated_row_bytes = avg_row_bytes.saturating_mul(version_count);
+
+        let mut index_entry_count = 0usize;
+        let mut index_key_bytes = 0usize;
+        for index in self.indexes.values() {
+            for (key, entries) in index.iter() {
+                index_key_bytes += key.estimated_total_bytes();
+                index_entry_count += entries.len();
+            }
+        }
+        let estimated_index_bytes = index_key_bytes
+            .saturating_add(index_entry_count.saturating_mul(std::mem::size_of::<IndexEntry>()));
+
+        let estimated_total_bytes = estimated_row_bytes.saturating_add(estimated_index_bytes);
+
+        TableStorageEstimate {
+            table_name: self.schema.name.clone(),
+            visible_rows,
+            version_count,
+            avg_row_bytes,
+            estimated_row_bytes,
+            index_count: self.indexes.len(),
+            index_entry_count,
+            estimated_index_bytes,
+            estimated_total_bytes,
+        }
+    }
+
     fn validate_row(&self, row: &Row) -> Result<()> {
         let columns = self.schema.schema().columns();
         if row.len() != columns.len() {
@@ -435,8 +539,13 @@ impl Table {
         if self.indexes.contains_key(column_name) {
             return Ok(());
         }
-        let col_idx = self.schema.schema().find_column_index(column_name)
-            .ok_or_else(|| DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone()))?;
+        let col_idx = self
+            .schema
+            .schema()
+            .find_column_index(column_name)
+            .ok_or_else(|| {
+                DbError::ColumnNotFound(column_name.to_string(), self.schema.name.clone())
+            })?;
         let mut index = OrdMap::new();
         for (id, versions) in &self.rows {
             for (version_idx, version) in versions.iter().enumerate() {
@@ -446,7 +555,10 @@ impl Table {
                 // im::OrdMap update: map.update(k, v)
                 // For multimap behavior (Vec<usize>), we need to get, clone, modify, insert.
                 let mut entries: Vec<IndexEntry> = index.get(&value).cloned().unwrap_or_default();
-                entries.push(IndexEntry { row_id: *id, version_idx });
+                entries.push(IndexEntry {
+                    row_id: *id,
+                    version_idx,
+                });
                 index.insert(value, entries);
             }
         }
@@ -463,44 +575,49 @@ impl Table {
         value: &Value,
         end_value: &Option<Value>,
         op: &IndexOp,
-        snapshot: &Snapshot
+        snapshot: &Snapshot,
     ) -> Option<Vec<Row>> {
         let index = self.indexes.get(column_name)?;
-        
+
         let entries: Vec<IndexEntry> = match op {
             IndexOp::Eq => index.get(value).cloned().unwrap_or_default(),
             IndexOp::Gt => {
                 use std::ops::Bound;
-                index.range((Bound::Excluded(value), Bound::Unbounded))
+                index
+                    .range((Bound::Excluded(value), Bound::Unbounded))
                     .flat_map(|(_, v)| v)
                     .cloned()
                     .collect()
-            },
+            }
             IndexOp::GtEq => {
                 use std::ops::Bound;
-                index.range((Bound::Included(value), Bound::Unbounded))
+                index
+                    .range((Bound::Included(value), Bound::Unbounded))
                     .flat_map(|(_, v)| v)
                     .cloned()
                     .collect()
-            },
+            }
             IndexOp::Lt => {
-                 use std::ops::Bound;
-                 index.range((Bound::Unbounded, Bound::Excluded(value)))
+                use std::ops::Bound;
+                index
+                    .range((Bound::Unbounded, Bound::Excluded(value)))
                     .flat_map(|(_, v)| v)
                     .cloned()
                     .collect()
-            },
+            }
             IndexOp::LtEq => {
-                 use std::ops::Bound;
-                 index.range((Bound::Unbounded, Bound::Included(value)))
+                use std::ops::Bound;
+                index
+                    .range((Bound::Unbounded, Bound::Included(value)))
                     .flat_map(|(_, v)| v)
                     .cloned()
                     .collect()
-            },
+            }
             IndexOp::Between => {
                 if let Some(end) = end_value {
                     use std::ops::Bound;
-                    index.range((Bound::Included(value), Bound::Included(end)))
+                    index
+                        .range((Bound::Included(value), Bound::Included(end)))
                         .flat_map(|(_, v)| v)
                         .cloned()
                         .collect()
@@ -531,16 +648,19 @@ impl Table {
         let mut updates = Vec::new();
 
         for (col_name, index) in &self.indexes {
-             if let Some(col_idx) = self.schema.schema().find_column_index(col_name) {
+            if let Some(col_idx) = self.schema.schema().find_column_index(col_name) {
                 let value = row[col_idx].clone();
                 // Prepare update
                 let mut entries: Vec<IndexEntry> = index.get(&value).cloned().unwrap_or_default();
-                let entry = IndexEntry { row_id: id, version_idx };
+                let entry = IndexEntry {
+                    row_id: id,
+                    version_idx,
+                };
                 if !entries.contains(&entry) {
                     entries.push(entry);
                     updates.push((col_name.clone(), value, entries));
                 }
-             }
+            }
         }
 
         // Apply updates
@@ -579,20 +699,24 @@ impl Table {
             let initial_len = versions.len();
 
             // Filter versions
-            let new_versions: Vec<MvccRow> = versions.iter().filter(|version| {
-                if aborted.contains(&version.xmin) {
-                    return false;
-                }
-                if let Some(xmax) = version.xmax {
-                    if aborted.contains(&xmax) {
-                        return true;
-                    }
-                    if xmax < min_active_tx_id {
+            let new_versions: Vec<MvccRow> = versions
+                .iter()
+                .filter(|version| {
+                    if aborted.contains(&version.xmin) {
                         return false;
                     }
-                }
-                true
-            }).cloned().collect();
+                    if let Some(xmax) = version.xmax {
+                        if aborted.contains(&xmax) {
+                            return true;
+                        }
+                        if xmax < min_active_tx_id {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .cloned()
+                .collect();
 
             if new_versions.len() != initial_len {
                 freed_versions += initial_len - new_versions.len();
@@ -636,12 +760,18 @@ impl TableSchema {
             checks: Vec::new(),
         }
     }
-    pub fn name(&self) -> &str { &self.name }
-    pub fn schema(&self) -> &Schema { &self.schema }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
     pub fn is_indexed(&self, column: &str) -> bool {
         self.indexes.iter().any(|idx| idx == column)
     }
-    pub fn checks(&self) -> &[Expr] { &self.checks }
+    pub fn checks(&self) -> &[Expr] {
+        &self.checks
+    }
 }
 
 #[cfg(test)]
@@ -671,16 +801,23 @@ mod tests {
         );
         let mut table = Table::new(schema);
         let tx1 = snapshot(1);
-        let row_id = table.insert(vec![Value::Integer(1), Value::Integer(10)], &tx1).unwrap();
+        let row_id = table
+            .insert(vec![Value::Integer(1), Value::Integer(10)], &tx1)
+            .unwrap();
 
         let tx2 = snapshot(2);
-        table.update(row_id, vec![Value::Integer(1), Value::Integer(20)], &tx2).unwrap();
+        table
+            .update(row_id, vec![Value::Integer(1), Value::Integer(20)], &tx2)
+            .unwrap();
 
         let freed = table.vacuum(3, &HashSet::new());
         assert!(freed > 0, "expected vacuum to remove old versions");
 
         let index = table.get_index("v").unwrap();
         let old_entries = index.get(&Value::Integer(10)).cloned().unwrap_or_default();
-        assert!(old_entries.is_empty(), "expected stale index entries to be removed on vacuum");
+        assert!(
+            old_entries.is_empty(),
+            "expected stale index entries to be removed on vacuum"
+        );
     }
 }

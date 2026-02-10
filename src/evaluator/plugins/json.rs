@@ -1,6 +1,6 @@
-use crate::evaluator::{ExpressionEvaluator, EvaluationContext};
-use crate::parser::ast::{Expr, BinaryOp};
-use crate::core::{Result, Row, Schema, Value, DbError};
+use crate::core::{DbError, Result, Row, Schema, Value};
+use crate::evaluator::{EvaluationContext, ExpressionEvaluator};
+use crate::parser::ast::{BinaryOp, Expr};
 use async_trait::async_trait;
 
 pub struct JsonEvaluator;
@@ -12,10 +12,22 @@ impl ExpressionEvaluator for JsonEvaluator {
     }
 
     fn can_evaluate(&self, expr: &Expr) -> bool {
-        matches!(expr, Expr::BinaryOp { op: BinaryOp::Arrow | BinaryOp::LongArrow, .. })
+        matches!(
+            expr,
+            Expr::BinaryOp {
+                op: BinaryOp::Arrow | BinaryOp::LongArrow,
+                ..
+            }
+        )
     }
 
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value> {
         if let Expr::BinaryOp { left, op, right } = expr {
             let left_val = context.evaluate(left, row, schema).await?;
             let right_val = context.evaluate(right, row, schema).await?;
@@ -26,19 +38,30 @@ impl ExpressionEvaluator for JsonEvaluator {
 
             let json_value = match left_val {
                 Value::Json(j) => j,
-                Value::Text(s) => serde_json::from_str(&s).map_err(|e| DbError::ExecutionError(format!("Invalid JSON: {}", e)))?,
-                _ => return Err(DbError::TypeMismatch("Left operand of JSON op must be JSON".into())),
+                Value::Text(s) => serde_json::from_str(&s)
+                    .map_err(|e| DbError::ExecutionError(format!("Invalid JSON: {}", e)))?,
+                _ => {
+                    return Err(DbError::TypeMismatch(
+                        "Left operand of JSON op must be JSON".into(),
+                    ));
+                }
             };
 
             let res = match right_val {
                 Value::Text(s) => json_value.get(&s),
                 Value::Integer(i) => {
-                    if i < 0 { return Ok(Value::Null); }
+                    if i < 0 {
+                        return Ok(Value::Null);
+                    }
                     json_value.get(i as usize)
-                },
-                _ => return Err(DbError::TypeMismatch("Right operand of JSON op must be Text or Integer".into())),
+                }
+                _ => {
+                    return Err(DbError::TypeMismatch(
+                        "Right operand of JSON op must be Text or Integer".into(),
+                    ));
+                }
             };
-            
+
             match res {
                 Some(v) => {
                     if matches!(op, BinaryOp::LongArrow) {

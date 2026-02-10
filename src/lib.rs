@@ -2,40 +2,48 @@
 // RustMemDB Library
 // ============================================================================
 
-pub mod core;
-pub mod storage;
-pub mod result;
-pub mod facade;
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 pub mod connection;
-pub mod transaction;
-pub mod json;
-pub mod interface;
-pub mod server;
-mod parser;
-pub mod planner;
+pub mod core;
+mod evaluator;
 mod executor;
 mod expression;
+pub mod facade;
+pub mod interface;
+pub mod json;
+pub mod model_lang;
+mod parser;
+pub mod planner;
 mod plugins;
-mod evaluator;
+pub mod result;
+pub mod server;
+pub mod storage;
+pub mod transaction;
 
 // Re-export main types for convenience
+pub use core::{DataType, DbError, Result, Row, Value};
 pub use facade::InMemoryDB;
-pub use core::{Result, DbError, Value, DataType, Row};
-pub use result::QueryResult;
 pub use interface::{DatabaseClient, DatabaseFactory};
+pub use model_lang::{
+    FieldDecl, FieldType, ModelProgram, StructDecl, parse_and_materialize_models,
+};
+pub use result::QueryResult;
 
 // Re-export persistence types
 pub use storage::{DurabilityMode, PersistenceManager, WalEntry};
 
 // Re-export JSON API
-pub use json::{JsonStorageAdapter, JsonError, JsonResult};
+pub use json::{JsonError, JsonResult, JsonStorageAdapter};
 
 // Re-export connection API
 pub use connection::{
     Connection,
-    auth::{AuthManager, User, Permission},
-    pool::{ConnectionPool, PoolGuard, PoolStats},
+    auth::{AuthManager, Permission, User},
     config::ConnectionConfig,
+    pool::{ConnectionPool, PoolGuard, PoolStats},
 };
 
 // ============================================================================
@@ -131,8 +139,7 @@ impl Client {
     /// # });
     /// ```
     pub async fn connect_url(url: &str) -> Result<Self> {
-        let config = ConnectionConfig::from_url(url)
-            .map_err(DbError::ParseError)?;
+        let config = ConnectionConfig::from_url(url).map_err(DbError::ParseError)?;
         let pool = ConnectionPool::new(config).await?;
         Ok(Self { pool })
     }
@@ -327,7 +334,10 @@ mod tests {
     async fn test_client_execute() {
         let client = Client::connect("admin", "adminpass").await.unwrap();
 
-        client.execute("CREATE TABLE test (id INTEGER)").await.unwrap();
+        client
+            .execute("CREATE TABLE test (id INTEGER)")
+            .await
+            .unwrap();
         client.execute("INSERT INTO test VALUES (1)").await.unwrap();
 
         let result = client.query("SELECT * FROM test").await.unwrap();
@@ -338,7 +348,10 @@ mod tests {
     async fn test_client_transaction() {
         let client = Client::connect("admin", "adminpass").await.unwrap();
 
-        client.execute("CREATE TABLE test1 (id INTEGER)").await.unwrap();
+        client
+            .execute("CREATE TABLE test1 (id INTEGER)")
+            .await
+            .unwrap();
 
         let mut conn = client.get_connection().await.unwrap();
 
@@ -353,9 +366,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_from_url() {
-        let client = Client::connect_url(
-            "postgres://admin:adminpass@localhost:5432/testdb"
-        ).await.unwrap();
+        let client = Client::connect_url("postgres://admin:adminpass@localhost:5432/testdb")
+            .await
+            .unwrap();
 
         assert!(client.stats().await.total_connections > 0);
     }

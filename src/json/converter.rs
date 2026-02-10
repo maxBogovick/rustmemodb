@@ -3,9 +3,9 @@
 //! Converts JSON documents to SQL statements using the Builder pattern
 //! for flexible and maintainable SQL generation.
 
-use crate::core::{Value, DataType};
-use crate::storage::TableSchema;
 use super::error::{JsonError, JsonResult};
+use crate::core::{DataType, Value};
+use crate::storage::TableSchema;
 use serde_json::Value as JsonValue;
 
 /// Converts JSON values to SQL Value enum
@@ -22,22 +22,16 @@ impl JsonToValueConverter {
             (JsonValue::Bool(b), DataType::Boolean) => Ok(Value::Boolean(*b)),
 
             // Integer
-            (JsonValue::Number(n), DataType::Integer) => {
-                n.as_i64()
-                    .map(Value::Integer)
-                    .ok_or_else(|| JsonError::TypeMismatch(
-                        format!("Cannot convert {} to INTEGER", n)
-                    ))
-            }
+            (JsonValue::Number(n), DataType::Integer) => n
+                .as_i64()
+                .map(Value::Integer)
+                .ok_or_else(|| JsonError::TypeMismatch(format!("Cannot convert {} to INTEGER", n))),
 
             // Float (can accept integers too)
-            (JsonValue::Number(n), DataType::Float) => {
-                n.as_f64()
-                    .map(Value::Float)
-                    .ok_or_else(|| JsonError::TypeMismatch(
-                        format!("Cannot convert {} to FLOAT", n)
-                    ))
-            }
+            (JsonValue::Number(n), DataType::Float) => n
+                .as_f64()
+                .map(Value::Float)
+                .ok_or_else(|| JsonError::TypeMismatch(format!("Cannot convert {} to FLOAT", n))),
 
             // String
             (JsonValue::String(s), DataType::Text) => Ok(Value::Text(s.clone())),
@@ -47,21 +41,21 @@ impl JsonToValueConverter {
                 let dt = chrono::DateTime::parse_from_rfc3339(s)
                     .map_err(|e| JsonError::TypeMismatch(format!("Invalid Timestamp: {}", e)))?;
                 Ok(Value::Timestamp(dt.with_timezone(&chrono::Utc)))
-            },
+            }
 
             // Date
             (JsonValue::String(s), DataType::Date) => {
                 let d = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
                     .map_err(|e| JsonError::TypeMismatch(format!("Invalid Date: {}", e)))?;
                 Ok(Value::Date(d))
-            },
+            }
 
             // UUID
             (JsonValue::String(s), DataType::Uuid) => {
                 let u = uuid::Uuid::parse_str(s)
                     .map_err(|e| JsonError::TypeMismatch(format!("Invalid UUID: {}", e)))?;
                 Ok(Value::Uuid(u))
-            },
+            }
 
             // JSON
             (v, DataType::Json) => Ok(Value::Json(v.clone())),
@@ -73,7 +67,7 @@ impl JsonToValueConverter {
                     values.push(Self::convert(v, inner_type)?);
                 }
                 Ok(Value::Array(values))
-            },
+            }
 
             // Complex types (Array/Object) → serialize to JSON string if target is TEXT
             (JsonValue::Array(_) | JsonValue::Object(_), DataType::Text) => {
@@ -84,31 +78,32 @@ impl JsonToValueConverter {
             (_, DataType::Text) => Ok(Value::Text(json_value.to_string())),
 
             // Type mismatch
-            _ => Err(JsonError::TypeMismatch(
-                format!("Cannot convert JSON {} to SQL type {}",
-                    json_value, expected_type)
-            )),
+            _ => Err(JsonError::TypeMismatch(format!(
+                "Cannot convert JSON {} to SQL type {}",
+                json_value, expected_type
+            ))),
         }
     }
 
     /// Convert JSON object to Row according to schema
     pub fn json_to_row(json_obj: &JsonValue, schema: &TableSchema) -> JsonResult<Vec<Value>> {
-        let obj = json_obj.as_object()
+        let obj = json_obj
+            .as_object()
             .ok_or_else(|| JsonError::InvalidStructure("Expected JSON object".into()))?;
 
         let mut row = Vec::with_capacity(schema.schema().column_count());
 
         for column in schema.schema().columns() {
-            let json_value = obj.get(&column.name)
-                .unwrap_or(&JsonValue::Null);
+            let json_value = obj.get(&column.name).unwrap_or(&JsonValue::Null);
 
             let value = Self::convert(json_value, &column.data_type)?;
 
             // Validate nullable constraint
             if matches!(value, Value::Null) && !column.nullable {
-                return Err(JsonError::MissingField(
-                    format!("Field '{}' is required but missing", column.name)
-                ));
+                return Err(JsonError::MissingField(format!(
+                    "Field '{}' is required but missing",
+                    column.name
+                )));
             }
 
             row.push(value);
@@ -132,7 +127,12 @@ impl CreateTableBuilder {
         }
     }
 
-    pub fn add_column(mut self, name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
+    pub fn add_column(
+        mut self,
+        name: impl Into<String>,
+        data_type: DataType,
+        nullable: bool,
+    ) -> Self {
         self.columns.push((name.into(), data_type, nullable));
         self
     }
@@ -152,14 +152,20 @@ impl CreateTableBuilder {
     }
 
     pub fn build(self) -> String {
-        let column_defs: Vec<String> = self.columns.iter()
+        let column_defs: Vec<String> = self
+            .columns
+            .iter()
             .map(|(name, dtype, nullable)| {
                 let null_constraint = if *nullable { "" } else { " NOT NULL" };
                 format!("{} {}{}", quote_ident(name), dtype, null_constraint)
             })
             .collect();
 
-        format!("CREATE TABLE {} ({})", quote_ident(&self.table_name), column_defs.join(", "))
+        format!(
+            "CREATE TABLE {} ({})",
+            quote_ident(&self.table_name),
+            column_defs.join(", ")
+        )
     }
 }
 
@@ -209,11 +215,11 @@ impl InsertStatementBuilder {
             format!(" ({})", cols.join(", "))
         };
 
-        let values_str: Vec<String> = self.values.iter()
+        let values_str: Vec<String> = self
+            .values
+            .iter()
             .map(|row| {
-                let values: Vec<String> = row.iter()
-                    .map(format_value_for_sql)
-                    .collect();
+                let values: Vec<String> = row.iter().map(format_value_for_sql).collect();
                 format!("({})", values.join(", "))
             })
             .collect();
@@ -242,11 +248,10 @@ impl InsertStatementBuilder {
         self.values
             .chunks(batch_size)
             .map(|chunk| {
-                let values_str: Vec<String> = chunk.iter()
+                let values_str: Vec<String> = chunk
+                    .iter()
                     .map(|row| {
-                        let values: Vec<String> = row.iter()
-                            .map(format_value_for_sql)
-                            .collect();
+                        let values: Vec<String> = row.iter().map(format_value_for_sql).collect();
                         format!("({})", values.join(", "))
                     })
                     .collect();
@@ -295,11 +300,14 @@ impl UpdateStatementBuilder {
     }
 
     pub fn build(self) -> String {
-        let set_parts: Vec<String> = self.set_clause.iter()
+        let set_parts: Vec<String> = self
+            .set_clause
+            .iter()
             .map(|(col, val)| format!("{} = {}", quote_ident(col), format_value_for_sql(val)))
             .collect();
 
-        let where_part = self.where_clause
+        let where_part = self
+            .where_clause
             .map(|w| format!(" WHERE {}", w))
             .unwrap_or_default();
 
@@ -332,11 +340,16 @@ impl DeleteStatementBuilder {
     }
 
     pub fn build(self) -> String {
-        let where_part = self.where_clause
+        let where_part = self
+            .where_clause
             .map(|w| format!(" WHERE {}", w))
             .unwrap_or_default();
 
-        format!("DELETE FROM {}{}", quote_ident(&self.table_name), where_part)
+        format!(
+            "DELETE FROM {}{}",
+            quote_ident(&self.table_name),
+            where_part
+        )
     }
 }
 
@@ -410,7 +423,10 @@ mod tests {
             .add_column("name", DataType::Text, true)
             .build();
 
-        assert_eq!(sql, "CREATE TABLE \"users\" (\"id\" INTEGER NOT NULL, \"name\" TEXT)");
+        assert_eq!(
+            sql,
+            "CREATE TABLE \"users\" (\"id\" INTEGER NOT NULL, \"name\" TEXT)"
+        );
     }
 
     #[test]

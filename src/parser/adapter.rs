@@ -2,12 +2,12 @@
 // src/parser/adapter.rs - Updated for Subquery Support
 // ============================================================================
 
+use crate::core::{DataType, DbError, ForeignKey, Result};
+use crate::parser::ast::*;
+use crate::plugins::ExpressionConverter;
 use sqlparser::ast as sql_ast;
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
-use crate::core::{DbError, Result, DataType, ForeignKey};
-use crate::parser::ast::*;
-use crate::plugins::ExpressionConverter;
 
 struct PartialSelect {
     distinct: bool,
@@ -76,13 +76,26 @@ impl SqlParserAdapter {
             sql_ast::Statement::CreateIndex(ci) => {
                 Ok(Statement::CreateIndex(self.convert_create_index(&ci)?))
             }
-            sql_ast::Statement::AlterTable { name, operations, .. } => {
+            sql_ast::Statement::AlterTable {
+                name, operations, ..
+            } => {
                 if operations.len() != 1 {
-                    return Err(DbError::UnsupportedOperation("Only single ALTER TABLE operation supported".into()));
+                    return Err(DbError::UnsupportedOperation(
+                        "Only single ALTER TABLE operation supported".into(),
+                    ));
                 }
-                Ok(Statement::AlterTable(self.convert_alter_table(name, operations.into_iter().next().unwrap())?))
+                Ok(Statement::AlterTable(self.convert_alter_table(
+                    name,
+                    operations.into_iter().next().unwrap(),
+                )?))
             }
-            sql_ast::Statement::CreateView { name, columns, query, or_replace, .. } => {
+            sql_ast::Statement::CreateView {
+                name,
+                columns,
+                query,
+                or_replace,
+                ..
+            } => {
                 let view_name = extract_table_name(&name)?;
                 let view_columns = columns.into_iter().map(|c| c.name.value).collect();
                 let query_stmt = self.convert_query(*query)?;
@@ -93,45 +106,55 @@ impl SqlParserAdapter {
                     or_replace,
                 }))
             }
-            sql_ast::Statement::Drop { object_type, names, if_exists, .. } => {
-                match object_type {
-                    sql_ast::ObjectType::Table => {
-                        Ok(Statement::DropTable(self.convert_drop_table(names, if_exists)?))
+            sql_ast::Statement::Drop {
+                object_type,
+                names,
+                if_exists,
+                ..
+            } => match object_type {
+                sql_ast::ObjectType::Table => Ok(Statement::DropTable(
+                    self.convert_drop_table(names, if_exists)?,
+                )),
+                sql_ast::ObjectType::View => {
+                    if names.len() != 1 {
+                        return Err(DbError::UnsupportedOperation(
+                            "Only single view DROP supported".into(),
+                        ));
                     }
-                    sql_ast::ObjectType::View => {
-                        if names.len() != 1 {
-                             return Err(DbError::UnsupportedOperation("Only single view DROP supported".into()));
-                        }
-                        let view_name = extract_table_name(&names[0])?;
-                        Ok(Statement::DropView(DropViewStmt {
-                            name: view_name,
-                            if_exists,
-                        }))
-                    }
-                    _ => Err(DbError::UnsupportedOperation(format!(
-                        "Only DROP TABLE and DROP VIEW supported, got: {:?}",
-                        object_type
-                    )))
+                    let view_name = extract_table_name(&names[0])?;
+                    Ok(Statement::DropView(DropViewStmt {
+                        name: view_name,
+                        if_exists,
+                    }))
                 }
-            }
+                _ => Err(DbError::UnsupportedOperation(format!(
+                    "Only DROP TABLE and DROP VIEW supported, got: {:?}",
+                    object_type
+                ))),
+            },
             sql_ast::Statement::Insert(insert) => {
                 Ok(Statement::Insert(self.convert_insert(insert)?))
             }
-            sql_ast::Statement::Query(query) => {
-                Ok(Statement::Query(self.convert_query(*query)?))
-            }
+            sql_ast::Statement::Query(query) => Ok(Statement::Query(self.convert_query(*query)?)),
             sql_ast::Statement::Delete(delete) => {
                 Ok(Statement::Delete(self.convert_delete(delete)?))
             }
-            sql_ast::Statement::Update { table, assignments, selection, .. } => {
-                Ok(Statement::Update(self.convert_update(table, assignments, selection)?))
-            }
-            sql_ast::Statement::Explain { statement, analyze, .. } => {
-                Ok(Statement::Explain(ExplainStmt {
-                    statement: Box::new(self.convert_statement(*statement)?),
-                    analyze,
-                }))
-            }
+            sql_ast::Statement::Update {
+                table,
+                assignments,
+                selection,
+                ..
+            } => Ok(Statement::Update(self.convert_update(
+                table,
+                assignments,
+                selection,
+            )?)),
+            sql_ast::Statement::Explain {
+                statement, analyze, ..
+            } => Ok(Statement::Explain(ExplainStmt {
+                statement: Box::new(self.convert_statement(*statement)?),
+                analyze,
+            })),
             _ => Err(DbError::UnsupportedOperation(format!(
                 "Statement type not supported: {:?}",
                 stmt
@@ -149,11 +172,18 @@ impl SqlParserAdapter {
 
         for constraint in create.constraints {
             match constraint {
-                sql_ast::TableConstraint::ForeignKey { columns: cols, foreign_table, referred_columns, .. } => {
+                sql_ast::TableConstraint::ForeignKey {
+                    columns: cols,
+                    foreign_table,
+                    referred_columns,
+                    ..
+                } => {
                     if cols.len() != 1 || referred_columns.len() != 1 {
-                        return Err(DbError::UnsupportedOperation("Composite foreign keys not supported yet".into()));
+                        return Err(DbError::UnsupportedOperation(
+                            "Composite foreign keys not supported yet".into(),
+                        ));
                     }
-                    
+
                     let col_name = cols[0].value.clone();
                     let ref_table = extract_table_name(&foreign_table)?;
                     let ref_col = referred_columns[0].value.clone();
@@ -178,10 +208,14 @@ impl SqlParserAdapter {
         })
     }
 
-    fn convert_drop_table(&self, names: Vec<sql_ast::ObjectName>, if_exists: bool) -> Result<DropTableStmt> {
+    fn convert_drop_table(
+        &self,
+        names: Vec<sql_ast::ObjectName>,
+        if_exists: bool,
+    ) -> Result<DropTableStmt> {
         if names.len() != 1 {
             return Err(DbError::UnsupportedOperation(
-                "Only single table DROP supported".into()
+                "Only single table DROP supported".into(),
             ));
         }
 
@@ -201,9 +235,11 @@ impl SqlParserAdapter {
                 }
                 match &tables[0].relation {
                     sql_ast::TableFactor::Table { name, .. } => extract_table_name(name)?,
-                    _ => return Err(DbError::UnsupportedOperation(
-                        "Complex table references not supported in DELETE".into()
-                    )),
+                    _ => {
+                        return Err(DbError::UnsupportedOperation(
+                            "Complex table references not supported in DELETE".into(),
+                        ));
+                    }
                 }
             }
             sql_ast::FromTable::WithoutKeyword(tables) => {
@@ -212,9 +248,11 @@ impl SqlParserAdapter {
                 }
                 match &tables[0].relation {
                     sql_ast::TableFactor::Table { name, .. } => extract_table_name(name)?,
-                    _ => return Err(DbError::UnsupportedOperation(
-                        "Complex table references not supported in DELETE".into()
-                    )),
+                    _ => {
+                        return Err(DbError::UnsupportedOperation(
+                            "Complex table references not supported in DELETE".into(),
+                        ));
+                    }
                 }
             }
         };
@@ -238,9 +276,11 @@ impl SqlParserAdapter {
     ) -> Result<UpdateStmt> {
         let table_name = match table.relation {
             sql_ast::TableFactor::Table { name, .. } => extract_table_name(&name)?,
-            _ => return Err(DbError::UnsupportedOperation(
-                "Complex table references not supported in UPDATE".into()
-            )),
+            _ => {
+                return Err(DbError::UnsupportedOperation(
+                    "Complex table references not supported in UPDATE".into(),
+                ));
+            }
         };
 
         let assignments = assignments
@@ -252,13 +292,15 @@ impl SqlParserAdapter {
                             col_name.0[0].to_string()
                         } else {
                             return Err(DbError::UnsupportedOperation(
-                                "Qualified column names not supported in UPDATE".into()
+                                "Qualified column names not supported in UPDATE".into(),
                             ));
                         }
                     }
-                    _ => return Err(DbError::UnsupportedOperation(
-                        "Only simple column names supported in UPDATE".into()
-                    )),
+                    _ => {
+                        return Err(DbError::UnsupportedOperation(
+                            "Only simple column names supported in UPDATE".into(),
+                        ));
+                    }
                 };
 
                 let value = self.expr_converter.convert(assign.value, self)?;
@@ -290,16 +332,26 @@ impl SqlParserAdapter {
         for opt in &col.options {
             match &opt.option {
                 sql_ast::ColumnOption::NotNull => nullable = false,
-                sql_ast::ColumnOption::Unique { is_primary: true, .. } => {
+                sql_ast::ColumnOption::Unique {
+                    is_primary: true, ..
+                } => {
                     primary_key = true;
                     nullable = false;
                     unique = true;
                 }
-                sql_ast::ColumnOption::Unique { is_primary: false, .. } => unique = true,
-                sql_ast::ColumnOption::ForeignKey { foreign_table, referred_columns, .. } => {
+                sql_ast::ColumnOption::Unique {
+                    is_primary: false, ..
+                } => unique = true,
+                sql_ast::ColumnOption::ForeignKey {
+                    foreign_table,
+                    referred_columns,
+                    ..
+                } => {
                     let table = extract_table_name(foreign_table)?;
                     if referred_columns.len() != 1 {
-                        return Err(DbError::UnsupportedOperation("Composite FKs not supported in column definition".into()));
+                        return Err(DbError::UnsupportedOperation(
+                            "Composite FKs not supported in column definition".into(),
+                        ));
                     }
                     let column = referred_columns[0].value.clone();
                     references = Some(ForeignKey { table, column });
@@ -335,24 +387,33 @@ impl SqlParserAdapter {
                 SqlValue::SingleQuotedString(s) => Ok(crate::core::Value::Text(s.clone())),
                 SqlValue::Boolean(b) => Ok(crate::core::Value::Boolean(*b)),
                 SqlValue::Null => Ok(crate::core::Value::Null),
-                _ => Err(DbError::UnsupportedOperation("Unsupported DEFAULT literal".into())),
+                _ => Err(DbError::UnsupportedOperation(
+                    "Unsupported DEFAULT literal".into(),
+                )),
             },
-            Expr::UnaryOp { op: UnaryOperator::Minus, expr } => {
-                match &**expr {
-                    Expr::Value(v) => match &v.value {
-                        SqlValue::Number(n, _) => {
-                            let val = crate::core::Value::parse_number(n)?;
-                            match val {
-                                crate::core::Value::Integer(i) => Ok(crate::core::Value::Integer(-i)),
-                                crate::core::Value::Float(f) => Ok(crate::core::Value::Float(-f)),
-                                _ => Err(DbError::TypeMismatch("Invalid default numeric literal".into())),
-                            }
+            Expr::UnaryOp {
+                op: UnaryOperator::Minus,
+                expr,
+            } => match &**expr {
+                Expr::Value(v) => match &v.value {
+                    SqlValue::Number(n, _) => {
+                        let val = crate::core::Value::parse_number(n)?;
+                        match val {
+                            crate::core::Value::Integer(i) => Ok(crate::core::Value::Integer(-i)),
+                            crate::core::Value::Float(f) => Ok(crate::core::Value::Float(-f)),
+                            _ => Err(DbError::TypeMismatch(
+                                "Invalid default numeric literal".into(),
+                            )),
                         }
-                        _ => Err(DbError::UnsupportedOperation("Only numeric literals supported in DEFAULT".into())),
-                    },
-                    _ => Err(DbError::UnsupportedOperation("Only numeric literals supported in DEFAULT".into())),
-                }
-            }
+                    }
+                    _ => Err(DbError::UnsupportedOperation(
+                        "Only numeric literals supported in DEFAULT".into(),
+                    )),
+                },
+                _ => Err(DbError::UnsupportedOperation(
+                    "Only numeric literals supported in DEFAULT".into(),
+                )),
+            },
             _ => Err(DbError::UnsupportedOperation(
                 "Only literal DEFAULT expressions supported".into(),
             )),
@@ -374,8 +435,7 @@ impl SqlParserAdapter {
             | sql_ast::DataType::Char(_)
             | sql_ast::DataType::String(_) => Ok(DataType::Text),
 
-            sql_ast::DataType::Boolean
-            | sql_ast::DataType::Bool => Ok(DataType::Boolean),
+            sql_ast::DataType::Boolean | sql_ast::DataType::Bool => Ok(DataType::Boolean),
 
             sql_ast::DataType::Timestamp(_, _) => Ok(DataType::Timestamp),
             sql_ast::DataType::Date => Ok(DataType::Date),
@@ -418,7 +478,7 @@ impl SqlParserAdapter {
             sql_ast::TableObject::TableName(name) => extract_table_name(&name)?,
             sql_ast::TableObject::TableFunction(_) => {
                 return Err(DbError::UnsupportedOperation(
-                    "INSERT INTO TABLE FUNCTION is not supported".into()
+                    "INSERT INTO TABLE FUNCTION is not supported".into(),
                 ));
             }
         };
@@ -432,7 +492,8 @@ impl SqlParserAdapter {
         let source = if let Some(source) = insert.source {
             match *source.body {
                 sql_ast::SetExpr::Values(vals) => {
-                    let rows = vals.rows
+                    let rows = vals
+                        .rows
                         .into_iter()
                         .map(|row| {
                             row.into_iter()
@@ -450,18 +511,20 @@ impl SqlParserAdapter {
                     // But I need to move source out of match?
                     // Actually, I can clone source if needed or just use `source` if I didn't match `*source.body` first.
                     // But I needed to check variant.
-                    
+
                     // Simple hack: Reconstruct Query or pass source.
                     // Since I matched *source.body, I consumed it?
                     // No, matching reference `match &*source.body`.
-                    
+
                     // Let's refactor.
                     let query = self.convert_query(*source)?;
                     InsertSource::Select(Box::new(query))
                 }
-                _ => return Err(DbError::UnsupportedOperation(
-                    "Only VALUES and SELECT supported in INSERT".into()
-                )),
+                _ => {
+                    return Err(DbError::UnsupportedOperation(
+                        "Only VALUES and SELECT supported in INSERT".into(),
+                    ));
+                }
             }
         } else {
             InsertSource::Values(Vec::new())
@@ -478,7 +541,9 @@ impl SqlParserAdapter {
         let distinct = match select.distinct {
             Some(sql_ast::Distinct::Distinct) => true,
             Some(sql_ast::Distinct::On(_)) => {
-                return Err(DbError::UnsupportedOperation("DISTINCT ON not supported".into()));
+                return Err(DbError::UnsupportedOperation(
+                    "DISTINCT ON not supported".into(),
+                ));
             }
             None => false,
         };
@@ -501,13 +566,14 @@ impl SqlParserAdapter {
             .transpose()?;
 
         let group_by = match select.group_by {
-            sql_ast::GroupByExpr::Expressions(exprs, _) => {
-                exprs.into_iter()
-                    .map(|expr| self.expr_converter.convert(expr, self))
-                    .collect::<Result<Vec<_>>>()?
-            }
+            sql_ast::GroupByExpr::Expressions(exprs, _) => exprs
+                .into_iter()
+                .map(|expr| self.expr_converter.convert(expr, self))
+                .collect::<Result<Vec<_>>>()?,
             sql_ast::GroupByExpr::All(_) => {
-                return Err(DbError::UnsupportedOperation("GROUP BY ALL not supported".into()));
+                return Err(DbError::UnsupportedOperation(
+                    "GROUP BY ALL not supported".into(),
+                ));
             }
         };
 
@@ -553,19 +619,29 @@ impl SqlParserAdapter {
         })
     }
 
-    fn convert_set_expr(&self, expr: sql_ast::SetExpr) -> Result<(PartialSelect, Option<Box<SetOperation>>)> {
+    fn convert_set_expr(
+        &self,
+        expr: sql_ast::SetExpr,
+    ) -> Result<(PartialSelect, Option<Box<SetOperation>>)> {
         match expr {
             sql_ast::SetExpr::Select(select) => {
                 let partial = self.convert_select(*select)?;
                 Ok((partial, None))
             }
-            sql_ast::SetExpr::SetOperation { op, set_quantifier, left, right } => {
+            sql_ast::SetExpr::SetOperation {
+                op,
+                set_quantifier,
+                left,
+                right,
+            } => {
                 let (left_select, left_next_op) = self.convert_set_expr(*left)?;
                 let right_query = self.convert_set_expr_to_query(*right)?;
 
                 let my_op = match op {
                     sql_ast::SetOperator::Union => SetOperator::Union,
-                    sql_ast::SetOperator::Except | sql_ast::SetOperator::Minus => SetOperator::Except,
+                    sql_ast::SetOperator::Except | sql_ast::SetOperator::Minus => {
+                        SetOperator::Except
+                    }
                     sql_ast::SetOperator::Intersect => SetOperator::Intersect,
                 };
 
@@ -610,7 +686,6 @@ impl SqlParserAdapter {
         })
     }
 
-
     fn append_set_op(&self, chain: &mut Box<SetOperation>, new_node: SetOperation) {
         if let Some(ref mut next) = chain.right.set_op {
             self.append_set_op(next, new_node);
@@ -620,7 +695,8 @@ impl SqlParserAdapter {
     }
 
     fn convert_with(&self, with: sql_ast::With) -> Result<With> {
-        let cte_tables = with.cte_tables
+        let cte_tables = with
+            .cte_tables
             .into_iter()
             .map(|cte| self.convert_cte(cte))
             .collect::<Result<Vec<_>>>()?;
@@ -633,7 +709,12 @@ impl SqlParserAdapter {
 
     fn convert_cte(&self, cte: sql_ast::Cte) -> Result<Cte> {
         let alias = cte.alias.name.value;
-        let columns = cte.alias.columns.into_iter().map(|c| c.name.value).collect();
+        let columns = cte
+            .alias
+            .columns
+            .into_iter()
+            .map(|c| c.name.value)
+            .collect();
         let query = self.convert_query(*cte.query)?;
         Ok(Cte {
             alias,
@@ -663,7 +744,9 @@ impl SqlParserAdapter {
                     alias: table_alias,
                 })
             }
-            sql_ast::TableFactor::Derived { subquery, alias, .. } => {
+            sql_ast::TableFactor::Derived {
+                subquery, alias, ..
+            } => {
                 let sub_stmt = self.convert_query(*subquery)?;
                 let sub_alias = alias.map(|a| a.name.value);
                 Ok(TableFactor::Derived {
@@ -672,7 +755,7 @@ impl SqlParserAdapter {
                 })
             }
             _ => Err(DbError::UnsupportedOperation(
-                "Complex table references not supported".into()
+                "Complex table references not supported".into(),
             )),
         }
     }
@@ -690,17 +773,19 @@ impl SqlParserAdapter {
     fn convert_join_operator(&self, op: sql_ast::JoinOperator) -> Result<JoinOperator> {
         match op {
             sql_ast::JoinOperator::Inner(constraint) | sql_ast::JoinOperator::Join(constraint) => {
-                Ok(JoinOperator::Inner(self.convert_join_constraint(constraint)?))
+                Ok(JoinOperator::Inner(
+                    self.convert_join_constraint(constraint)?,
+                ))
             }
-            sql_ast::JoinOperator::Left(constraint) => {
-                Ok(JoinOperator::LeftOuter(self.convert_join_constraint(constraint)?))
-            }
-            sql_ast::JoinOperator::Right(constraint) => {
-                Ok(JoinOperator::RightOuter(self.convert_join_constraint(constraint)?))
-            }
-            sql_ast::JoinOperator::FullOuter(constraint) => {
-                Ok(JoinOperator::FullOuter(self.convert_join_constraint(constraint)?))
-            }
+            sql_ast::JoinOperator::Left(constraint) => Ok(JoinOperator::LeftOuter(
+                self.convert_join_constraint(constraint)?,
+            )),
+            sql_ast::JoinOperator::Right(constraint) => Ok(JoinOperator::RightOuter(
+                self.convert_join_constraint(constraint)?,
+            )),
+            sql_ast::JoinOperator::FullOuter(constraint) => Ok(JoinOperator::FullOuter(
+                self.convert_join_constraint(constraint)?,
+            )),
             sql_ast::JoinOperator::CrossJoin(_) => Ok(JoinOperator::CrossJoin),
             _ => Err(DbError::UnsupportedOperation(format!(
                 "Unsupported join type: {:?}",
@@ -709,14 +794,17 @@ impl SqlParserAdapter {
         }
     }
 
-    fn convert_join_constraint(&self, constraint: sql_ast::JoinConstraint) -> Result<JoinConstraint> {
+    fn convert_join_constraint(
+        &self,
+        constraint: sql_ast::JoinConstraint,
+    ) -> Result<JoinConstraint> {
         match constraint {
             sql_ast::JoinConstraint::On(expr) => {
                 Ok(JoinConstraint::On(self.expr_converter.convert(expr, self)?))
             }
             sql_ast::JoinConstraint::None => Ok(JoinConstraint::None),
             _ => Err(DbError::UnsupportedOperation(
-                "Only ON constraint supported in JOIN".into()
+                "Only ON constraint supported in JOIN".into(),
             )),
         }
     }
@@ -726,17 +814,14 @@ impl SqlParserAdapter {
         };
 
         match order_by.kind {
-            sql_ast::OrderByKind::Expressions(exprs) => {
-                exprs
-                    .into_iter()
-                    .map(|expr| self.convert_order_by_expr(expr))
-                    .collect()
-            }
-            sql_ast::OrderByKind::All(all) => {
-                Err(DbError::UnsupportedOperation(
-                    format!("ORDER BY ALL not supported: {:?}", all)
-                ))
-            }
+            sql_ast::OrderByKind::Expressions(exprs) => exprs
+                .into_iter()
+                .map(|expr| self.convert_order_by_expr(expr))
+                .collect(),
+            sql_ast::OrderByKind::All(all) => Err(DbError::UnsupportedOperation(format!(
+                "ORDER BY ALL not supported: {:?}",
+                all
+            ))),
         }
     }
 
@@ -744,13 +829,13 @@ impl SqlParserAdapter {
         let expr = self.expr_converter.convert(order.expr, self)?;
         let descending = order.options.asc.map(|asc| !asc).unwrap_or(false);
 
-        Ok(OrderByExpr {
-            expr,
-            descending,
-        })
+        Ok(OrderByExpr { expr, descending })
     }
 
-    fn convert_limit_clause(&self, limit_clause: &Option<sql_ast::LimitClause>) -> Result<(Option<usize>, Option<usize>)> {
+    fn convert_limit_clause(
+        &self,
+        limit_clause: &Option<sql_ast::LimitClause>,
+    ) -> Result<(Option<usize>, Option<usize>)> {
         let Some(clause) = limit_clause else {
             return Ok((None, None));
         };
@@ -778,23 +863,22 @@ impl SqlParserAdapter {
     fn extract_usize_expr(&self, expr: &sql_ast::Expr, label: &str) -> Result<usize> {
         match expr {
             sql_ast::Expr::Value(value_with_span) => match &value_with_span.value {
-                sql_ast::Value::Number(n, _) => n.parse::<usize>().map_err(|_| {
-                    DbError::ParseError(format!("Invalid {} value: {}", label, n))
-                }),
+                sql_ast::Value::Number(n, _) => n
+                    .parse::<usize>()
+                    .map_err(|_| DbError::ParseError(format!("Invalid {} value: {}", label, n))),
                 other => Err(DbError::UnsupportedOperation(format!(
-                    "Only numeric {} supported, got: {:?}", label, other
+                    "Only numeric {} supported, got: {:?}",
+                    label, other
                 ))),
             },
             _ => Err(DbError::UnsupportedOperation(format!(
-                "Only numeric {} supported", label
+                "Only numeric {} supported",
+                label
             ))),
         }
     }
 
-    fn convert_create_index(
-        &self,
-        ci: &sql_ast::CreateIndex,
-    ) -> Result<CreateIndexStmt> {
+    fn convert_create_index(&self, ci: &sql_ast::CreateIndex) -> Result<CreateIndexStmt> {
         let index_name = match &ci.name {
             Some(n) => extract_table_name(n)?,
             None => {
@@ -806,13 +890,17 @@ impl SqlParserAdapter {
 
         if ci.columns.len() != 1 {
             return Err(DbError::UnsupportedOperation(
-                "Multi-column indexes are not supported yet".into()
+                "Multi-column indexes are not supported yet".into(),
             ));
         }
 
         let column = match &ci.columns[0].column.expr {
-             sql_ast::Expr::Identifier(ident) => ident.value.clone(),
-             _ => return Err(DbError::UnsupportedOperation("Index column must be an identifier".into())),
+            sql_ast::Expr::Identifier(ident) => ident.value.clone(),
+            _ => {
+                return Err(DbError::UnsupportedOperation(
+                    "Index column must be an identifier".into(),
+                ));
+            }
         };
 
         Ok(CreateIndexStmt {
@@ -838,17 +926,18 @@ impl SqlParserAdapter {
             sql_ast::AlterTableOperation::DropColumn { column_names, .. } => {
                 if column_names.len() != 1 {
                     return Err(DbError::UnsupportedOperation(
-                        "Only single column drop supported".into()
+                        "Only single column drop supported".into(),
                     ));
                 }
                 AlterTableOperation::DropColumn(column_names[0].value.clone())
             }
-            sql_ast::AlterTableOperation::RenameColumn { old_column_name, new_column_name } => {
-                AlterTableOperation::RenameColumn {
-                    old_name: old_column_name.value,
-                    new_name: new_column_name.value,
-                }
-            }
+            sql_ast::AlterTableOperation::RenameColumn {
+                old_column_name,
+                new_column_name,
+            } => AlterTableOperation::RenameColumn {
+                old_name: old_column_name.value,
+                new_name: new_column_name.value,
+            },
             sql_ast::AlterTableOperation::RenameTable { table_name } => {
                 let name = match table_name {
                     sql_ast::RenameTableNameKind::To(n) | sql_ast::RenameTableNameKind::As(n) => n,
@@ -856,9 +945,12 @@ impl SqlParserAdapter {
                 let new_name = extract_table_name(&name)?;
                 AlterTableOperation::RenameTable(new_name)
             }
-            _ => return Err(DbError::UnsupportedOperation(format!(
-                "Unsupported ALTER TABLE operation: {:?}", operation
-            ))),
+            _ => {
+                return Err(DbError::UnsupportedOperation(format!(
+                    "Unsupported ALTER TABLE operation: {:?}",
+                    operation
+                )));
+            }
         };
 
         Ok(AlterTableStmt {
@@ -870,20 +962,16 @@ impl SqlParserAdapter {
     fn convert_select_item(&self, item: sql_ast::SelectItem) -> Result<SelectItem> {
         match item {
             sql_ast::SelectItem::Wildcard(_) => Ok(SelectItem::Wildcard),
-            sql_ast::SelectItem::UnnamedExpr(expr) => {
-                Ok(SelectItem::Expr {
-                    expr: self.expr_converter.convert(expr, self)?,
-                    alias: None,
-                })
-            }
-            sql_ast::SelectItem::ExprWithAlias { expr, alias } => {
-                Ok(SelectItem::Expr {
-                    expr: self.expr_converter.convert(expr, self)?,
-                    alias: Some(alias.value),
-                })
-            }
+            sql_ast::SelectItem::UnnamedExpr(expr) => Ok(SelectItem::Expr {
+                expr: self.expr_converter.convert(expr, self)?,
+                alias: None,
+            }),
+            sql_ast::SelectItem::ExprWithAlias { expr, alias } => Ok(SelectItem::Expr {
+                expr: self.expr_converter.convert(expr, self)?,
+                alias: Some(alias.value),
+            }),
             _ => Err(DbError::UnsupportedOperation(
-                "Unsupported select item".into()
+                "Unsupported select item".into(),
             )),
         }
     }
@@ -910,10 +998,14 @@ mod tests {
     #[test]
     fn test_parse_references() {
         let adapter = SqlParserAdapter::new();
-        let stmts = adapter.parse("CREATE TABLE child (id INT, parent_id INT REFERENCES parent(id))").unwrap();
-        
-        let Statement::CreateTable(create) = &stmts[0] else { panic!("Expected CreateTable"); };
-        
+        let stmts = adapter
+            .parse("CREATE TABLE child (id INT, parent_id INT REFERENCES parent(id))")
+            .unwrap();
+
+        let Statement::CreateTable(create) = &stmts[0] else {
+            panic!("Expected CreateTable");
+        };
+
         assert_eq!(create.columns.len(), 2);
         let col = &create.columns[1];
         assert_eq!(col.name, "parent_id");

@@ -8,13 +8,13 @@ pub struct Autocompleter {
 impl Autocompleter {
     pub fn new() -> Self {
         let keywords = vec![
-            "SELECT", "INSERT", "UPDATE", "DELETE", "FROM", "WHERE", "CREATE", "TABLE", 
-            "DROP", "INDEX", "INTO", "VALUES", "AND", "OR", "NOT", "NULL", "TRUE", "FALSE",
-            "INTEGER", "TEXT", "BOOLEAN", "FLOAT", "PRIMARY", "KEY", "UNIQUE", "ORDER", "BY",
-            "LIMIT", "BEGIN", "COMMIT", "ROLLBACK", "LIKE", "BETWEEN", "IS", "IN",
-            "COUNT", "SUM", "AVG", "MIN", "MAX"
+            "SELECT", "INSERT", "UPDATE", "DELETE", "FROM", "WHERE", "CREATE", "TABLE", "DROP",
+            "INDEX", "INTO", "VALUES", "AND", "OR", "NOT", "NULL", "TRUE", "FALSE", "INTEGER",
+            "TEXT", "BOOLEAN", "FLOAT", "PRIMARY", "KEY", "UNIQUE", "ORDER", "BY", "LIMIT",
+            "BEGIN", "COMMIT", "ROLLBACK", "LIKE", "BETWEEN", "IS", "IN", "COUNT", "SUM", "AVG",
+            "MIN", "MAX",
         ];
-        
+
         Self {
             keywords: keywords.into_iter().map(|s| s.to_string()).collect(),
         }
@@ -44,7 +44,7 @@ impl Autocompleter {
         // Here we just dump all known columns if they match.
         // We'd need to query stats or schema. The Facade might need a method to get schema.
         // For now, let's stick to Tables + Keywords as it's safe O(1)ish.
-        
+
         suggestions.sort();
         suggestions
     }

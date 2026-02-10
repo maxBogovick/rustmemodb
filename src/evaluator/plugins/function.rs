@@ -1,6 +1,6 @@
-use crate::evaluator::{ExpressionEvaluator, EvaluationContext};
+use crate::core::{DbError, Result, Row, Schema, Value};
+use crate::evaluator::{EvaluationContext, ExpressionEvaluator};
 use crate::parser::ast::Expr;
-use crate::core::{Result, Row, Schema, Value, DbError};
 use async_trait::async_trait;
 
 pub struct FunctionEvaluator;
@@ -15,7 +15,13 @@ impl ExpressionEvaluator for FunctionEvaluator {
         matches!(expr, Expr::Function { .. })
     }
 
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value> {
         if let Expr::Function { name, args, .. } = expr {
             let mut eval_args = Vec::with_capacity(args.len());
             for arg in args {
@@ -28,7 +34,10 @@ impl ExpressionEvaluator for FunctionEvaluator {
                 "LENGTH" => self.length(&eval_args),
                 "COALESCE" => self.coalesce(&eval_args),
                 "NOW" => self.now(),
-                _ => Err(DbError::UnsupportedOperation(format!("Unknown function: {}", name))),
+                _ => Err(DbError::UnsupportedOperation(format!(
+                    "Unknown function: {}",
+                    name
+                ))),
             }
         } else {
             unreachable!()
@@ -38,7 +47,9 @@ impl ExpressionEvaluator for FunctionEvaluator {
 
 impl FunctionEvaluator {
     fn upper(&self, args: &[Value]) -> Result<Value> {
-        if args.len() != 1 { return Err(DbError::ExecutionError("UPPER expects 1 argument".into())); }
+        if args.len() != 1 {
+            return Err(DbError::ExecutionError("UPPER expects 1 argument".into()));
+        }
         match &args[0] {
             Value::Text(s) => Ok(Value::Text(s.to_uppercase())),
             Value::Null => Ok(Value::Null),
@@ -47,7 +58,9 @@ impl FunctionEvaluator {
     }
 
     fn lower(&self, args: &[Value]) -> Result<Value> {
-        if args.len() != 1 { return Err(DbError::ExecutionError("LOWER expects 1 argument".into())); }
+        if args.len() != 1 {
+            return Err(DbError::ExecutionError("LOWER expects 1 argument".into()));
+        }
         match &args[0] {
             Value::Text(s) => Ok(Value::Text(s.to_lowercase())),
             Value::Null => Ok(Value::Null),
@@ -56,7 +69,9 @@ impl FunctionEvaluator {
     }
 
     fn length(&self, args: &[Value]) -> Result<Value> {
-        if args.len() != 1 { return Err(DbError::ExecutionError("LENGTH expects 1 argument".into())); }
+        if args.len() != 1 {
+            return Err(DbError::ExecutionError("LENGTH expects 1 argument".into()));
+        }
         match &args[0] {
             Value::Text(s) => Ok(Value::Integer(s.len() as i64)),
             Value::Null => Ok(Value::Null),

@@ -33,6 +33,7 @@
 
 - [Quickstart](documentations/QUICKSTART.md)
 - [Database Implementation](documentations/SHORT_DOCUMENTATION.md)
+- [Metrics & Profiling](docs/metrics.md)
 
 ## ⚡ Why RustMemDB?
 
@@ -62,6 +63,11 @@ cargo run
 **Run the Postgres Server:**
 ```bash
 cargo run -- server --host 127.0.0.1 --port 5432
+```
+
+**Run the Synthetic Load Test:**
+```bash
+cargo run -- load-test --duration-secs 10 --concurrency 4 --rows 10000 --read-ratio 80
 ```
 
 **Features:**

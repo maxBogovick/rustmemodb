@@ -1,10 +1,10 @@
 use crate::core::{DbError, Result};
-use std::collections::HashMap;
-use std::sync::{Arc};
-use tokio::sync::RwLock;
 use lazy_static::lazy_static;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// User permission level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -149,11 +149,7 @@ impl AuthManager {
 
         let admin_hash = Self::hash_password(password)
             .unwrap_or_else(|e| panic!("Failed to hash default admin password: {}", e));
-        let admin_user = User::new(
-            username.to_string(),
-            admin_hash,
-            vec![Permission::Admin],
-        );
+        let admin_user = User::new(username.to_string(), admin_hash, vec![Permission::Admin]);
 
         users.insert(username.to_string(), admin_user);
 
@@ -189,7 +185,9 @@ impl AuthManager {
     }
 
     fn auth_file_path() -> Option<PathBuf> {
-        std::env::var("RUSTMEMODB_AUTH_FILE").ok().map(PathBuf::from)
+        std::env::var("RUSTMEMODB_AUTH_FILE")
+            .ok()
+            .map(PathBuf::from)
     }
 
     fn persist_users_to_path(users: &HashMap<String, User>, path: &PathBuf) -> Result<()> {
@@ -212,11 +210,14 @@ impl AuthManager {
     pub async fn authenticate(&self, username: &str, password: &str) -> Result<User> {
         let users = self.users.read().await;
 
-        let user = users.get(username)
+        let user = users
+            .get(username)
             .ok_or_else(|| DbError::ExecutionError("Invalid username or password".into()))?;
 
         if !Self::verify_password(password, &user.password_hash) {
-            return Err(DbError::ExecutionError("Invalid username or password".into()));
+            return Err(DbError::ExecutionError(
+                "Invalid username or password".into(),
+            ));
         }
 
         Ok(user.clone())
@@ -230,14 +231,15 @@ impl AuthManager {
         permissions: Vec<Permission>,
     ) -> Result<()> {
         self.validate_username(username)?;
-        self.validate_password(password)?;  // Validate BEFORE hashing
+        self.validate_password(password)?; // Validate BEFORE hashing
 
         let mut users = self.users.write().await;
 
         if users.contains_key(username) {
-            return Err(DbError::ExecutionError(
-                format!("User '{}' already exists", username)
-            ));
+            return Err(DbError::ExecutionError(format!(
+                "User '{}' already exists",
+                username
+            )));
         }
 
         let user = User::new(
@@ -258,17 +260,16 @@ impl AuthManager {
         let mut users = self.users.write().await;
 
         // Check if we're deleting the last administrator
-        let user_to_delete = users.get(username)
-            .ok_or_else(|| DbError::ExecutionError(
-                format!("User '{}' not found", username)
-            ))?;
+        let user_to_delete = users
+            .get(username)
+            .ok_or_else(|| DbError::ExecutionError(format!("User '{}' not found", username)))?;
 
         if user_to_delete.is_admin() {
             let admin_count = users.values().filter(|u| u.is_admin()).count();
 
             if admin_count <= 1 {
                 return Err(DbError::ExecutionError(
-                    "Cannot delete the last admin user".into()
+                    "Cannot delete the last admin user".into(),
                 ));
             }
         }
@@ -286,10 +287,9 @@ impl AuthManager {
 
         let mut users = self.users.write().await;
 
-        let user = users.get_mut(username)
-            .ok_or_else(|| DbError::ExecutionError(
-                format!("User '{}' not found", username)
-            ))?;
+        let user = users
+            .get_mut(username)
+            .ok_or_else(|| DbError::ExecutionError(format!("User '{}' not found", username)))?;
 
         user.set_password_hash(Self::hash_password(new_password)?);
 
@@ -302,10 +302,9 @@ impl AuthManager {
     pub async fn grant_permission(&self, username: &str, permission: Permission) -> Result<()> {
         let mut users = self.users.write().await;
 
-        let user = users.get_mut(username)
-            .ok_or_else(|| DbError::ExecutionError(
-                format!("User '{}' not found", username)
-            ))?;
+        let user = users
+            .get_mut(username)
+            .ok_or_else(|| DbError::ExecutionError(format!("User '{}' not found", username)))?;
 
         let changed = user.add_permission(permission);
         drop(users);
@@ -319,10 +318,9 @@ impl AuthManager {
     pub async fn revoke_permission(&self, username: &str, permission: Permission) -> Result<()> {
         let mut users = self.users.write().await;
 
-        let user = users.get(username)
-            .ok_or_else(|| DbError::ExecutionError(
-                format!("User '{}' not found", username)
-            ))?;
+        let user = users
+            .get(username)
+            .ok_or_else(|| DbError::ExecutionError(format!("User '{}' not found", username)))?;
 
         // Prevent revoking Admin permission from the last administrator
         if permission == Permission::Admin && user.is_admin() {
@@ -330,7 +328,7 @@ impl AuthManager {
 
             if admin_count <= 1 {
                 return Err(DbError::ExecutionError(
-                    "Cannot revoke admin permission from the last admin user".into()
+                    "Cannot revoke admin permission from the last admin user".into(),
                 ));
             }
         }
@@ -359,11 +357,10 @@ impl AuthManager {
     pub async fn get_user(&self, username: &str) -> Result<User> {
         let users = self.users.read().await;
 
-        users.get(username)
+        users
+            .get(username)
             .cloned()
-            .ok_or_else(|| DbError::ExecutionError(
-                format!("User '{}' not found", username)
-            ))
+            .ok_or_else(|| DbError::ExecutionError(format!("User '{}' not found", username)))
     }
 
     /// Checks if a user exists
@@ -387,7 +384,9 @@ impl AuthManager {
         }
 
         if username.len() > 50 {
-            return Err(DbError::ExecutionError("Username too long (max 50 characters)".into()));
+            return Err(DbError::ExecutionError(
+                "Username too long (max 50 characters)".into(),
+            ));
         }
 
         Ok(())
@@ -405,7 +404,7 @@ impl AuthManager {
 
         if password.len() < 8 {
             return Err(DbError::ExecutionError(
-                "Password must be at least 8 characters long".into()
+                "Password must be at least 8 characters long".into(),
             ));
         }
 
@@ -420,7 +419,9 @@ pub fn required_permission(stmt: &crate::parser::ast::Statement) -> Option<Permi
         Insert(_) => Some(Permission::Insert),
         Update(_) => Some(Permission::Update),
         Delete(_) => Some(Permission::Delete),
-        CreateTable(_) | CreateIndex(_) | CreateView(_) | AlterTable(_) => Some(Permission::CreateTable),
+        CreateTable(_) | CreateIndex(_) | CreateView(_) | AlterTable(_) => {
+            Some(Permission::CreateTable)
+        }
         DropTable(_) | DropView(_) => Some(Permission::DropTable),
         Begin | Commit | Rollback => None,
     }
@@ -460,7 +461,9 @@ mod tests {
     async fn test_create_user() {
         let auth = AuthManager::new();
 
-        auth.create_user("alice", "password123", vec![Permission::Select]).await.unwrap();
+        auth.create_user("alice", "password123", vec![Permission::Select])
+            .await
+            .unwrap();
 
         let user = auth.authenticate("alice", "password123").await.unwrap();
         assert_eq!(user.username(), "alice");
@@ -472,13 +475,19 @@ mod tests {
     async fn test_invalid_credentials() {
         let auth = AuthManager::new();
         assert!(auth.authenticate("admin", "wrongpass").await.is_err());
-        assert!(auth.authenticate("nonexistent", "password123").await.is_err());
+        assert!(
+            auth.authenticate("nonexistent", "password123")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn test_duplicate_user() {
         let auth = AuthManager::new();
-        auth.create_user("bob", "password1234", vec![]).await.unwrap();
+        auth.create_user("bob", "password1234", vec![])
+            .await
+            .unwrap();
 
         let result = auth.create_user("bob", "password1234", vec![]).await;
         assert!(result.is_err());
@@ -487,9 +496,13 @@ mod tests {
     #[tokio::test]
     async fn test_update_password() {
         let auth = AuthManager::new();
-        auth.create_user("charlie", "oldpassword", vec![]).await.unwrap();
+        auth.create_user("charlie", "oldpassword", vec![])
+            .await
+            .unwrap();
 
-        auth.update_password("charlie", "newpassword").await.unwrap();
+        auth.update_password("charlie", "newpassword")
+            .await
+            .unwrap();
 
         assert!(auth.authenticate("charlie", "oldpassword").await.is_err());
         assert!(auth.authenticate("charlie", "newpassword").await.is_ok());
@@ -498,13 +511,19 @@ mod tests {
     #[tokio::test]
     async fn test_grant_revoke_permission() {
         let auth = AuthManager::new();
-        auth.create_user("diana", "password1234", vec![]).await.unwrap();
+        auth.create_user("diana", "password1234", vec![])
+            .await
+            .unwrap();
 
-        auth.grant_permission("diana", Permission::Select).await.unwrap();
+        auth.grant_permission("diana", Permission::Select)
+            .await
+            .unwrap();
         let user = auth.get_user("diana").await.unwrap();
         assert!(user.has_permission(Permission::Select));
 
-        auth.revoke_permission("diana", Permission::Select).await.unwrap();
+        auth.revoke_permission("diana", Permission::Select)
+            .await
+            .unwrap();
         let user = auth.get_user("diana").await.unwrap();
         assert!(!user.has_permission(Permission::Select));
     }
@@ -540,8 +559,12 @@ mod tests {
     #[tokio::test]
     async fn test_list_users() {
         let auth = AuthManager::new();
-        auth.create_user("user1", "password1234", vec![]).await.unwrap();
-        auth.create_user("user2", "password1234", vec![]).await.unwrap();
+        auth.create_user("user1", "password1234", vec![])
+            .await
+            .unwrap();
+        auth.create_user("user2", "password1234", vec![])
+            .await
+            .unwrap();
 
         let users = auth.list_users().await.unwrap();
         assert!(users.contains(&"admin".to_string()));
@@ -561,7 +584,9 @@ mod tests {
         let auth = AuthManager::new();
         assert_eq!(auth.user_count().await.unwrap(), 1);
 
-        auth.create_user("user1", "password1234", vec![]).await.unwrap();
+        auth.create_user("user1", "password1234", vec![])
+            .await
+            .unwrap();
         assert_eq!(auth.user_count().await.unwrap(), 2);
     }
 
@@ -574,7 +599,11 @@ mod tests {
 
         // Слишком длинное имя
         let long_name = "a".repeat(51);
-        assert!(auth.create_user(&long_name, "password123", vec![]).await.is_err());
+        assert!(
+            auth.create_user(&long_name, "password123", vec![])
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -584,7 +613,12 @@ mod tests {
         // Короткий пароль (меньше 8 символов)
         let result = auth.create_user("test", "short", vec![]).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("at least 8 characters"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("at least 8 characters")
+        );
 
         // Пустой пароль
         let result = auth.create_user("test2", "", vec![]).await;
@@ -592,6 +626,10 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
 
         // Валидный пароль (8+ символов)
-        assert!(auth.create_user("test3", "validpass123", vec![]).await.is_ok());
+        assert!(
+            auth.create_user("test3", "validpass123", vec![])
+                .await
+                .is_ok()
+        );
     }
 }

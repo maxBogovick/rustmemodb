@@ -19,24 +19,26 @@ async fn test_generic_database_interface() -> Result<()> {
     // 1. Setup the In-Memory DB (Mocking a real DB)
     // Use connect_local for isolated test environment
     let client = Client::connect_local("admin", "adminpass").await?;
-    
+
     // Create schema
-    client.execute("CREATE TABLE users (id INTEGER, name TEXT)").await?;
-    
+    client
+        .execute("CREATE TABLE users (id INTEGER, name TEXT)")
+        .await?;
+
     // 2. Use the generic functions with our In-Memory DB
     create_user(&client, 1, "Alice").await?;
     create_user(&client, 2, "Bob").await?;
-    
+
     // 3. Verify logic
     let count = count_users(&client).await?;
     assert_eq!(count, 2);
-    
-    // This proves that 'Client' implements 'DatabaseClient' and can be used 
+
+    // This proves that 'Client' implements 'DatabaseClient' and can be used
     // where a generic DB connection is expected.
     // In a real app, you would have:
     // struct PostgresWrapper(postgres::Client);
     // impl DatabaseClient for PostgresWrapper { ... }
-    
+
     Ok(())
 }
 
@@ -53,12 +55,12 @@ impl DatabaseClient for PostgresWrapper {
         // Convert postgres rows to rustmemodb::QueryResult
         Ok(convert_postgres_rows(rows))
     }
-    
+
     async fn execute(&self, sql: &str) -> Result<QueryResult> {
         let n = self.inner.execute(sql, &[]).await.map_err(|e| ...)?;
         Ok(QueryResult::updated(n as usize))
     }
-    
+
     async fn ping(&self) -> Result<()> {
         self.inner.simple_query("SELECT 1").await.map(|_| ()).map_err(|e| ...)
     }

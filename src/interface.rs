@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::core::Result;
 use crate::result::QueryResult;
+use async_trait::async_trait;
 
 /// A generic trait for database clients.
 ///

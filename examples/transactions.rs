@@ -3,7 +3,6 @@
 /// This example demonstrates transaction support with BEGIN, COMMIT, and ROLLBACK.
 ///
 /// Run: cargo run --example transactions
-
 use rustmemodb::{Client, Result};
 
 #[tokio::main]
@@ -13,19 +12,28 @@ async fn main() -> Result<()> {
     let client = Client::connect("admin", "adminpass").await?;
 
     // Setup
-    client.execute(
-        "CREATE TABLE accounts (
+    client
+        .execute(
+            "CREATE TABLE accounts (
             id INTEGER,
             name TEXT,
             balance FLOAT
-        )"
-    ).await?;
+        )",
+        )
+        .await?;
 
-    client.execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)").await?;
-    client.execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)").await?;
+    client
+        .execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)")
+        .await?;
+    client
+        .execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)")
+        .await?;
 
     println!("Initial balances:");
-    client.query("SELECT * FROM accounts ORDER BY id").await?.print();
+    client
+        .query("SELECT * FROM accounts ORDER BY id")
+        .await?
+        .print();
     println!();
 
     // ============================================================================
@@ -95,8 +103,12 @@ async fn main() -> Result<()> {
     println!("  ✓ Got connection 1 (ID: {})", conn1.connection().id());
     println!("  ✓ Got connection 2 (ID: {})", conn2.connection().id());
 
-    conn1.execute("INSERT INTO accounts VALUES (3, 'Charlie', 750.0)").await?;
-    conn2.execute("INSERT INTO accounts VALUES (4, 'Diana', 1200.0)").await?;
+    conn1
+        .execute("INSERT INTO accounts VALUES (3, 'Charlie', 750.0)")
+        .await?;
+    conn2
+        .execute("INSERT INTO accounts VALUES (4, 'Diana', 1200.0)")
+        .await?;
 
     println!("  ✓ Both connections executed successfully\n");
 
@@ -105,7 +117,10 @@ async fn main() -> Result<()> {
 
     // View final state
     println!("Final state:");
-    client.query("SELECT * FROM accounts ORDER BY id").await?.print();
+    client
+        .query("SELECT * FROM accounts ORDER BY id")
+        .await?
+        .print();
 
     println!("\n✓ All examples completed!");
 

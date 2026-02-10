@@ -19,13 +19,22 @@ impl ExpressionPlugin for SubqueryPlugin {
         )
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
+    fn convert(
+        &self,
+        expr: sql_ast::Expr,
+        converter: &ExpressionConverter,
+        query_converter: &dyn QueryConverter,
+    ) -> Result<Expr> {
         match expr {
             sql_ast::Expr::Subquery(query) => {
                 let subquery = query_converter.convert_query(*query)?;
                 Ok(Expr::Subquery(Box::new(subquery)))
             }
-            sql_ast::Expr::InSubquery { expr, subquery, negated } => {
+            sql_ast::Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
                 let left = converter.convert(*expr, query_converter)?;
                 let sub = query_converter.convert_query(*subquery)?;
                 Ok(Expr::InSubquery {

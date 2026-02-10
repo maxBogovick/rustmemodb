@@ -3,7 +3,6 @@
 /// Simple example showing how to use RustMemDB as a library
 ///
 /// Run with: cargo run --example quickstart
-
 use rustmemodb::{Client, InMemoryDB};
 
 #[tokio::main]
@@ -26,13 +25,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             name TEXT,
             age INTEGER,
             active BOOLEAN
-        )"
-    ).await?;
+        )",
+    )
+    .await?;
 
     // Insert data
-    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)").await?;
-    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)").await?;
-    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)").await?;
+    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)")
+        .await?;
+    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)")
+        .await?;
+    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)")
+        .await?;
 
     // Query data
     println!("\n📊 All users:");
@@ -40,9 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     result.print();
 
     println!("\n📊 Active users over 26:");
-    let result = db.execute(
-        "SELECT name, age FROM users WHERE active = true AND age > 26"
-    ).await?;
+    let result = db
+        .execute("SELECT name, age FROM users WHERE active = true AND age > 26")
+        .await?;
     result.print();
 
     // ============================================
@@ -56,19 +59,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
     // Create products table
-    client.execute(
-        "CREATE TABLE products (
+    client
+        .execute(
+            "CREATE TABLE products (
             id INTEGER,
             name TEXT,
             price FLOAT,
             stock INTEGER
-        )"
-    ).await?;
+        )",
+        )
+        .await?;
 
     // Insert products
-    client.execute("INSERT INTO products VALUES (1, 'Laptop', 999.99, 10)").await?;
-    client.execute("INSERT INTO products VALUES (2, 'Mouse', 29.99, 50)").await?;
-    client.execute("INSERT INTO products VALUES (3, 'Keyboard', 79.99, 30)").await?;
+    client
+        .execute("INSERT INTO products VALUES (1, 'Laptop', 999.99, 10)")
+        .await?;
+    client
+        .execute("INSERT INTO products VALUES (2, 'Mouse', 29.99, 50)")
+        .await?;
+    client
+        .execute("INSERT INTO products VALUES (3, 'Keyboard', 79.99, 30)")
+        .await?;
 
     // Simple query
     println!("\n📊 All products:");
@@ -77,18 +88,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Query with WHERE clause
     println!("\n📊 Products over $50:");
-    let result = client.query(
-        "SELECT name, price FROM products WHERE price > 50 ORDER BY price DESC"
-    ).await?;
+    let result = client
+        .query("SELECT name, price FROM products WHERE price > 50 ORDER BY price DESC")
+        .await?;
     result.print();
 
     // Update operation
     println!("\n🔄 Applying 10% discount...");
-    let result = client.execute("UPDATE products SET price = price * 0.9").await?;
-    println!("✅ Updated {} products", result.affected_rows().unwrap_or(0));
+    let result = client
+        .execute("UPDATE products SET price = price * 0.9")
+        .await?;
+    println!(
+        "✅ Updated {} products",
+        result.affected_rows().unwrap_or(0)
+    );
 
     println!("\n📊 Products after discount:");
-    let result = client.query("SELECT name, price FROM products ORDER BY price DESC").await?;
+    let result = client
+        .query("SELECT name, price FROM products ORDER BY price DESC")
+        .await?;
     result.print();
 
     // ============================================
@@ -99,13 +117,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
 
     // Create orders table
-    client.execute(
-        "CREATE TABLE orders (
+    client
+        .execute(
+            "CREATE TABLE orders (
             id INTEGER,
             product_id INTEGER,
             quantity INTEGER
-        )"
-    ).await?;
+        )",
+        )
+        .await?;
 
     // Get a connection for transaction
     let mut conn = client.get_connection().await?;
@@ -115,7 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Place an order (decrease stock and create order record)
     conn.execute("INSERT INTO orders VALUES (1, 1, 2)").await?;
-    conn.execute("UPDATE products SET stock = stock - 2 WHERE id = 1").await?;
+    conn.execute("UPDATE products SET stock = stock - 2 WHERE id = 1")
+        .await?;
 
     println!("📊 Changes within transaction:");
     let result = conn.execute("SELECT * FROM products WHERE id = 1").await?;
@@ -125,7 +146,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     conn.commit().await?;
 
     println!("\n📊 Final stock after order:");
-    let result = client.query("SELECT name, stock FROM products WHERE id = 1").await?;
+    let result = client
+        .query("SELECT name, stock FROM products WHERE id = 1")
+        .await?;
     result.print();
 
     // ============================================

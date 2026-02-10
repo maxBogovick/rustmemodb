@@ -3,7 +3,6 @@
 /// Demonstrates how to use transactions in RustMemDB
 ///
 /// Run with: cargo run --example transactions_example
-
 use rustmemodb::Client;
 
 #[tokio::main]
@@ -16,19 +15,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create accounts table
     println!("\n📝 Creating accounts table...");
-    client.execute(
-        "CREATE TABLE accounts (
+    client
+        .execute(
+            "CREATE TABLE accounts (
             id INTEGER,
             name TEXT,
             balance FLOAT
-        )"
-    ).await?;
+        )",
+        )
+        .await?;
 
     // Insert initial data
     println!("💰 Adding initial accounts...");
-    client.execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)").await?;
-    client.execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)").await?;
-    client.execute("INSERT INTO accounts VALUES (3, 'Charlie', 750.0)").await?;
+    client
+        .execute("INSERT INTO accounts VALUES (1, 'Alice', 1000.0)")
+        .await?;
+    client
+        .execute("INSERT INTO accounts VALUES (2, 'Bob', 500.0)")
+        .await?;
+    client
+        .execute("INSERT INTO accounts VALUES (3, 'Charlie', 750.0)")
+        .await?;
 
     println!("\n📊 Initial balances:");
     let result = client.query("SELECT * FROM accounts ORDER BY id").await?;
@@ -48,8 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         conn.begin().await?;
 
         println!("💸 Transferring $200 from Alice to Bob...");
-        conn.execute("UPDATE accounts SET balance = balance - 200.0 WHERE name = 'Alice'").await?;
-        conn.execute("UPDATE accounts SET balance = balance + 200.0 WHERE name = 'Bob'").await?;
+        conn.execute("UPDATE accounts SET balance = balance - 200.0 WHERE name = 'Alice'")
+            .await?;
+        conn.execute("UPDATE accounts SET balance = balance + 200.0 WHERE name = 'Bob'")
+            .await?;
 
         println!("\n📊 Balances within transaction:");
         let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
@@ -77,8 +86,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         conn.begin().await?;
 
         println!("💸 Attempting to transfer $1500 from Bob to Charlie...");
-        conn.execute("UPDATE accounts SET balance = balance - 1500.0 WHERE name = 'Bob'").await?;
-        conn.execute("UPDATE accounts SET balance = balance + 1500.0 WHERE name = 'Charlie'").await?;
+        conn.execute("UPDATE accounts SET balance = balance - 1500.0 WHERE name = 'Bob'")
+            .await?;
+        conn.execute("UPDATE accounts SET balance = balance + 1500.0 WHERE name = 'Charlie'")
+            .await?;
 
         println!("\n📊 Balances within transaction (Bob would have negative balance!):");
         let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
@@ -106,8 +117,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         conn.begin().await?;
 
         println!("💸 Transferring $100 from Charlie to Alice...");
-        conn.execute("UPDATE accounts SET balance = balance - 100.0 WHERE name = 'Charlie'").await?;
-        conn.execute("UPDATE accounts SET balance = balance + 100.0 WHERE name = 'Alice'").await?;
+        conn.execute("UPDATE accounts SET balance = balance - 100.0 WHERE name = 'Charlie'")
+            .await?;
+        conn.execute("UPDATE accounts SET balance = balance + 100.0 WHERE name = 'Alice'")
+            .await?;
 
         println!("\n📊 Balances within transaction:");
         let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
@@ -136,14 +149,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("📝 Performing multiple operations:");
         println!("  1. Insert new account (David)");
-        conn.execute("INSERT INTO accounts VALUES (4, 'David', 0.0)").await?;
+        conn.execute("INSERT INTO accounts VALUES (4, 'David', 0.0)")
+            .await?;
 
         println!("  2. Transfer $50 from each person to David");
-        conn.execute("UPDATE accounts SET balance = balance - 50.0 WHERE name != 'David'").await?;
-        conn.execute("UPDATE accounts SET balance = balance + 150.0 WHERE name = 'David'").await?;
+        conn.execute("UPDATE accounts SET balance = balance - 50.0 WHERE name != 'David'")
+            .await?;
+        conn.execute("UPDATE accounts SET balance = balance + 150.0 WHERE name = 'David'")
+            .await?;
 
         println!("  3. Delete accounts with balance < 100");
-        conn.execute("DELETE FROM accounts WHERE balance < 100").await?;
+        conn.execute("DELETE FROM accounts WHERE balance < 100")
+            .await?;
 
         println!("\n📊 Result within transaction:");
         let result = conn.execute("SELECT * FROM accounts ORDER BY id").await?;
@@ -154,7 +171,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n📊 Final state after complex transaction:");
-    let result = client.query("SELECT * FROM accounts ORDER BY balance DESC").await?;
+    let result = client
+        .query("SELECT * FROM accounts ORDER BY balance DESC")
+        .await?;
     result.print();
 
     // Summary

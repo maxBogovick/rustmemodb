@@ -6,16 +6,24 @@ async fn test_hash_join_performance() {
     let mut db = InMemoryDB::new();
 
     // Create tables
-    db.execute("CREATE TABLE t1 (id INTEGER, val INTEGER)").await.unwrap();
-    db.execute("CREATE TABLE t2 (id INTEGER, val INTEGER)").await.unwrap();
+    db.execute("CREATE TABLE t1 (id INTEGER, val INTEGER)")
+        .await
+        .unwrap();
+    db.execute("CREATE TABLE t2 (id INTEGER, val INTEGER)")
+        .await
+        .unwrap();
 
     let n = 5000; // Increased to 5000
 
     println!("Generating {} rows per table...", n);
     let start_gen = Instant::now();
     for i in 0..n {
-        db.execute(&format!("INSERT INTO t1 VALUES ({}, {})", i, i)).await.unwrap();
-        db.execute(&format!("INSERT INTO t2 VALUES ({}, {})", i, i)).await.unwrap();
+        db.execute(&format!("INSERT INTO t1 VALUES ({}, {})", i, i))
+            .await
+            .unwrap();
+        db.execute(&format!("INSERT INTO t2 VALUES ({}, {})", i, i))
+            .await
+            .unwrap();
     }
     println!("Data generation complete in {:?}", start_gen.elapsed());
 
@@ -28,7 +36,10 @@ async fn test_hash_join_performance() {
     // 1. Hash Join (Standard Equi-Join)
     println!("Running Hash Join...");
     let start_hash = Instant::now();
-    let res_hash = db.execute("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id").await.unwrap();
+    let res_hash = db
+        .execute("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id")
+        .await
+        .unwrap();
     let duration_hash = start_hash.elapsed();
     println!("Hash Join took: {:?}", duration_hash);
     assert_eq!(res_hash.row_count(), n);
@@ -41,7 +52,10 @@ async fn test_hash_join_performance() {
     // We can filter the dataset for NLJ or just accept it takes time.
     // Let's use a LIMIT for NLJ? No, limit applies after join.
     // Let's just run it.
-    let res_nlj = db.execute("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id AND 1=1").await.unwrap();
+    let res_nlj = db
+        .execute("SELECT * FROM t1 JOIN t2 ON t1.id = t2.id AND 1=1")
+        .await
+        .unwrap();
     let duration_nlj = start_nlj.elapsed();
     println!("Nested Loop Join took: {:?}", duration_nlj);
     assert_eq!(res_nlj.row_count(), n);

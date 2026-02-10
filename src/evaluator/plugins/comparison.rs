@@ -114,9 +114,9 @@ impl ComparisonEvaluator {
                 BinaryOp::Eq => a == b,
                 BinaryOp::NotEq => a != b,
                 // Для булевых значений: false < true
-                BinaryOp::Lt => !a && *b,      // false < true
+                BinaryOp::Lt => !a && *b, // false < true
                 BinaryOp::LtEq => a <= b,
-                BinaryOp::Gt => *a && !b,      // true > false
+                BinaryOp::Gt => *a && !b, // true > false
                 BinaryOp::GtEq => a >= b,
                 _ => unreachable!(),
             }),

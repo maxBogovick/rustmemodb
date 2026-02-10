@@ -1,4 +1,4 @@
-use super::{Table, TableSchema};
+use super::{Table, TableSchema, TableStorageEstimate};
 use crate::core::{Column, DbError, Result, Row, Snapshot};
 use crate::planner::logical_plan::IndexOp;
 use std::collections::HashMap;
@@ -39,7 +39,12 @@ impl InMemoryStorage {
     }
 
     /// Добавить колонку в таблицу
-    pub async fn add_column(&self, table_name: &str, column: Column, check: Option<crate::parser::ast::Expr>) -> Result<()> {
+    pub async fn add_column(
+        &self,
+        table_name: &str,
+        column: Column,
+        check: Option<crate::parser::ast::Expr>,
+    ) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
         table.add_column(column, check)
@@ -63,7 +68,7 @@ impl InMemoryStorage {
 
         // Remove old entry
         let table_handle = self.tables.remove(old_name).unwrap();
-        
+
         // Update table name inside the Table struct
         {
             let mut table = table_handle.write().await;
@@ -76,7 +81,12 @@ impl InMemoryStorage {
     }
 
     /// Переименовать колонку
-    pub async fn rename_column(&self, table_name: &str, old_name: &str, new_name: &str) -> Result<()> {
+    pub async fn rename_column(
+        &self,
+        table_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<()> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
         table.rename_column(old_name, new_name)
@@ -113,7 +123,11 @@ impl InMemoryStorage {
     }
 
     /// Сканировать таблицу с ID (для Update/Delete)
-    pub async fn scan_table_with_ids(&self, table_name: &str, snapshot: &Snapshot) -> Result<Vec<(usize, Row)>> {
+    pub async fn scan_table_with_ids(
+        &self,
+        table_name: &str,
+        snapshot: &Snapshot,
+    ) -> Result<Vec<(usize, Row)>> {
         let table_handle = self.get_table(table_name)?;
         let table = table_handle.read().await;
         Ok(table.scan_with_ids(snapshot))
@@ -127,7 +141,7 @@ impl InMemoryStorage {
             tx_id: u64::MAX,
             active: Arc::new(std::collections::HashSet::new()),
             aborted: Arc::new(std::collections::HashSet::new()),
-            max_tx_id: u64::MAX
+            max_tx_id: u64::MAX,
         };
         Ok(table.scan(&snapshot))
     }
@@ -164,7 +178,13 @@ impl InMemoryStorage {
     }
 
     /// Update row (MVCC)
-    pub async fn update_row(&self, table_name: &str, id: usize, new_row: Row, snapshot: &Snapshot) -> Result<bool> {
+    pub async fn update_row(
+        &self,
+        table_name: &str,
+        id: usize,
+        new_row: Row,
+        snapshot: &Snapshot,
+    ) -> Result<bool> {
         let table_handle = self.get_table(table_name)?;
         let mut table = table_handle.write().await;
         Self::maybe_sleep_on_write().await;
@@ -198,13 +218,13 @@ impl InMemoryStorage {
 
     /// Scan a table using an index (MVCC)
     pub async fn scan_index(
-        &self, 
-        table_name: &str, 
-        column_name: &str, 
-        value: &crate::core::Value, 
+        &self,
+        table_name: &str,
+        column_name: &str,
+        value: &crate::core::Value,
         end_value: &Option<crate::core::Value>,
         op: &IndexOp,
-        snapshot: &Snapshot
+        snapshot: &Snapshot,
     ) -> Result<Option<Vec<Row>>> {
         let table_handle = self.get_table(table_name)?;
         let table = table_handle.read().await;
@@ -225,7 +245,10 @@ impl InMemoryStorage {
     }
 
     /// Restore tables from a snapshot (for crash recovery)
-    pub async fn restore_tables(&mut self, tables: std::collections::HashMap<String, Table>) -> Result<()> {
+    pub async fn restore_tables(
+        &mut self,
+        tables: std::collections::HashMap<String, Table>,
+    ) -> Result<()> {
         // Clear existing tables
         self.tables.clear();
 
@@ -238,7 +261,11 @@ impl InMemoryStorage {
     }
 
     /// Vacuum all tables to remove dead row versions
-    pub async fn vacuum_all_tables(&self, min_active_tx_id: u64, aborted: &std::collections::HashSet<u64>) -> Result<usize> {
+    pub async fn vacuum_all_tables(
+        &self,
+        min_active_tx_id: u64,
+        aborted: &std::collections::HashSet<u64>,
+    ) -> Result<usize> {
         let mut total_freed = 0;
         for table_handle in self.tables.values() {
             let mut table = table_handle.write().await;
@@ -257,6 +284,19 @@ impl InMemoryStorage {
         total
     }
 
+    pub async fn storage_estimates(
+        &self,
+        snapshot: &Snapshot,
+        sample_limit: usize,
+    ) -> Vec<TableStorageEstimate> {
+        let mut estimates = Vec::with_capacity(self.tables.len());
+        for table_handle in self.tables.values() {
+            let table = table_handle.read().await;
+            estimates.push(table.estimate_storage(snapshot, sample_limit));
+        }
+        estimates
+    }
+
     /// Fork the storage (Copy-On-Write)
     /// Creates a new storage instance that shares the underlying data structures
     /// with the current one. Writes to the new storage will not affect the old one,
@@ -271,9 +311,7 @@ impl InMemoryStorage {
             new_tables.insert(name.clone(), Arc::new(RwLock::new(new_table)));
         }
 
-        Ok(Self {
-            tables: new_tables,
-        })
+        Ok(Self { tables: new_tables })
     }
 }
 

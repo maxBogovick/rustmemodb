@@ -1,9 +1,9 @@
 use crate::core::{DbError, Result};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use chrono::{DateTime, NaiveDate, Utc};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,15 +46,13 @@ impl Value {
             (_, Value::Null) => Ok(Ordering::Less),
 
             (Value::Integer(a), Value::Integer(b)) => Ok(a.cmp(b)),
-            
-            (Value::Float(a), Value::Float(b)) => {
-                match (a.is_nan(), b.is_nan()) {
-                    (true, true) => Ok(Ordering::Equal),
-                    (true, false) => Ok(Ordering::Greater),
-                    (false, true) => Ok(Ordering::Less),
-                    (false, false) => Ok(a.partial_cmp(b).unwrap_or(Ordering::Equal)),
-                }
-            }
+
+            (Value::Float(a), Value::Float(b)) => match (a.is_nan(), b.is_nan()) {
+                (true, true) => Ok(Ordering::Equal),
+                (true, false) => Ok(Ordering::Greater),
+                (false, true) => Ok(Ordering::Less),
+                (false, false) => Ok(a.partial_cmp(b).unwrap_or(Ordering::Equal)),
+            },
 
             (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b)),
             (Value::Boolean(a), Value::Boolean(b)) => Ok(a.cmp(b)),
@@ -191,6 +189,32 @@ impl Value {
             Self::Json(_) => 9,
         }
     }
+
+    pub fn estimated_heap_bytes(&self) -> usize {
+        match self {
+            Value::Null => 0,
+            Value::Integer(_) => 0,
+            Value::Float(_) => 0,
+            Value::Boolean(_) => 0,
+            Value::Timestamp(_) => 0,
+            Value::Date(_) => 0,
+            Value::Uuid(_) => 0,
+            Value::Text(text) => text.len(),
+            Value::Array(values) => {
+                let element_overhead = values.len().saturating_mul(std::mem::size_of::<Value>());
+                element_overhead
+                    + values
+                        .iter()
+                        .map(|value| value.estimated_heap_bytes())
+                        .sum::<usize>()
+            }
+            Value::Json(value) => value.to_string().len(),
+        }
+    }
+
+    pub fn estimated_total_bytes(&self) -> usize {
+        std::mem::size_of::<Value>() + self.estimated_heap_bytes()
+    }
 }
 
 impl PartialEq for Value {
@@ -198,17 +222,15 @@ impl PartialEq for Value {
         match (self, other) {
             (Self::Null, Self::Null) => true,
             (Self::Integer(a), Self::Integer(b)) => a == b,
-            (Self::Float(a), Self::Float(b)) => {
-                match (a.is_nan(), b.is_nan()) {
-                    (true, true) => false,
-                    (true, false) | (false, true) => false,
-                    _ => {
-                        let diff = (a - b).abs();
-                        let largest = a.abs().max(b.abs());
-                        diff <= largest * f64::EPSILON * 8.0
-                    }
+            (Self::Float(a), Self::Float(b)) => match (a.is_nan(), b.is_nan()) {
+                (true, true) => false,
+                (true, false) | (false, true) => false,
+                _ => {
+                    let diff = (a - b).abs();
+                    let largest = a.abs().max(b.abs());
+                    diff <= largest * f64::EPSILON * 8.0
                 }
-            }
+            },
             (Self::Text(a), Self::Text(b)) => a == b,
             (Self::Boolean(a), Self::Boolean(b)) => a == b,
             (Self::Timestamp(a), Self::Timestamp(b)) => a == b,
@@ -241,14 +263,12 @@ impl Ord for Value {
             (_, Self::Null) => Ordering::Less,
 
             (Self::Integer(a), Self::Integer(b)) => a.cmp(b),
-            (Self::Float(a), Self::Float(b)) => {
-                match (a.is_nan(), b.is_nan()) {
-                    (true, true) => Ordering::Equal,
-                    (true, false) => Ordering::Greater,
-                    (false, true) => Ordering::Less,
-                    (false, false) => a.partial_cmp(b).unwrap(),
-                }
-            }
+            (Self::Float(a), Self::Float(b)) => match (a.is_nan(), b.is_nan()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                (false, false) => a.partial_cmp(b).unwrap(),
+            },
             (Self::Text(a), Self::Text(b)) => a.cmp(b),
             (Self::Boolean(a), Self::Boolean(b)) => a.cmp(b),
             (Self::Timestamp(a), Self::Timestamp(b)) => a.cmp(b),
@@ -352,7 +372,9 @@ impl fmt::Display for Value {
             Self::Array(a) => {
                 write!(f, "[")?;
                 for (i, v) in a.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", v)?;
                 }
                 write!(f, "]")
@@ -363,16 +385,56 @@ impl fmt::Display for Value {
 }
 
 // Implement From
-impl From<i64> for Value { fn from(i: i64) -> Self { Self::Integer(i) } }
-impl From<f64> for Value { fn from(f: f64) -> Self { Self::Float(f) } }
-impl From<String> for Value { fn from(s: String) -> Self { Self::Text(s) } }
-impl From<&str> for Value { fn from(s: &str) -> Self { Self::Text(s.to_string()) } }
-impl From<bool> for Value { fn from(b: bool) -> Self { Self::Boolean(b) } }
-impl From<DateTime<Utc>> for Value { fn from(t: DateTime<Utc>) -> Self { Self::Timestamp(t) } }
-impl From<NaiveDate> for Value { fn from(d: NaiveDate) -> Self { Self::Date(d) } }
-impl From<Uuid> for Value { fn from(u: Uuid) -> Self { Self::Uuid(u) } }
-impl From<Vec<Value>> for Value { fn from(v: Vec<Value>) -> Self { Self::Array(v) } }
-impl From<serde_json::Value> for Value { fn from(v: serde_json::Value) -> Self { Self::Json(v) } }
+impl From<i64> for Value {
+    fn from(i: i64) -> Self {
+        Self::Integer(i)
+    }
+}
+impl From<f64> for Value {
+    fn from(f: f64) -> Self {
+        Self::Float(f)
+    }
+}
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Self::Boolean(b)
+    }
+}
+impl From<DateTime<Utc>> for Value {
+    fn from(t: DateTime<Utc>) -> Self {
+        Self::Timestamp(t)
+    }
+}
+impl From<NaiveDate> for Value {
+    fn from(d: NaiveDate) -> Self {
+        Self::Date(d)
+    }
+}
+impl From<Uuid> for Value {
+    fn from(u: Uuid) -> Self {
+        Self::Uuid(u)
+    }
+}
+impl From<Vec<Value>> for Value {
+    fn from(v: Vec<Value>) -> Self {
+        Self::Array(v)
+    }
+}
+impl From<serde_json::Value> for Value {
+    fn from(v: serde_json::Value) -> Self {
+        Self::Json(v)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -382,10 +444,10 @@ mod tests {
     fn test_value_equality() {
         assert_eq!(Value::Integer(42), Value::Integer(42));
         assert_ne!(Value::Integer(1), Value::Integer(2));
-        
+
         let now = Utc::now();
         assert_eq!(Value::Timestamp(now), Value::Timestamp(now));
-        
+
         let uuid = Uuid::new_v4();
         assert_eq!(Value::Uuid(uuid), Value::Uuid(uuid));
     }
@@ -394,7 +456,7 @@ mod tests {
     fn test_value_ordering() {
         assert!(Value::Integer(1) < Value::Integer(2));
         assert!(Value::Null > Value::Integer(0));
-        
+
         let date1 = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap();
         let date2 = NaiveDate::from_ymd_opt(2023, 1, 2).unwrap();
         assert!(Value::Date(date1) < Value::Date(date2));

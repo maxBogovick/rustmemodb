@@ -17,7 +17,12 @@ impl ExpressionPlugin for LikePlugin {
         )
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
+    fn convert(
+        &self,
+        expr: sql_ast::Expr,
+        converter: &ExpressionConverter,
+        query_converter: &dyn QueryConverter,
+    ) -> Result<Expr> {
         match expr {
             sql_ast::Expr::Like {
                 negated,

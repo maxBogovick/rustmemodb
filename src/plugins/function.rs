@@ -1,6 +1,6 @@
-use super::{ExpressionPlugin, ExpressionConverter, QueryConverter};
+use super::{ExpressionConverter, ExpressionPlugin, QueryConverter};
 use crate::core::Result;
-use crate::parser::ast::{Expr, WindowSpec, OrderByExpr};
+use crate::parser::ast::{Expr, OrderByExpr, WindowSpec};
 use sqlparser::ast as sql_ast;
 
 pub struct FunctionPlugin;
@@ -14,28 +14,41 @@ impl ExpressionPlugin for FunctionPlugin {
         matches!(expr, sql_ast::Expr::Function(_))
     }
 
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr> {
+    fn convert(
+        &self,
+        expr: sql_ast::Expr,
+        converter: &ExpressionConverter,
+        query_converter: &dyn QueryConverter,
+    ) -> Result<Expr> {
         match expr {
             sql_ast::Expr::Function(func) => {
                 let name = func.name.to_string().to_uppercase();
 
                 // Convert arguments
-                let (args, distinct) = if let sql_ast::FunctionArguments::List(arg_list) = func.args {
-                    let distinct = matches!(arg_list.duplicate_treatment, Some(sql_ast::DuplicateTreatment::Distinct));
-                    
-                    let args = arg_list.args
+                let (args, distinct) = if let sql_ast::FunctionArguments::List(arg_list) = func.args
+                {
+                    let distinct = matches!(
+                        arg_list.duplicate_treatment,
+                        Some(sql_ast::DuplicateTreatment::Distinct)
+                    );
+
+                    let args = arg_list
+                        .args
                         .into_iter()
                         .map(|arg| {
                             match arg {
-                                sql_ast::FunctionArg::Unnamed(sql_ast::FunctionArgExpr::Expr(e)) => {
-                                    converter.convert(e, query_converter)
-                                }
-                                sql_ast::FunctionArg::Unnamed(sql_ast::FunctionArgExpr::Wildcard) => {
+                                sql_ast::FunctionArg::Unnamed(sql_ast::FunctionArgExpr::Expr(
+                                    e,
+                                )) => converter.convert(e, query_converter),
+                                sql_ast::FunctionArg::Unnamed(
+                                    sql_ast::FunctionArgExpr::Wildcard,
+                                ) => {
                                     // For COUNT(*), AVG(*), etc.
                                     Ok(Expr::Literal(crate::core::Value::Text("*".into())))
                                 }
                                 _ => Err(crate::core::DbError::UnsupportedOperation(
-                                    "Only unnamed expression arguments supported in functions".into()
+                                    "Only unnamed expression arguments supported in functions"
+                                        .into(),
                                 )),
                             }
                         })
@@ -46,24 +59,36 @@ impl ExpressionPlugin for FunctionPlugin {
                 };
 
                 let over = if let Some(sql_ast::WindowType::WindowSpec(spec)) = func.over {
-                    let partition_by = spec.partition_by.into_iter()
+                    let partition_by = spec
+                        .partition_by
+                        .into_iter()
                         .map(|e| converter.convert(e, query_converter))
                         .collect::<Result<Vec<_>>>()?;
-                    
-                    let order_by = spec.order_by.into_iter()
+
+                    let order_by = spec
+                        .order_by
+                        .into_iter()
                         .map(|o| {
                             let expr = converter.convert(o.expr, query_converter)?;
                             let descending = o.options.asc.map(|a| !a).unwrap_or(false);
                             Ok(OrderByExpr { expr, descending })
                         })
                         .collect::<Result<Vec<_>>>()?;
-                        
-                    Some(WindowSpec { partition_by, order_by })
+
+                    Some(WindowSpec {
+                        partition_by,
+                        order_by,
+                    })
                 } else {
                     None
                 };
 
-                Ok(Expr::Function { name, args, distinct, over })
+                Ok(Expr::Function {
+                    name,
+                    args,
+                    distinct,
+                    over,
+                })
             }
             _ => unreachable!("FunctionPlugin called with non-function expression"),
         }

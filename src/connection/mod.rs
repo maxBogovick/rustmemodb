@@ -1,14 +1,14 @@
 pub mod auth;
-pub mod pool;
 pub mod config;
+pub mod pool;
 
 use crate::core::{DbError, Result};
 use crate::facade::InMemoryDB;
 use crate::result::QueryResult;
 use crate::transaction::TransactionId;
-use std::sync::{Arc};
-use tokio::sync::RwLock;
 use auth::{User, enforce_permissions};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Database connection handle
 ///
@@ -66,15 +66,21 @@ impl Connection {
         let trimmed = sql.trim().to_uppercase();
         if trimmed == "BEGIN" || trimmed == "BEGIN TRANSACTION" || trimmed == "START TRANSACTION" {
             self.begin().await?;
-            return Ok(QueryResult::empty_with_message("Transaction started".to_string()));
+            return Ok(QueryResult::empty_with_message(
+                "Transaction started".to_string(),
+            ));
         }
         if trimmed == "COMMIT" || trimmed == "COMMIT TRANSACTION" {
             self.commit().await?;
-            return Ok(QueryResult::empty_with_message("Transaction committed".to_string()));
+            return Ok(QueryResult::empty_with_message(
+                "Transaction committed".to_string(),
+            ));
         }
         if trimmed == "ROLLBACK" || trimmed == "ROLLBACK TRANSACTION" {
             self.rollback().await?;
-            return Ok(QueryResult::empty_with_message("Transaction rolled back".to_string()));
+            return Ok(QueryResult::empty_with_message(
+                "Transaction rolled back".to_string(),
+            ));
         }
 
         let statement = {
@@ -87,13 +93,26 @@ impl Connection {
         let result = {
             let db = self.db.read().await;
             if InMemoryDB::is_read_only_stmt(&statement) {
-                db.execute_parsed_readonly_with_params(&statement, self.transaction_id, vec![]).await
+                db.execute_parsed_readonly_with_params_tracked(
+                    &statement,
+                    self.transaction_id,
+                    vec![],
+                    sql,
+                )
+                .await
             } else if !InMemoryDB::is_ddl_stmt(&statement) {
-                db.execute_parsed_with_params_shared(&statement, self.transaction_id, vec![]).await
+                db.execute_parsed_with_params_shared_tracked(
+                    &statement,
+                    self.transaction_id,
+                    vec![],
+                    sql,
+                )
+                .await
             } else {
                 drop(db);
                 let mut db = self.db.write().await;
-                db.execute_parsed_with_params(&statement, self.transaction_id, vec![]).await
+                db.execute_parsed_with_params_tracked(&statement, self.transaction_id, vec![], sql)
+                    .await
             }
         };
 
@@ -141,7 +160,9 @@ impl Connection {
 
         if let Some(persistence) = self.db.read().await.persistence() {
             let mut persistence_guard = persistence.lock().await;
-            if let Err(err) = persistence_guard.log(&crate::storage::WalEntry::BeginTransaction(txn_id.0)) {
+            if let Err(err) =
+                persistence_guard.log(&crate::storage::WalEntry::BeginTransaction(txn_id.0))
+            {
                 let db = self.db.read().await;
                 db.transaction_manager().rollback(txn_id).await?;
                 return Err(err);
@@ -160,14 +181,18 @@ impl Connection {
             return Err(DbError::ExecutionError("No active transaction".into()));
         }
 
-        let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
+        let txn_id = self
+            .transaction_id
+            .expect("Transaction ID must be set in InTransaction state");
 
         {
             let db = self.db.read().await;
             if db.transaction_manager().is_conflicted(txn_id).await {
                 drop(db);
                 let _ = self.rollback().await;
-                return Err(DbError::ExecutionError("Write-write conflict detected".into()));
+                return Err(DbError::ExecutionError(
+                    "Write-write conflict detected".into(),
+                ));
             }
         }
 
@@ -196,7 +221,9 @@ impl Connection {
             return Ok(());
         }
 
-        let txn_id = self.transaction_id.expect("Transaction ID must be set in InTransaction state");
+        let txn_id = self
+            .transaction_id
+            .expect("Transaction ID must be set in InTransaction state");
 
         if let Some(persistence) = self.db.read().await.persistence() {
             let mut persistence_guard = persistence.lock().await;
@@ -271,7 +298,9 @@ impl Drop for Connection {
                         let _ = txn_mgr.rollback(tx_id).await;
                     });
                 } else {
-                    eprintln!("Warning: Connection dropped in transaction without runtime; rollback skipped.");
+                    eprintln!(
+                        "Warning: Connection dropped in transaction without runtime; rollback skipped."
+                    );
                 }
             }
         }
@@ -298,7 +327,10 @@ impl PreparedStatement {
         self.execute_with_params(values).await
     }
 
-    pub async fn execute_with_params(&self, params: Vec<crate::core::Value>) -> Result<QueryResult> {
+    pub async fn execute_with_params(
+        &self,
+        params: Vec<crate::core::Value>,
+    ) -> Result<QueryResult> {
         let statement = {
             let db_guard = self.db.read().await;
             db_guard.parse_first(&self.sql)?
@@ -308,15 +340,22 @@ impl PreparedStatement {
             let db_guard = self.db.read().await;
             enforce_permissions(&self.user, &statement)?;
             if InMemoryDB::is_read_only_stmt(&statement) {
-                return db_guard.execute_parsed_readonly_with_params(&statement, None, params).await;
+                return db_guard
+                    .execute_parsed_readonly_with_params_tracked(
+                        &statement, None, params, &self.sql,
+                    )
+                    .await;
             }
             if !InMemoryDB::is_ddl_stmt(&statement) {
-                return db_guard.execute_parsed_with_params_shared(&statement, None, params).await;
+                return db_guard
+                    .execute_parsed_with_params_shared_tracked(&statement, None, params, &self.sql)
+                    .await;
             }
         }
 
         let mut db = self.db.write().await;
-        db.execute_parsed_with_params(&statement, None, params).await
+        db.execute_parsed_with_params_tracked(&statement, None, params, &self.sql)
+            .await
     }
 
     /// Get the SQL text of this prepared statement

@@ -19,7 +19,9 @@ async fn perf_wal_bulk_insert() {
     let row_count = 10_000;
     let start = Instant::now();
     for i in 0..row_count {
-        db.execute(&format!("INSERT INTO wal_perf VALUES ({}, {})", i, i)).await.unwrap();
+        db.execute(&format!("INSERT INTO wal_perf VALUES ({}, {})", i, i))
+            .await
+            .unwrap();
     }
     let duration = start.elapsed();
 

@@ -4,9 +4,9 @@
 //! SQL injection and ensuring queries only access authorized collections.
 //! Uses the Chain of Responsibility pattern for validation rules.
 
+use super::error::{JsonError, JsonResult};
 use crate::parser::SqlParserAdapter;
 use crate::parser::ast::Statement;
-use super::error::{JsonError, JsonResult};
 
 /// Trait for validation rules (Chain of Responsibility pattern)
 pub trait ValidationRule: Send + Sync {
@@ -22,7 +22,7 @@ impl ValidationRule for SelectOnlyRule {
         match parsed {
             Statement::Query(_) => Ok(()),
             _ => Err(JsonError::ValidationError(
-                "Only SELECT queries are allowed in read() method".to_string()
+                "Only SELECT queries are allowed in read() method".to_string(),
             )),
         }
     }
@@ -38,23 +38,22 @@ impl ValidationRule for SingleTableRule {
 
         if tables.is_empty() {
             return Err(JsonError::ValidationError(
-                "Query must specify a table".to_string()
+                "Query must specify a table".to_string(),
             ));
         }
 
         if tables.len() > 1 {
-            return Err(JsonError::ValidationError(
-                format!("Query can only access collection '{}', but found multiple tables", collection_name)
-            ));
+            return Err(JsonError::ValidationError(format!(
+                "Query can only access collection '{}', but found multiple tables",
+                collection_name
+            )));
         }
 
         if tables[0] != collection_name {
-            return Err(JsonError::ValidationError(
-                format!(
-                    "Query must access collection '{}', but found '{}'",
-                    collection_name, tables[0]
-                )
-            ));
+            return Err(JsonError::ValidationError(format!(
+                "Query must access collection '{}', but found '{}'",
+                collection_name, tables[0]
+            )));
         }
 
         Ok(())
@@ -92,23 +91,24 @@ impl ValidationRule for SqlInjectionRule {
 
         for pattern in &dangerous_patterns {
             if query_lower.contains(pattern) {
-                return Err(JsonError::SqlInjectionAttempt(
-                    format!("Dangerous pattern detected: {}", pattern)
-                ));
+                return Err(JsonError::SqlInjectionAttempt(format!(
+                    "Dangerous pattern detected: {}",
+                    pattern
+                )));
             }
         }
 
         // Check for comment injection attempts
         if query.contains("--") || query.contains("/*") || query.contains("*/") {
             return Err(JsonError::SqlInjectionAttempt(
-                "SQL comments are not allowed".to_string()
+                "SQL comments are not allowed".to_string(),
             ));
         }
 
         // Check for semicolon (query chaining)
         if query.matches(';').count() > 1 {
             return Err(JsonError::SqlInjectionAttempt(
-                "Multiple statements (semicolons) are not allowed".to_string()
+                "Multiple statements (semicolons) are not allowed".to_string(),
             ));
         }
 
@@ -147,7 +147,9 @@ impl QueryValidator {
     /// Validate a query against all rules
     pub fn validate(&self, query: &str, collection_name: &str) -> JsonResult<()> {
         // First, try to parse the query
-        let statements = self.parser.parse(query)
+        let statements = self
+            .parser
+            .parse(query)
             .map_err(|e| JsonError::ValidationError(format!("Invalid SQL: {}", e)))?;
 
         if statements.is_empty() {
@@ -156,7 +158,7 @@ impl QueryValidator {
 
         if statements.len() > 1 {
             return Err(JsonError::ValidationError(
-                "Multiple statements not allowed".to_string()
+                "Multiple statements not allowed".to_string(),
             ));
         }
 
@@ -209,7 +211,10 @@ fn extract_table_names(statement: &Statement) -> Vec<String> {
     }
 }
 
-fn extract_table_names_from_factor(factor: &crate::parser::ast::TableFactor, tables: &mut Vec<String>) {
+fn extract_table_names_from_factor(
+    factor: &crate::parser::ast::TableFactor,
+    tables: &mut Vec<String>,
+) {
     match factor {
         crate::parser::ast::TableFactor::Table { name, .. } => {
             tables.push(name.clone());
@@ -224,40 +229,43 @@ fn extract_table_names_from_factor(factor: &crate::parser::ast::TableFactor, tab
 /// Validates collection names to prevent injection
 pub fn validate_collection_name(name: &str) -> JsonResult<()> {
     if name.is_empty() {
-        return Err(JsonError::InvalidCollectionName("Collection name cannot be empty".to_string()));
+        return Err(JsonError::InvalidCollectionName(
+            "Collection name cannot be empty".to_string(),
+        ));
     }
 
     // Must start with letter or underscore
     if !name.chars().next().unwrap().is_alphabetic() && !name.starts_with('_') {
         return Err(JsonError::InvalidCollectionName(
-            "Collection name must start with a letter or underscore".to_string()
+            "Collection name must start with a letter or underscore".to_string(),
         ));
     }
 
     // Can only contain alphanumeric and underscores
     if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(JsonError::InvalidCollectionName(
-            "Collection name can only contain letters, numbers, and underscores".to_string()
+            "Collection name can only contain letters, numbers, and underscores".to_string(),
         ));
     }
 
     // Check length
     if name.len() > 64 {
         return Err(JsonError::InvalidCollectionName(
-            "Collection name too long (max 64 characters)".to_string()
+            "Collection name too long (max 64 characters)".to_string(),
         ));
     }
 
     // Reject SQL keywords
     let sql_keywords = [
-        "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-        "TABLE", "FROM", "WHERE", "JOIN", "UNION", "ORDER", "GROUP",
+        "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TABLE", "FROM",
+        "WHERE", "JOIN", "UNION", "ORDER", "GROUP",
     ];
 
     if sql_keywords.iter().any(|&kw| name.eq_ignore_ascii_case(kw)) {
-        return Err(JsonError::InvalidCollectionName(
-            format!("Collection name cannot be SQL keyword: {}", name)
-        ));
+        return Err(JsonError::InvalidCollectionName(format!(
+            "Collection name cannot be SQL keyword: {}",
+            name
+        )));
     }
 
     Ok(())
@@ -266,7 +274,9 @@ pub fn validate_collection_name(name: &str) -> JsonResult<()> {
 /// Validates JSON field/column names to prevent injection
 pub fn validate_field_name(name: &str) -> JsonResult<()> {
     if name.is_empty() {
-        return Err(JsonError::ValidationError("Field name cannot be empty".to_string()));
+        return Err(JsonError::ValidationError(
+            "Field name cannot be empty".to_string(),
+        ));
     }
 
     if !name.chars().next().unwrap().is_alphabetic() && !name.starts_with('_') {
@@ -288,14 +298,15 @@ pub fn validate_field_name(name: &str) -> JsonResult<()> {
     }
 
     let sql_keywords = [
-        "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-        "TABLE", "FROM", "WHERE", "JOIN", "UNION", "ORDER", "GROUP",
+        "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TABLE", "FROM",
+        "WHERE", "JOIN", "UNION", "ORDER", "GROUP",
     ];
 
     if sql_keywords.iter().any(|&kw| name.eq_ignore_ascii_case(kw)) {
-        return Err(JsonError::ValidationError(
-            format!("Field name cannot be SQL keyword: {}", name),
-        ));
+        return Err(JsonError::ValidationError(format!(
+            "Field name cannot be SQL keyword: {}",
+            name
+        )));
     }
 
     Ok(())
@@ -336,25 +347,24 @@ mod tests {
     fn test_query_validator_valid() {
         let validator = QueryValidator::new();
 
-        assert!(validator.validate(
-            "SELECT * FROM users WHERE age > 18",
-            "users"
-        ).is_ok());
+        assert!(
+            validator
+                .validate("SELECT * FROM users WHERE age > 18", "users")
+                .is_ok()
+        );
 
-        assert!(validator.validate(
-            "SELECT id, name FROM users",
-            "users"
-        ).is_ok());
+        assert!(
+            validator
+                .validate("SELECT id, name FROM users", "users")
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_query_validator_wrong_table() {
         let validator = QueryValidator::new();
 
-        let result = validator.validate(
-            "SELECT * FROM products",
-            "users"
-        );
+        let result = validator.validate("SELECT * FROM products", "users");
 
         assert!(result.is_err());
     }
@@ -363,10 +373,7 @@ mod tests {
     fn test_query_validator_not_select() {
         let validator = QueryValidator::new();
 
-        let result = validator.validate(
-            "DELETE FROM users WHERE id = 1",
-            "users"
-        );
+        let result = validator.validate("DELETE FROM users WHERE id = 1", "users");
 
         assert!(result.is_err());
     }
@@ -376,19 +383,22 @@ mod tests {
         let validator = QueryValidator::new();
 
         // SQL injection attempts
-        assert!(validator.validate(
-            "SELECT * FROM users; DROP TABLE users",
-            "users"
-        ).is_err());
+        assert!(
+            validator
+                .validate("SELECT * FROM users; DROP TABLE users", "users")
+                .is_err()
+        );
 
-        assert!(validator.validate(
-            "SELECT * FROM users WHERE id = 1 OR 1=1 --",
-            "users"
-        ).is_err());
+        assert!(
+            validator
+                .validate("SELECT * FROM users WHERE id = 1 OR 1=1 --", "users")
+                .is_err()
+        );
 
-        assert!(validator.validate(
-            "SELECT * FROM users /* comment */ WHERE id = 1",
-            "users"
-        ).is_err());
+        assert!(
+            validator
+                .validate("SELECT * FROM users /* comment */ WHERE id = 1", "users")
+                .is_err()
+        );
     }
 }

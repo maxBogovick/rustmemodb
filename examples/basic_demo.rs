@@ -1,6 +1,5 @@
-use rustmemodb::core::Result;
 use rustmemodb::InMemoryDB;
-
+use rustmemodb::core::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,17 +18,21 @@ async fn main() -> Result<()> {
             age INTEGER,
             active BOOLEAN
         )",
-    ).await?;
+    )
+    .await?;
     println!("✅ Table created");
 
     // Insert data
     println!("\n📥 Inserting data...");
-    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)").await?;
-    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)").await?;
-    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)").await?;
+    db.execute("INSERT INTO users VALUES (1, 'Alice', 30, true)")
+        .await?;
+    db.execute("INSERT INTO users VALUES (2, 'Bob', 25, true)")
+        .await?;
+    db.execute("INSERT INTO users VALUES (3, 'Charlie', 35, false)")
+        .await?;
     println!("✅ 3 rows inserted");
 
-    // Query 1: SELECT * 
+    // Query 1: SELECT *
     println!("\n{}", "=".repeat(70));
     println!("📊 Query: SELECT * FROM users");
     println!("{}", "=".repeat(70));
@@ -47,14 +50,18 @@ async fn main() -> Result<()> {
     println!("\n{}", "=".repeat(70));
     println!("📊 Query: SELECT * FROM users WHERE active = true AND age < 32");
     println!("{}", "=".repeat(70));
-    let result = db.execute("SELECT * FROM users WHERE active = true AND age < 32").await?;
+    let result = db
+        .execute("SELECT * FROM users WHERE active = true AND age < 32")
+        .await?;
     result.print();
 
     // Query 4: LIKE pattern
     println!("\n{}", "=".repeat(70));
     println!("📊 Query: SELECT * FROM users WHERE name LIKE 'A%'");
     println!("{}", "=".repeat(70));
-    let result = db.execute("SELECT * FROM users WHERE name LIKE 'A%'").await?;
+    let result = db
+        .execute("SELECT * FROM users WHERE name LIKE 'A%'")
+        .await?;
     result.print();
 
     // Statistics

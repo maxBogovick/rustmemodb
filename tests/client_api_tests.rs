@@ -1,10 +1,9 @@
+use rustmemodb::core::Value;
 /// Client API tests
 ///
 /// Tests for the high-level Client API (PostgreSQL/MySQL-like interface)
 /// Run with: cargo test --test client_api_tests
-
 use rustmemodb::{Client, ConnectionConfig};
-use rustmemodb::core::Value;
 use std::time::Duration;
 
 #[tokio::test]
@@ -29,9 +28,9 @@ async fn test_client_with_config() {
 
 #[tokio::test]
 async fn test_client_from_url() {
-    let client = Client::connect_url(
-        "rustmemodb://admin:adminpass@localhost:5432/testdb"
-    ).await.unwrap();
+    let client = Client::connect_url("rustmemodb://admin:adminpass@localhost:5432/testdb")
+        .await
+        .unwrap();
 
     assert!(client.stats().await.total_connections > 0);
 }
@@ -40,9 +39,9 @@ async fn test_client_from_url() {
 async fn test_client_execute_create_table() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    let result = client.execute(
-        "CREATE TABLE test_users (id INTEGER, name TEXT)"
-    ).await;
+    let result = client
+        .execute("CREATE TABLE test_users (id INTEGER, name TEXT)")
+        .await;
 
     assert!(result.is_ok());
 }
@@ -51,11 +50,14 @@ async fn test_client_execute_create_table() {
 async fn test_client_execute_insert() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_products (id INTEGER, name TEXT)").await.unwrap();
+    client
+        .execute("CREATE TABLE test_products (id INTEGER, name TEXT)")
+        .await
+        .unwrap();
 
-    let result = client.execute(
-        "INSERT INTO test_products VALUES (1, 'Laptop')"
-    ).await;
+    let result = client
+        .execute("INSERT INTO test_products VALUES (1, 'Laptop')")
+        .await;
 
     assert!(result.is_ok());
 }
@@ -64,9 +66,18 @@ async fn test_client_execute_insert() {
 async fn test_client_query() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_items (id INTEGER, data TEXT)").await.unwrap();
-    client.execute("INSERT INTO test_items VALUES (1, 'data1')").await.unwrap();
-    client.execute("INSERT INTO test_items VALUES (2, 'data2')").await.unwrap();
+    client
+        .execute("CREATE TABLE test_items (id INTEGER, data TEXT)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_items VALUES (1, 'data1')")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_items VALUES (2, 'data2')")
+        .await
+        .unwrap();
 
     let result = client.query("SELECT * FROM test_items").await.unwrap();
 
@@ -104,10 +115,16 @@ async fn test_client_connection_id() {
 async fn test_client_multiple_queries() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_multi (id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE test_multi (id INTEGER)")
+        .await
+        .unwrap();
 
     for i in 1..=10 {
-        client.execute(&format!("INSERT INTO test_multi VALUES ({})", i)).await.unwrap();
+        client
+            .execute(&format!("INSERT INTO test_multi VALUES ({})", i))
+            .await
+            .unwrap();
     }
 
     let result = client.query("SELECT * FROM test_multi").await.unwrap();
@@ -134,12 +151,17 @@ async fn test_client_pool_stats() {
 async fn test_client_connection_reuse() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_reuse (id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE test_reuse (id INTEGER)")
+        .await
+        .unwrap();
 
     // Use connection and return to pool
     {
         let mut conn = client.get_connection().await.unwrap();
-        conn.execute("INSERT INTO test_reuse VALUES (1)").await.unwrap();
+        conn.execute("INSERT INTO test_reuse VALUES (1)")
+            .await
+            .unwrap();
     }
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -186,12 +208,27 @@ async fn test_client_auth_manager_access() {
 async fn test_client_execute_with_where() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_where (id INTEGER, value INTEGER)").await.unwrap();
-    client.execute("INSERT INTO test_where VALUES (1, 10)").await.unwrap();
-    client.execute("INSERT INTO test_where VALUES (2, 20)").await.unwrap();
-    client.execute("INSERT INTO test_where VALUES (3, 30)").await.unwrap();
+    client
+        .execute("CREATE TABLE test_where (id INTEGER, value INTEGER)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_where VALUES (1, 10)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_where VALUES (2, 20)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_where VALUES (3, 30)")
+        .await
+        .unwrap();
 
-    let result = client.query("SELECT * FROM test_where WHERE value > 15").await.unwrap();
+    let result = client
+        .query("SELECT * FROM test_where WHERE value > 15")
+        .await
+        .unwrap();
 
     assert_eq!(result.row_count(), 2);
 }
@@ -200,12 +237,27 @@ async fn test_client_execute_with_where() {
 async fn test_client_execute_with_order_by() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_order (id INTEGER, name TEXT)").await.unwrap();
-    client.execute("INSERT INTO test_order VALUES (3, 'Charlie')").await.unwrap();
-    client.execute("INSERT INTO test_order VALUES (1, 'Alice')").await.unwrap();
-    client.execute("INSERT INTO test_order VALUES (2, 'Bob')").await.unwrap();
+    client
+        .execute("CREATE TABLE test_order (id INTEGER, name TEXT)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_order VALUES (3, 'Charlie')")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_order VALUES (1, 'Alice')")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_order VALUES (2, 'Bob')")
+        .await
+        .unwrap();
 
-    let result = client.query("SELECT * FROM test_order ORDER BY id ASC").await.unwrap();
+    let result = client
+        .query("SELECT * FROM test_order ORDER BY id ASC")
+        .await
+        .unwrap();
 
     assert_eq!(result.row_count(), 3);
 }
@@ -213,13 +265,22 @@ async fn test_client_execute_with_order_by() {
 #[tokio::test]
 async fn test_prepared_statement_params() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
-    client.execute("CREATE TABLE test_ps (id INTEGER, name TEXT)").await.unwrap();
+    client
+        .execute("CREATE TABLE test_ps (id INTEGER, name TEXT)")
+        .await
+        .unwrap();
 
     let mut conn = client.get_connection().await.unwrap();
-    let stmt = conn.connection().prepare("INSERT INTO test_ps VALUES ($1, $2)").unwrap();
+    let stmt = conn
+        .connection()
+        .prepare("INSERT INTO test_ps VALUES ($1, $2)")
+        .unwrap();
     stmt.execute(&[&1, &"Alice"]).await.unwrap();
 
-    let result = conn.execute("SELECT * FROM test_ps WHERE id = 1").await.unwrap();
+    let result = conn
+        .execute("SELECT * FROM test_ps WHERE id = 1")
+        .await
+        .unwrap();
     assert_eq!(result.row_count(), 1);
     assert_eq!(result.rows()[0][0], Value::Integer(1));
     assert_eq!(result.rows()[0][1], Value::Text("Alice".to_string()));
@@ -229,12 +290,21 @@ async fn test_prepared_statement_params() {
 async fn test_client_execute_with_limit() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute("CREATE TABLE test_limit (id INTEGER)").await.unwrap();
+    client
+        .execute("CREATE TABLE test_limit (id INTEGER)")
+        .await
+        .unwrap();
     for i in 1..=10 {
-        client.execute(&format!("INSERT INTO test_limit VALUES ({})", i)).await.unwrap();
+        client
+            .execute(&format!("INSERT INTO test_limit VALUES ({})", i))
+            .await
+            .unwrap();
     }
 
-    let result = client.query("SELECT * FROM test_limit LIMIT 5").await.unwrap();
+    let result = client
+        .query("SELECT * FROM test_limit LIMIT 5")
+        .await
+        .unwrap();
 
     assert_eq!(result.row_count(), 5);
 }
@@ -243,21 +313,37 @@ async fn test_client_execute_with_limit() {
 async fn test_client_complex_query() {
     let client = Client::connect("admin", "adminpass").await.unwrap();
 
-    client.execute(
-        "CREATE TABLE test_complex (id INTEGER, category TEXT, value INTEGER)"
-    ).await.unwrap();
+    client
+        .execute("CREATE TABLE test_complex (id INTEGER, category TEXT, value INTEGER)")
+        .await
+        .unwrap();
 
-    client.execute("INSERT INTO test_complex VALUES (1, 'A', 100)").await.unwrap();
-    client.execute("INSERT INTO test_complex VALUES (2, 'B', 200)").await.unwrap();
-    client.execute("INSERT INTO test_complex VALUES (3, 'A', 150)").await.unwrap();
-    client.execute("INSERT INTO test_complex VALUES (4, 'B', 50)").await.unwrap();
+    client
+        .execute("INSERT INTO test_complex VALUES (1, 'A', 100)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_complex VALUES (2, 'B', 200)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_complex VALUES (3, 'A', 150)")
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_complex VALUES (4, 'B', 50)")
+        .await
+        .unwrap();
 
-    let result = client.query(
-        "SELECT * FROM test_complex
+    let result = client
+        .query(
+            "SELECT * FROM test_complex
          WHERE category = 'A' AND value > 120
          ORDER BY value DESC
-         LIMIT 1"
-    ).await.unwrap();
+         LIMIT 1",
+        )
+        .await
+        .unwrap();
 
     assert_eq!(result.row_count(), 1);
 }

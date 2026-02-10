@@ -121,13 +121,23 @@ pub fn read_metrics(path: &Path) -> io::Result<BTreeMap<String, f64>> {
             .next()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid metric name at line {}", idx + 1)))?;
-        let value = parts
-            .next()
-            .map(str::trim)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("Missing metric value at line {}", idx + 1)))?;
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Invalid metric name at line {}", idx + 1),
+                )
+            })?;
+        let value = parts.next().map(str::trim).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Missing metric value at line {}", idx + 1),
+            )
+        })?;
         let ms = value.parse::<f64>().map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid metric value at line {}", idx + 1))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid metric value at line {}", idx + 1),
+            )
         })?;
         map.insert(name.to_string(), ms);
     }
@@ -174,9 +184,14 @@ pub fn read_history(path: &Path) -> io::Result<BTreeMap<String, BTreeMap<String,
             parts[4].trim()
         };
         let value = value.trim_end_matches("ms").parse::<f64>().map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("Invalid metric value at line {}", idx + 1))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid metric value at line {}", idx + 1),
+            )
         })?;
-        runs.entry(run_id).or_default().insert(metric.to_string(), value);
+        runs.entry(run_id)
+            .or_default()
+            .insert(metric.to_string(), value);
     }
     Ok(runs)
 }

@@ -1,14 +1,14 @@
 pub mod arithmetic;
 pub mod between;
+mod boolean;
 pub mod comparison;
+pub mod function;
 pub mod in_list;
 pub mod is_null;
+pub mod json;
 pub mod like;
 pub mod nested;
-pub mod function;
 pub mod subquery;
-mod boolean;
-pub mod json;
 
 use crate::core::Result;
 use crate::parser::ast::Expr;
@@ -29,7 +29,12 @@ pub trait ExpressionPlugin: Send + Sync {
     fn can_handle(&self, expr: &sql_ast::Expr) -> bool;
 
     /// Конвертировать SQL выражение в наш Expr
-    fn convert(&self, expr: sql_ast::Expr, converter: &ExpressionConverter, query_converter: &dyn QueryConverter) -> Result<Expr>;
+    fn convert(
+        &self,
+        expr: sql_ast::Expr,
+        converter: &ExpressionConverter,
+        query_converter: &dyn QueryConverter,
+    ) -> Result<Expr>;
 }
 
 /// Реестр плагинов для выражений
@@ -102,7 +107,11 @@ impl ExpressionConverter {
     }
 
     /// Конвертировать выражение используя плагины
-    pub fn convert(&self, expr: sql_ast::Expr, query_converter: &dyn QueryConverter) -> Result<Expr> {
+    pub fn convert(
+        &self,
+        expr: sql_ast::Expr,
+        query_converter: &dyn QueryConverter,
+    ) -> Result<Expr> {
         // Базовые случаи (всегда обрабатываются напрямую)
         match &expr {
             sql_ast::Expr::Identifier(ident) => {
@@ -127,7 +136,11 @@ impl ExpressionConverter {
                 let subquery = query_converter.convert_query(*query.clone())?;
                 return Ok(Expr::Subquery(Box::new(subquery)));
             }
-            sql_ast::Expr::InSubquery { expr, subquery, negated } => {
+            sql_ast::Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
                 let left = self.convert(*expr.clone(), query_converter)?;
                 let sub = query_converter.convert_query(*subquery.clone())?;
                 return Ok(Expr::InSubquery {
@@ -143,7 +156,9 @@ impl ExpressionConverter {
                     negated: *negated,
                 });
             }
-            sql_ast::Expr::Cast { expr, data_type, .. } => {
+            sql_ast::Expr::Cast {
+                expr, data_type, ..
+            } => {
                 let left = self.convert(*expr.clone(), query_converter)?;
                 let target_type = convert_sql_data_type(data_type)?;
                 return Ok(Expr::Cast {
@@ -152,10 +167,11 @@ impl ExpressionConverter {
                 });
             }
             sql_ast::Expr::Array(sql_ast::Array { elem, .. }) => {
-                 let list = elem.iter()
-                     .map(|e| self.convert(e.clone(), query_converter))
-                     .collect::<Result<Vec<_>>>()?;
-                 return Ok(Expr::Array(list));
+                let list = elem
+                    .iter()
+                    .map(|e| self.convert(e.clone(), query_converter))
+                    .collect::<Result<Vec<_>>>()?;
+                return Ok(Expr::Array(list));
             }
             sql_ast::Expr::UnaryOp { op, expr } => {
                 use crate::parser::ast::UnaryOp as AstUnary;
@@ -171,7 +187,7 @@ impl ExpressionConverter {
                     _ => {
                         return Err(crate::core::DbError::UnsupportedOperation(
                             "Unsupported unary operator".into(),
-                        ))
+                        ));
                     }
                 };
                 return Ok(Expr::UnaryOp {
@@ -268,23 +284,33 @@ impl Default for ExpressionConverter {
 fn convert_sql_data_type(dt: &sql_ast::DataType) -> Result<crate::core::DataType> {
     use crate::core::DataType;
     match dt {
-        sql_ast::DataType::Int(_) | sql_ast::DataType::Integer(_) | sql_ast::DataType::BigInt(_) => Ok(DataType::Integer),
-        sql_ast::DataType::Float(_) | sql_ast::DataType::Double(_) | sql_ast::DataType::Real => Ok(DataType::Float),
-        sql_ast::DataType::Text | sql_ast::DataType::Varchar(_) | sql_ast::DataType::Char(_) | sql_ast::DataType::String(_) => Ok(DataType::Text),
+        sql_ast::DataType::Int(_)
+        | sql_ast::DataType::Integer(_)
+        | sql_ast::DataType::BigInt(_) => Ok(DataType::Integer),
+        sql_ast::DataType::Float(_) | sql_ast::DataType::Double(_) | sql_ast::DataType::Real => {
+            Ok(DataType::Float)
+        }
+        sql_ast::DataType::Text
+        | sql_ast::DataType::Varchar(_)
+        | sql_ast::DataType::Char(_)
+        | sql_ast::DataType::String(_) => Ok(DataType::Text),
         sql_ast::DataType::Boolean | sql_ast::DataType::Bool => Ok(DataType::Boolean),
         sql_ast::DataType::Timestamp(_, _) => Ok(DataType::Timestamp),
         sql_ast::DataType::Date => Ok(DataType::Date),
         sql_ast::DataType::Uuid => Ok(DataType::Uuid),
         sql_ast::DataType::JSON | sql_ast::DataType::JSONB => Ok(DataType::Json),
-        sql_ast::DataType::Array(elem) => {
-             match elem {
-                 sql_ast::ArrayElemTypeDef::AngleBracket(inner) | sql_ast::ArrayElemTypeDef::SquareBracket(inner, _) | sql_ast::ArrayElemTypeDef::Parenthesis(inner) => {
-                     let t = convert_sql_data_type(inner)?;
-                     Ok(DataType::Array(Box::new(t)))
-                 }
-                 _ => Ok(DataType::Array(Box::new(DataType::Text)))
-             }
-        }
-        _ => Err(crate::core::DbError::TypeMismatch(format!("Unsupported type: {:?}", dt))),
+        sql_ast::DataType::Array(elem) => match elem {
+            sql_ast::ArrayElemTypeDef::AngleBracket(inner)
+            | sql_ast::ArrayElemTypeDef::SquareBracket(inner, _)
+            | sql_ast::ArrayElemTypeDef::Parenthesis(inner) => {
+                let t = convert_sql_data_type(inner)?;
+                Ok(DataType::Array(Box::new(t)))
+            }
+            _ => Ok(DataType::Array(Box::new(DataType::Text))),
+        },
+        _ => Err(crate::core::DbError::TypeMismatch(format!(
+            "Unsupported type: {:?}",
+            dt
+        ))),
     }
 }

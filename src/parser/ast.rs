@@ -1,5 +1,5 @@
-use crate::core::{Value, DataType, ForeignKey};
-use serde::{Serialize, Deserialize};
+use crate::core::{DataType, ForeignKey, Value};
+use serde::{Deserialize, Serialize};
 
 /// Root statement type
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,8 +167,14 @@ pub struct TableWithJoins {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TableFactor {
-    Table { name: String, alias: Option<String> },
-    Derived { subquery: Box<QueryStmt>, alias: Option<String> },
+    Table {
+        name: String,
+        alias: Option<String>,
+    },
+    Derived {
+        subquery: Box<QueryStmt>,
+        alias: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -304,7 +310,7 @@ pub enum Expr {
         expr: Box<Expr>,
         negated: bool,
     },
-    
+
     Not {
         expr: Box<Expr>,
     },
@@ -371,14 +377,9 @@ pub enum UnaryOp {
 
 use std::fmt;
 
-
-
 impl fmt::Display for Expr {
-
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         match self {
-
             Expr::Column(name) => write!(f, "{}", name),
 
             Expr::CompoundIdentifier(parts) => write!(f, "{}", parts.join(".")),
@@ -391,49 +392,96 @@ impl fmt::Display for Expr {
 
             Expr::UnaryOp { op, expr } => write!(f, "{}{}", op, expr),
 
-            Expr::Like { expr, pattern, negated, .. } => {
-
-                write!(f, "{} {}LIKE {}", expr, if *negated { "NOT " } else { "" }, pattern)
-
+            Expr::Like {
+                expr,
+                pattern,
+                negated,
+                ..
+            } => {
+                write!(
+                    f,
+                    "{} {}LIKE {}",
+                    expr,
+                    if *negated { "NOT " } else { "" },
+                    pattern
+                )
             }
 
-            Expr::Between { expr, low, high, negated } => {
-
-                write!(f, "{} {}BETWEEN {} AND {}", expr, if *negated { "NOT " } else { "" }, low, high)
-
+            Expr::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                write!(
+                    f,
+                    "{} {}BETWEEN {} AND {}",
+                    expr,
+                    if *negated { "NOT " } else { "" },
+                    low,
+                    high
+                )
             }
 
-            Expr::In { expr, list, negated } => {
-
+            Expr::In {
+                expr,
+                list,
+                negated,
+            } => {
                 let list_str: Vec<String> = list.iter().map(|e| format!("{}", e)).collect();
 
-                write!(f, "{} {}IN ({})", expr, if *negated { "NOT " } else { "" }, list_str.join(", "))
-
+                write!(
+                    f,
+                    "{} {}IN ({})",
+                    expr,
+                    if *negated { "NOT " } else { "" },
+                    list_str.join(", ")
+                )
             }
 
-            Expr::InSubquery { expr, subquery: _, negated } => {
-                write!(f, "{} {}IN (SUBQUERY)", expr, if *negated { "NOT " } else { "" })
+            Expr::InSubquery {
+                expr,
+                subquery: _,
+                negated,
+            } => {
+                write!(
+                    f,
+                    "{} {}IN (SUBQUERY)",
+                    expr,
+                    if *negated { "NOT " } else { "" }
+                )
             }
 
             Expr::Subquery(_) => write!(f, "(SUBQUERY)"),
 
-            Expr::Exists { subquery: _, negated } => write!(f, "{}EXISTS (SUBQUERY)", if *negated { "NOT " } else { "" }),
+            Expr::Exists {
+                subquery: _,
+                negated,
+            } => write!(f, "{}EXISTS (SUBQUERY)", if *negated { "NOT " } else { "" }),
 
             Expr::IsNull { expr, negated } => {
-
                 write!(f, "{} IS {}NULL", expr, if *negated { "NOT " } else { "" })
-
             }
 
             Expr::Not { expr } => write!(f, "NOT {}", expr),
 
-            Expr::Function { name, args, distinct, over } => {
-
+            Expr::Function {
+                name,
+                args,
+                distinct,
+                over,
+            } => {
                 let args_str: Vec<String> = args.iter().map(|e| format!("{}", e)).collect();
                 let over_str = if over.is_some() { " OVER (...)" } else { "" };
 
-                write!(f, "{}({}{}){}", name, if *distinct { "DISTINCT " } else { "" }, args_str.join(", "), over_str)
-
+                write!(
+                    f,
+                    "{}({}{}){}",
+                    name,
+                    if *distinct { "DISTINCT " } else { "" },
+                    args_str.join(", "),
+                    over_str
+                )
             }
 
             Expr::Cast { expr, data_type } => write!(f, "CAST({} AS {})", expr, data_type),
@@ -444,21 +492,13 @@ impl fmt::Display for Expr {
             }
 
             Expr::ArrayIndex { obj, index } => write!(f, "{}[{}]", obj, index),
-
         }
-
     }
-
 }
 
-
-
 impl fmt::Display for BinaryOp {
-
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         match self {
-
             BinaryOp::Add => write!(f, "+"),
 
             BinaryOp::Subtract => write!(f, "-"),
@@ -488,29 +528,18 @@ impl fmt::Display for BinaryOp {
             BinaryOp::Arrow => write!(f, "->"),
 
             BinaryOp::LongArrow => write!(f, "->>"),
-
         }
-
     }
-
 }
 
-
-
 impl fmt::Display for UnaryOp {
-
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         match self {
-
             UnaryOp::Not => write!(f, "NOT"),
 
             UnaryOp::Minus => write!(f, "-"),
 
             UnaryOp::Plus => write!(f, "+"),
-
         }
-
     }
-
 }

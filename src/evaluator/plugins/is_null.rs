@@ -1,6 +1,6 @@
-use super::super::{ExpressionEvaluator, EvaluationContext};
+use super::super::{EvaluationContext, ExpressionEvaluator};
+use crate::core::{Result, Row, Schema, Value};
 use crate::parser::ast::Expr;
-use crate::core::{Result, Value, Row, Schema};
 
 use async_trait::async_trait;
 
@@ -16,7 +16,13 @@ impl ExpressionEvaluator for IsNullEvaluator {
         matches!(expr, Expr::IsNull { .. })
     }
 
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value> {
         let Expr::IsNull { expr, negated } = expr else {
             unreachable!();
         };

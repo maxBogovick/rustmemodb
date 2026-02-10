@@ -17,8 +17,8 @@
 //
 // ============================================================================
 
+use rustmemodb::core::Value;
 use rustmemodb::facade::InMemoryDB;
-use rustmemodb::core::{Value};
 use std::time::Instant;
 
 // ============================================================================
@@ -37,15 +37,26 @@ async fn setup_test_db() -> InMemoryDB {
             category TEXT,
             rating INTEGER
         )",
-    ).await
-        .unwrap();
+    )
+    .await
+    .unwrap();
 
     // Insert test data
-    db.execute("INSERT INTO products VALUES (1, 'Laptop', 1200, 'Electronics', 5)").await.unwrap();
-    db.execute("INSERT INTO products VALUES (2, 'Mouse', 25, 'Electronics', 4)").await.unwrap();
-    db.execute("INSERT INTO products VALUES (3, 'Desk', 300, 'Furniture', 5)").await.unwrap();
-    db.execute("INSERT INTO products VALUES (4, 'Chair', 150, 'Furniture', 4)").await.unwrap();
-    db.execute("INSERT INTO products VALUES (5, 'Monitor', 400, 'Electronics', 5)").await.unwrap();
+    db.execute("INSERT INTO products VALUES (1, 'Laptop', 1200, 'Electronics', 5)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO products VALUES (2, 'Mouse', 25, 'Electronics', 4)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO products VALUES (3, 'Desk', 300, 'Furniture', 5)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO products VALUES (4, 'Chair', 150, 'Furniture', 4)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO products VALUES (5, 'Monitor', 400, 'Electronics', 5)")
+        .await
+        .unwrap();
 
     db
 }
@@ -60,15 +71,26 @@ async fn setup_db_with_nulls() -> InMemoryDB {
             salary INTEGER,
             department TEXT
         )",
-    ).await
-        .unwrap();
+    )
+    .await
+    .unwrap();
 
     // Insert data with some NULL salaries
-    db.execute("INSERT INTO employees VALUES (1, 'Alice', 75000, 'Engineering')").await.unwrap();
-    db.execute("INSERT INTO employees VALUES (2, 'Bob', 65000, 'Sales')").await.unwrap();
-    db.execute("INSERT INTO employees VALUES (3, 'Charlie', NULL, 'Engineering')").await.unwrap();
-    db.execute("INSERT INTO employees VALUES (4, 'David', 80000, 'Engineering')").await.unwrap();
-    db.execute("INSERT INTO employees VALUES (5, 'Eve', NULL, 'Sales')").await.unwrap();
+    db.execute("INSERT INTO employees VALUES (1, 'Alice', 75000, 'Engineering')")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO employees VALUES (2, 'Bob', 65000, 'Sales')")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO employees VALUES (3, 'Charlie', NULL, 'Engineering')")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO employees VALUES (4, 'David', 80000, 'Engineering')")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO employees VALUES (5, 'Eve', NULL, 'Sales')")
+        .await
+        .unwrap();
 
     db
 }
@@ -84,8 +106,9 @@ async fn setup_large_db(row_count: usize) -> InMemoryDB {
             name TEXT,
             category INTEGER
         )",
-    ).await
-        .unwrap();
+    )
+    .await
+    .unwrap();
 
     // Insert rows in batches for efficiency
     for i in 0..row_count {
@@ -95,8 +118,9 @@ async fn setup_large_db(row_count: usize) -> InMemoryDB {
         db.execute(&format!(
             "INSERT INTO large_table VALUES ({}, {}, '{}', {})",
             i, value, name, category
-        )).await
-            .unwrap();
+        ))
+        .await
+        .unwrap();
     }
 
     db
@@ -110,7 +134,10 @@ async fn setup_large_db(row_count: usize) -> InMemoryDB {
 async fn test_order_by_integer_ascending() {
     let mut db = setup_test_db().await;
 
-    let result = db.execute("SELECT name, price FROM products ORDER BY price ASC").await.unwrap();
+    let result = db
+        .execute("SELECT name, price FROM products ORDER BY price ASC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 5);
@@ -127,7 +154,10 @@ async fn test_order_by_integer_ascending() {
 async fn test_order_by_integer_descending() {
     let mut db = setup_test_db().await;
 
-    let result = db.execute("SELECT name, price FROM products ORDER BY price DESC").await.unwrap();
+    let result = db
+        .execute("SELECT name, price FROM products ORDER BY price DESC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 5);
@@ -144,7 +174,10 @@ async fn test_order_by_integer_descending() {
 async fn test_order_by_text_ascending() {
     let mut db = setup_test_db().await;
 
-    let result = db.execute("SELECT name FROM products ORDER BY name ASC").await.unwrap();
+    let result = db
+        .execute("SELECT name FROM products ORDER BY name ASC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 5);
@@ -161,7 +194,10 @@ async fn test_order_by_text_ascending() {
 async fn test_order_by_text_descending() {
     let mut db = setup_test_db().await;
 
-    let result = db.execute("SELECT name FROM products ORDER BY name DESC").await.unwrap();
+    let result = db
+        .execute("SELECT name FROM products ORDER BY name DESC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 5);
@@ -183,9 +219,10 @@ async fn test_order_by_multiple_columns() {
     let mut db = setup_test_db().await;
 
     // ORDER BY category ASC, price DESC
-    let result = db.execute(
-        "SELECT category, name, price FROM products ORDER BY category ASC, price DESC"
-    ).await.unwrap();
+    let result = db
+        .execute("SELECT category, name, price FROM products ORDER BY category ASC, price DESC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 5);
@@ -249,7 +286,10 @@ async fn test_order_by_with_nulls_ascending() {
     let mut db = setup_db_with_nulls().await;
 
     // ORDER BY salary ASC → NULLS LAST
-    let result = db.execute("SELECT name, salary FROM employees ORDER BY salary ASC").await.unwrap();
+    let result = db
+        .execute("SELECT name, salary FROM employees ORDER BY salary ASC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 5);
@@ -274,7 +314,10 @@ async fn test_order_by_with_nulls_descending() {
     let mut db = setup_db_with_nulls().await;
 
     // ORDER BY salary DESC → NULLS FIRST
-    let result = db.execute("SELECT name, salary FROM employees ORDER BY salary DESC").await.unwrap();
+    let result = db
+        .execute("SELECT name, salary FROM employees ORDER BY salary DESC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 5);
@@ -303,9 +346,12 @@ async fn test_order_by_with_where() {
     let mut db = setup_test_db().await;
 
     // SELECT with WHERE and ORDER BY
-    let result = db.execute(
-        "SELECT name, price FROM products WHERE category = 'Electronics' ORDER BY price ASC"
-    ).await.unwrap();
+    let result = db
+        .execute(
+            "SELECT name, price FROM products WHERE category = 'Electronics' ORDER BY price ASC",
+        )
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 3);
@@ -321,9 +367,10 @@ async fn test_order_by_with_limit() {
     let mut db = setup_test_db().await;
 
     // Get top 3 most expensive products
-    let result = db.execute(
-        "SELECT name, price FROM products ORDER BY price DESC LIMIT 3"
-    ).await.unwrap();
+    let result = db
+        .execute("SELECT name, price FROM products ORDER BY price DESC LIMIT 3")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 3);
@@ -339,12 +386,15 @@ async fn test_order_by_with_where_and_limit() {
     let mut db = setup_test_db().await;
 
     // Get top 2 highest rated products in Electronics
-    let result = db.execute(
-        "SELECT name, rating FROM products
+    let result = db
+        .execute(
+            "SELECT name, rating FROM products
          WHERE category = 'Electronics'
          ORDER BY rating DESC, price DESC
-         LIMIT 2"
-    ).await.unwrap();
+         LIMIT 2",
+        )
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 2);
@@ -362,9 +412,10 @@ async fn test_order_by_with_where_and_limit() {
 async fn test_order_by_empty_result() {
     let mut db = setup_test_db().await;
 
-    let result = db.execute(
-        "SELECT name FROM products WHERE price > 10000 ORDER BY price ASC"
-    ).await.unwrap();
+    let result = db
+        .execute("SELECT name FROM products WHERE price > 10000 ORDER BY price ASC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 0);
@@ -374,10 +425,17 @@ async fn test_order_by_empty_result() {
 async fn test_order_by_single_row() {
     let mut db = InMemoryDB::new();
 
-    db.execute("CREATE TABLE test (id INTEGER, name TEXT)").await.unwrap();
-    db.execute("INSERT INTO test VALUES (1, 'Only')").await.unwrap();
+    db.execute("CREATE TABLE test (id INTEGER, name TEXT)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO test VALUES (1, 'Only')")
+        .await
+        .unwrap();
 
-    let result = db.execute("SELECT name FROM test ORDER BY id DESC").await.unwrap();
+    let result = db
+        .execute("SELECT name FROM test ORDER BY id DESC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 1);
@@ -388,12 +446,23 @@ async fn test_order_by_single_row() {
 async fn test_order_by_all_same_values() {
     let mut db = InMemoryDB::new();
 
-    db.execute("CREATE TABLE test (id INTEGER, value INTEGER)").await.unwrap();
-    db.execute("INSERT INTO test VALUES (1, 100)").await.unwrap();
-    db.execute("INSERT INTO test VALUES (2, 100)").await.unwrap();
-    db.execute("INSERT INTO test VALUES (3, 100)").await.unwrap();
+    db.execute("CREATE TABLE test (id INTEGER, value INTEGER)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO test VALUES (1, 100)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO test VALUES (2, 100)")
+        .await
+        .unwrap();
+    db.execute("INSERT INTO test VALUES (3, 100)")
+        .await
+        .unwrap();
 
-    let result = db.execute("SELECT id FROM test ORDER BY value ASC").await.unwrap();
+    let result = db
+        .execute("SELECT id FROM test ORDER BY value ASC")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 3);
@@ -408,13 +477,16 @@ async fn test_complex_query_with_everything() {
     let mut db = setup_test_db().await;
 
     // Complex query with WHERE, multi-column ORDER BY, and LIMIT
-    let result = db.execute(
-        "SELECT category, name, price, rating
+    let result = db
+        .execute(
+            "SELECT category, name, price, rating
          FROM products
          WHERE price > 100
          ORDER BY category ASC, rating DESC, price ASC
-         LIMIT 4"
-    ).await.unwrap();
+         LIMIT 4",
+        )
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 4);
@@ -432,12 +504,15 @@ async fn test_complex_query_with_everything() {
 async fn test_order_by_with_like_and_between() {
     let mut db = setup_test_db().await;
 
-    let result = db.execute(
-        "SELECT name, price
+    let result = db
+        .execute(
+            "SELECT name, price
          FROM products
          WHERE name LIKE 'M%' AND price BETWEEN 20 AND 500
-         ORDER BY price DESC"
-    ).await.unwrap();
+         ORDER BY price DESC",
+        )
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 2);
@@ -455,7 +530,10 @@ async fn test_order_by_with_like_and_between() {
 async fn test_select_star_with_order_by() {
     let mut db = setup_test_db().await;
 
-    let result = db.execute("SELECT * FROM products ORDER BY price ASC LIMIT 2").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM products ORDER BY price ASC LIMIT 2")
+        .await
+        .unwrap();
 
     let rows = &result.rows();
     assert_eq!(rows.len(), 2);
@@ -474,7 +552,10 @@ async fn test_performance_sort_1000_rows() {
     let mut db = setup_large_db(1000).await;
 
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM large_table ORDER BY value ASC").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table ORDER BY value ASC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 1000);
@@ -496,7 +577,10 @@ async fn test_performance_sort_10000_rows() {
     let mut db = setup_large_db(10_000).await;
 
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM large_table ORDER BY value DESC").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table ORDER BY value DESC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 10_000);
@@ -519,7 +603,10 @@ async fn test_performance_sort_with_limit() {
 
     // Should be fast because LIMIT is applied after sort
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM large_table ORDER BY value ASC LIMIT 10").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table ORDER BY value ASC LIMIT 10")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 10);
@@ -532,9 +619,10 @@ async fn test_performance_multi_column_sort() {
     let mut db = setup_large_db(5000).await;
 
     let start = Instant::now();
-    let result = db.execute(
-        "SELECT * FROM large_table ORDER BY category ASC, value DESC"
-    ).await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table ORDER BY category ASC, value DESC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 5000);
@@ -567,14 +655,19 @@ async fn test_performance_sort_with_filter() {
     let mut db = setup_large_db(10_000).await;
 
     let start = Instant::now();
-    let result = db.execute(
-        "SELECT * FROM large_table WHERE category < 10 ORDER BY value ASC"
-    ).await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table WHERE category < 10 ORDER BY value ASC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert!(result.rows().len() > 0);
 
-    println!("✅ Filter + Sort ({} rows): {:?}", result.rows().len(), duration);
+    println!(
+        "✅ Filter + Sort ({} rows): {:?}",
+        result.rows().len(),
+        duration
+    );
 }
 
 #[tokio::test]
@@ -582,7 +675,10 @@ async fn test_performance_sort_text_column() {
     let mut db = setup_large_db(5000).await;
 
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM large_table ORDER BY name ASC").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table ORDER BY name ASC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 5000);
@@ -603,17 +699,22 @@ async fn test_performance_sort_text_column() {
 async fn test_performance_already_sorted_data() {
     let mut db = InMemoryDB::new();
 
-    db.execute(
-        "CREATE TABLE sorted_table (id INTEGER, value INTEGER)"
-    ).await.unwrap();
+    db.execute("CREATE TABLE sorted_table (id INTEGER, value INTEGER)")
+        .await
+        .unwrap();
 
     // Insert already sorted data
     for i in 0..5000 {
-        db.execute(&format!("INSERT INTO sorted_table VALUES ({}, {})", i, i)).await.unwrap();
+        db.execute(&format!("INSERT INTO sorted_table VALUES ({}, {})", i, i))
+            .await
+            .unwrap();
     }
 
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM sorted_table ORDER BY value ASC").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM sorted_table ORDER BY value ASC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 5000);
@@ -625,17 +726,26 @@ async fn test_performance_already_sorted_data() {
 async fn test_performance_reverse_sorted_data() {
     let mut db = InMemoryDB::new();
 
-    db.execute(
-        "CREATE TABLE reverse_table (id INTEGER, value INTEGER)"
-    ).await.unwrap();
+    db.execute("CREATE TABLE reverse_table (id INTEGER, value INTEGER)")
+        .await
+        .unwrap();
 
     // Insert reverse sorted data
     for i in (0..5000).rev() {
-        db.execute(&format!("INSERT INTO reverse_table VALUES ({}, {})", 5000 - i, i)).await.unwrap();
+        db.execute(&format!(
+            "INSERT INTO reverse_table VALUES ({}, {})",
+            5000 - i,
+            i
+        ))
+        .await
+        .unwrap();
     }
 
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM reverse_table ORDER BY value ASC").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM reverse_table ORDER BY value ASC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 5000);
@@ -663,7 +773,10 @@ async fn test_performance_comparison_with_without_order_by() {
 
     // With ORDER BY
     let start_sort = Instant::now();
-    let result_sort = db.execute("SELECT * FROM large_table ORDER BY value ASC").await.unwrap();
+    let result_sort = db
+        .execute("SELECT * FROM large_table ORDER BY value ASC")
+        .await
+        .unwrap();
     let duration_sort = start_sort.elapsed();
 
     assert_eq!(result_no_sort.rows().len(), result_sort.rows().len());
@@ -682,7 +795,10 @@ async fn test_stress_sort_50000_rows() {
     let mut db = setup_large_db(50_000).await;
 
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM large_table ORDER BY value ASC").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table ORDER BY value ASC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 50_000);
@@ -695,7 +811,10 @@ async fn test_stress_sort_100000_rows() {
     let mut db = setup_large_db(100_000).await;
 
     let start = Instant::now();
-    let result = db.execute("SELECT * FROM large_table ORDER BY value DESC").await.unwrap();
+    let result = db
+        .execute("SELECT * FROM large_table ORDER BY value DESC")
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 100_000);
@@ -708,15 +827,21 @@ async fn test_stress_complex_query_large_dataset() {
     let mut db = setup_large_db(50_000).await;
 
     let start = Instant::now();
-    let result = db.execute(
-        "SELECT * FROM large_table
+    let result = db
+        .execute(
+            "SELECT * FROM large_table
          WHERE category < 50 and name like '%tem_%'
          ORDER BY category ASC, value DESC
-         LIMIT 1000"
-    ).await.unwrap();
+         LIMIT 1000",
+        )
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
     assert_eq!(result.rows().len(), 1000);
 
-    println!("🔥 Stress test - Complex query on 50,000 rows: {:?}", duration);
+    println!(
+        "🔥 Stress test - Complex query on 50,000 rows: {:?}",
+        duration
+    );
 }

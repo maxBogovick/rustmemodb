@@ -1,11 +1,11 @@
 use super::{ExecutionContext, Executor};
 use crate::core::{Column, DbError, Result, Row, Value};
-use crate::parser::ast::{Expr, InsertStmt, Statement, InsertSource, Statement as AstStatement};
+use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
+use crate::executor::query::QueryExecutor;
+use crate::parser::ast::{Expr, InsertSource, InsertStmt, Statement, Statement as AstStatement};
 use crate::planner::logical_plan::IndexOp;
 use crate::result::QueryResult;
-use crate::storage::{WalEntry, Catalog};
-use crate::executor::query::QueryExecutor;
-use crate::evaluator::{EvaluationContext, EvaluatorRegistry};
+use crate::storage::{Catalog, WalEntry};
 
 use async_trait::async_trait;
 
@@ -42,22 +42,38 @@ impl Executor for InsertExecutor {
 }
 
 impl InsertExecutor {
-    async fn execute_insert(&self, insert: &InsertStmt, ctx: &ExecutionContext<'_>) -> Result<QueryResult> {
+    async fn execute_insert(
+        &self,
+        insert: &InsertStmt,
+        ctx: &ExecutionContext<'_>,
+    ) -> Result<QueryResult> {
         // Получаем схему (read lock на одну таблицу)
         let schema = ctx.storage.get_schema(&insert.table_name).await?;
         let schema_columns = schema.schema().columns();
-        let insert_col_indices = self.resolve_insert_columns(insert.columns.as_deref(), schema_columns, &insert.table_name)?;
+        let insert_col_indices = self.resolve_insert_columns(
+            insert.columns.as_deref(),
+            schema_columns,
+            &insert.table_name,
+        )?;
 
         // Вычисляем строки
         let rows: Vec<Row> = match &insert.source {
-            InsertSource::Values(values) => {
-                values.iter()
-                    .map(|row_exprs| self.build_row_from_exprs(row_exprs, schema_columns, insert_col_indices.as_deref(), ctx))
-                    .collect::<Result<Vec<_>>>()?
-            }
+            InsertSource::Values(values) => values
+                .iter()
+                .map(|row_exprs| {
+                    self.build_row_from_exprs(
+                        row_exprs,
+                        schema_columns,
+                        insert_col_indices.as_deref(),
+                        ctx,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
             InsertSource::Select(query) => {
                 let executor = QueryExecutor::new(self.catalog.clone());
-                let result = executor.execute(&AstStatement::Query(*query.clone()), ctx).await?;
+                let result = executor
+                    .execute(&AstStatement::Query(*query.clone()), ctx)
+                    .await?;
                 // TODO: Validate column types against schema?
                 // QueryExecutor returns generic rows.
                 // Insert expects specific types? evaluate_row does casting.
@@ -65,10 +81,14 @@ impl InsertExecutor {
                 // For MVP, assume types match or rely on implicit compat.
                 // But strict types: Integer vs Text.
                 // I should iterate rows and cast?
-                
+
                 let mut cast_rows = Vec::new();
                 for row in result.rows() {
-                    cast_rows.push(self.build_row_from_values(row, schema_columns, insert_col_indices.as_deref())?);
+                    cast_rows.push(self.build_row_from_values(
+                        row,
+                        schema_columns,
+                        insert_col_indices.as_deref(),
+                    )?);
                 }
                 cast_rows
             }
@@ -90,15 +110,30 @@ impl InsertExecutor {
 
                     // Check if value exists in referenced table
                     // Use index if available (highly recommended for FK targets)
-                    let exists = if let Some(rows) = ctx.storage.scan_index(&fk.table, &fk.column, val, &None, &IndexOp::Eq, &ctx.snapshot).await? {
+                    let exists = if let Some(rows) = ctx
+                        .storage
+                        .scan_index(
+                            &fk.table,
+                            &fk.column,
+                            val,
+                            &None,
+                            &IndexOp::Eq,
+                            &ctx.snapshot,
+                        )
+                        .await?
+                    {
                         !rows.is_empty()
                     } else {
                         // Fallback to full scan (slow!)
                         let all_rows = ctx.storage.scan_table(&fk.table, &ctx.snapshot).await?;
                         let ref_schema = ctx.storage.get_schema(&fk.table).await?;
-                        let col_idx = ref_schema.schema().find_column_index(&fk.column)
-                            .ok_or_else(|| DbError::ColumnNotFound(fk.column.clone(), fk.table.clone()))?;
-                        
+                        let col_idx = ref_schema
+                            .schema()
+                            .find_column_index(&fk.column)
+                            .ok_or_else(|| {
+                                DbError::ColumnNotFound(fk.column.clone(), fk.table.clone())
+                            })?;
+
                         all_rows.iter().any(|r| &r[col_idx] == val)
                     };
 
@@ -114,7 +149,8 @@ impl InsertExecutor {
 
         // Validate CHECK constraints (NULL = pass)
         if !schema.checks().is_empty() {
-            let eval_ctx = EvaluationContext::with_params(&self.evaluator_registry, None, &ctx.params);
+            let eval_ctx =
+                EvaluationContext::with_params(&self.evaluator_registry, None, &ctx.params);
             for row in &rows {
                 for check in schema.checks() {
                     let value = eval_ctx.evaluate(check, row, schema.schema()).await?;
@@ -151,7 +187,9 @@ impl InsertExecutor {
                 logged_any = true;
             }
 
-            ctx.storage.insert_row(&insert.table_name, row.clone(), &ctx.snapshot).await?;
+            ctx.storage
+                .insert_row(&insert.table_name, row.clone(), &ctx.snapshot)
+                .await?;
         }
 
         if autocommit && logged_any {
@@ -288,25 +326,24 @@ impl InsertExecutor {
         ctx: &ExecutionContext<'_>,
     ) -> Result<Value> {
         match expr {
-            Expr::Literal(val) => {
-                expected_type.cast_value(val)
-            }
-            Expr::UnaryOp { op, expr } => {
-                match (&**expr, op) {
-                    (Expr::Literal(Value::Integer(i)), crate::parser::ast::UnaryOp::Minus) => {
-                        expected_type.cast_value(&Value::Integer(-i))
-                    }
-                    (Expr::Literal(Value::Float(f)), crate::parser::ast::UnaryOp::Minus) => {
-                        expected_type.cast_value(&Value::Float(-f))
-                    }
-                    _ => Err(DbError::UnsupportedOperation(
-                        "Only unary minus for numeric literals supported in INSERT".into(),
-                    )),
+            Expr::Literal(val) => expected_type.cast_value(val),
+            Expr::UnaryOp { op, expr } => match (&**expr, op) {
+                (Expr::Literal(Value::Integer(i)), crate::parser::ast::UnaryOp::Minus) => {
+                    expected_type.cast_value(&Value::Integer(-i))
                 }
-            }
+                (Expr::Literal(Value::Float(f)), crate::parser::ast::UnaryOp::Minus) => {
+                    expected_type.cast_value(&Value::Float(-f))
+                }
+                _ => Err(DbError::UnsupportedOperation(
+                    "Only unary minus for numeric literals supported in INSERT".into(),
+                )),
+            },
             Expr::Parameter(idx) => {
                 if *idx == 0 || *idx > ctx.params.len() {
-                    return Err(DbError::ExecutionError(format!("Parameter index out of range: ${}", idx)));
+                    return Err(DbError::ExecutionError(format!(
+                        "Parameter index out of range: ${}",
+                        idx
+                    )));
                 }
                 let val = &ctx.params[*idx - 1];
                 expected_type.cast_value(val)

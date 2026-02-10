@@ -1,6 +1,6 @@
-use super::super::{ExpressionEvaluator, EvaluationContext};
-use crate::parser::ast::{Expr, BinaryOp};
-use crate::core::{Result, Value, Row, Schema, DbError};
+use super::super::{EvaluationContext, ExpressionEvaluator};
+use crate::core::{DbError, Result, Row, Schema, Value};
+use crate::parser::ast::{BinaryOp, Expr};
 
 use async_trait::async_trait;
 
@@ -22,7 +22,13 @@ impl ExpressionEvaluator for BooleanEvaluator {
         }
     }
 
-    async fn evaluate(&self, expr: &Expr, row: &Row, schema: &Schema, context: &EvaluationContext<'_>) -> Result<Value> {
+    async fn evaluate(
+        &self,
+        expr: &Expr,
+        row: &Row,
+        schema: &Schema,
+        context: &EvaluationContext<'_>,
+    ) -> Result<Value> {
         match expr {
             // Handle AND/OR
             Expr::BinaryOp { left, op, right } => {
@@ -43,24 +49,45 @@ impl ExpressionEvaluator for BooleanEvaluator {
                         };
                         Ok(result)
                     }
-                    (Value::Null, Value::Boolean(b)) => {
-                        Ok(match op {
-                            BinaryOp::And => if b { Value::Null } else { Value::Boolean(false) },
-                            BinaryOp::Or => if b { Value::Boolean(true) } else { Value::Null },
-                            _ => unreachable!(),
-                        })
-                    }
-                    (Value::Boolean(a), Value::Null) => {
-                        Ok(match op {
-                            BinaryOp::And => if a { Value::Null } else { Value::Boolean(false) },
-                            BinaryOp::Or => if a { Value::Boolean(true) } else { Value::Null },
-                            _ => unreachable!(),
-                        })
-                    }
+                    (Value::Null, Value::Boolean(b)) => Ok(match op {
+                        BinaryOp::And => {
+                            if b {
+                                Value::Null
+                            } else {
+                                Value::Boolean(false)
+                            }
+                        }
+                        BinaryOp::Or => {
+                            if b {
+                                Value::Boolean(true)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        _ => unreachable!(),
+                    }),
+                    (Value::Boolean(a), Value::Null) => Ok(match op {
+                        BinaryOp::And => {
+                            if a {
+                                Value::Null
+                            } else {
+                                Value::Boolean(false)
+                            }
+                        }
+                        BinaryOp::Or => {
+                            if a {
+                                Value::Boolean(true)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        _ => unreachable!(),
+                    }),
                     (Value::Null, Value::Null) => Ok(Value::Null),
                     (a, b) => Err(DbError::TypeMismatch(format!(
                         "Boolean operation requires boolean types, got {} and {}",
-                        a.type_name(), b.type_name()
+                        a.type_name(),
+                        b.type_name()
                     ))),
                 }
             }

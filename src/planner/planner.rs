@@ -1,7 +1,14 @@
-use crate::parser::ast::{Statement, QueryStmt, SelectItem, OrderByExpr, Expr, BinaryOp, TableWithJoins, TableFactor, JoinOperator, JoinConstraint, SetOperator};
+use super::logical_plan::{
+    AggregateNode, DistinctNode, FilterNode, IndexOp, IndexScanInfo, JoinNode, JoinType, LimitNode,
+    LogicalPlan, ProjectionNode, RecursiveQueryNode, SortNode, TableScanNode, ValuesNode,
+    WindowNode,
+};
+use crate::core::{Column, DbError, Result, Schema, Value};
+use crate::parser::ast::{
+    BinaryOp, Expr, JoinConstraint, JoinOperator, OrderByExpr, QueryStmt, SelectItem, SetOperator,
+    Statement, TableFactor, TableWithJoins,
+};
 use crate::storage::Catalog;
-use crate::core::{DbError, Result, Value, Schema, Column};
-use super::logical_plan::{LogicalPlan, TableScanNode, IndexScanInfo, IndexOp, SortNode, LimitNode, JoinNode, JoinType, ProjectionNode, FilterNode, AggregateNode, DistinctNode, WindowNode, ValuesNode, RecursiveQueryNode};
 
 /// Query planner - converts AST to LogicalPlan
 pub struct QueryPlanner;
@@ -15,7 +22,7 @@ impl QueryPlanner {
         match stmt {
             Statement::Query(query) => self.plan_query(query, catalog),
             _ => Err(DbError::UnsupportedOperation(
-                "Only SELECT queries can be planned".into()
+                "Only SELECT queries can be planned".into(),
             )),
         }
     }
@@ -32,7 +39,7 @@ impl QueryPlanner {
                             // Anchor term: Left side of UNION
                             let mut anchor_stmt = *cte.query.clone();
                             anchor_stmt.set_op = None; // Strip recursive part
-                            anchor_stmt.with = None;   // Strip WITH to avoid loops
+                            anchor_stmt.with = None; // Strip WITH to avoid loops
 
                             let anchor_plan = self.plan_query(&anchor_stmt, catalog)?;
 
@@ -42,16 +49,19 @@ impl QueryPlanner {
                             if !cte.columns.is_empty() {
                                 if cte.columns.len() != columns.len() {
                                     return Err(DbError::ExecutionError(format!(
-                                        "CTE '{}' column count mismatch: expected {}, got {}", 
-                                        cte.alias, cte.columns.len(), columns.len()
+                                        "CTE '{}' column count mismatch: expected {}, got {}",
+                                        cte.alias,
+                                        cte.columns.len(),
+                                        columns.len()
                                     )));
                                 }
                                 for (i, name) in cte.columns.iter().enumerate() {
                                     columns[i].name = name.clone();
                                 }
                             }
-                            let table_schema = crate::storage::TableSchema::new(cte.alias.clone(), columns);
-                            
+                            let table_schema =
+                                crate::storage::TableSchema::new(cte.alias.clone(), columns);
+
                             // Shadow existing table if any
                             if local_catalog.table_exists(&cte.alias) {
                                 local_catalog = local_catalog.without_table(&cte.alias)?;
@@ -61,12 +71,13 @@ impl QueryPlanner {
                             // Recursive term: Right side of UNION
                             let recursive_stmt = *set_op.right.clone();
                             // Recursive term uses local_catalog (which has CTE as table)
-                            let recursive_plan = self.plan_query(&recursive_stmt, &local_catalog)?;
+                            let recursive_plan =
+                                self.plan_query(&recursive_stmt, &local_catalog)?;
 
                             // Final Query
                             let mut final_stmt = query.clone();
                             final_stmt.with = None; // Clear WITH
-                            
+
                             let final_plan = self.plan_query(&final_stmt, &local_catalog)?;
                             let schema = final_plan.schema().clone();
 
@@ -82,11 +93,15 @@ impl QueryPlanner {
                 }
             } else {
                 for cte in &with.cte_tables {
-                    local_catalog = local_catalog.with_view(cte.alias.clone(), *cte.query.clone(), cte.columns.clone())?;
+                    local_catalog = local_catalog.with_view(
+                        cte.alias.clone(),
+                        *cte.query.clone(),
+                        cte.columns.clone(),
+                    )?;
                 }
             }
         }
-        
+
         let catalog = &local_catalog;
 
         // 1. Start with table scan / joins
@@ -106,11 +121,12 @@ impl QueryPlanner {
         }
 
         // 3. Apply GROUP BY / Aggregation
-        let (has_aggr, aggr_exprs) = self.extract_aggregates(&query.projection, &query.having, &query.order_by);
-        
+        let (has_aggr, aggr_exprs) =
+            self.extract_aggregates(&query.projection, &query.having, &query.order_by);
+
         if !query.group_by.is_empty() || has_aggr {
             let schema = self.build_aggregate_schema(plan.schema(), &query.group_by, &aggr_exprs);
-            
+
             plan = LogicalPlan::Aggregate(AggregateNode {
                 input: Box::new(plan),
                 group_exprs: query.group_by.clone(),
@@ -131,17 +147,21 @@ impl QueryPlanner {
         }
 
         // 5. Apply Window Functions
-        let (has_window, window_exprs) = self.extract_window_functions(&query.projection, &query.order_by);
-        
+        let (has_window, window_exprs) =
+            self.extract_window_functions(&query.projection, &query.order_by);
+
         if has_window {
             let mut columns = plan.schema().columns().to_vec();
             for expr in &window_exprs {
                 let name = format!("{}", expr);
                 let data_type = if let Expr::Function { name, .. } = expr {
-                    if matches!(name.to_uppercase().as_str(), "ROW_NUMBER" | "RANK" | "COUNT") {
+                    if matches!(
+                        name.to_uppercase().as_str(),
+                        "ROW_NUMBER" | "RANK" | "COUNT"
+                    ) {
                         crate::core::DataType::Integer
                     } else {
-                        crate::core::DataType::Float 
+                        crate::core::DataType::Float
                     }
                 } else {
                     crate::core::DataType::Text
@@ -149,7 +169,7 @@ impl QueryPlanner {
                 columns.push(Column::new(name, data_type));
             }
             let schema = Schema::new(columns);
-            
+
             plan = LogicalPlan::Window(WindowNode {
                 input: Box::new(plan),
                 window_exprs: window_exprs.clone(),
@@ -159,14 +179,18 @@ impl QueryPlanner {
 
         // 6. Apply ORDER BY
         if !query.order_by.is_empty() {
-            let rewritten_order_by = query.order_by.iter().map(|ob| OrderByExpr {
-                expr: self.rewrite_window_expression(
-                    &self.rewrite_expression(&ob.expr, &aggr_exprs),
-                    &window_exprs
-                ),
-                descending: ob.descending,
-            }).collect();
-            
+            let rewritten_order_by = query
+                .order_by
+                .iter()
+                .map(|ob| OrderByExpr {
+                    expr: self.rewrite_window_expression(
+                        &self.rewrite_expression(&ob.expr, &aggr_exprs),
+                        &window_exprs,
+                    ),
+                    descending: ob.descending,
+                })
+                .collect();
+
             let schema = plan.schema().clone();
             plan = LogicalPlan::Sort(SortNode {
                 input: Box::new(plan),
@@ -230,9 +254,17 @@ impl QueryPlanner {
             Expr::Not { expr } => Expr::Not {
                 expr: Box::new(self.rewrite_expression(expr, aggrs)),
             },
-            Expr::Function { name, args, distinct, over } => Expr::Function {
+            Expr::Function {
+                name,
+                args,
+                distinct,
+                over,
+            } => Expr::Function {
                 name: name.clone(),
-                args: args.iter().map(|a| self.rewrite_expression(a, aggrs)).collect(),
+                args: args
+                    .iter()
+                    .map(|a| self.rewrite_expression(a, aggrs))
+                    .collect(),
                 distinct: *distinct,
                 over: over.clone(),
             },
@@ -243,12 +275,20 @@ impl QueryPlanner {
 
     fn format_aggregate(&self, expr: &Expr) -> String {
         match expr {
-            Expr::Function { name, args, distinct, over } => {
+            Expr::Function {
+                name,
+                args,
+                distinct,
+                over,
+            } => {
                 let distinct_str = if *distinct { "DISTINCT " } else { "" };
                 let arg_str = if args.is_empty() {
                     "*".to_string()
                 } else {
-                    args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>().join(", ")
+                    args.iter()
+                        .map(|arg| arg.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 };
                 let over_str = if over.is_some() { " OVER (...)" } else { "" };
                 format!("{}({}{}){}", name, distinct_str, arg_str, over_str)
@@ -257,7 +297,12 @@ impl QueryPlanner {
         }
     }
 
-    fn extract_aggregates(&self, projection: &[SelectItem], having: &Option<Expr>, order_by: &[OrderByExpr]) -> (bool, Vec<Expr>) {
+    fn extract_aggregates(
+        &self,
+        projection: &[SelectItem],
+        having: &Option<Expr>,
+        order_by: &[OrderByExpr],
+    ) -> (bool, Vec<Expr>) {
         let mut aggrs = Vec::new();
         let mut has_aggr = false;
 
@@ -272,10 +317,10 @@ impl QueryPlanner {
                             aggrs.push(expr.clone());
                         }
                         // Don't recurse into aggregate arguments (we don't support nested aggregates)
-                        return; 
+                        return;
                     }
                     // Recurse into function args (e.g. ROUND(SUM(x))) - Wait, standard SQL allows this?
-                    // Actually, usually you aggregate first then apply function. 
+                    // Actually, usually you aggregate first then apply function.
                     // But if it's FUNC(arg), we check arg.
                     for arg in args {
                         collect_recursive(arg, aggrs, has_aggr);
@@ -287,7 +332,9 @@ impl QueryPlanner {
                 }
                 Expr::UnaryOp { expr, .. } => collect_recursive(expr, aggrs, has_aggr),
                 Expr::Not { expr } => collect_recursive(expr, aggrs, has_aggr),
-                Expr::Like { expr: e, pattern, .. } => {
+                Expr::Like {
+                    expr: e, pattern, ..
+                } => {
                     collect_recursive(e, aggrs, has_aggr);
                     collect_recursive(pattern, aggrs, has_aggr);
                 }
@@ -300,11 +347,11 @@ impl QueryPlanner {
                 collect_recursive(expr, &mut aggrs, &mut has_aggr);
             }
         }
-        
+
         if let Some(expr) = having {
             collect_recursive(expr, &mut aggrs, &mut has_aggr);
         }
-        
+
         for item in order_by {
             collect_recursive(&item.expr, &mut aggrs, &mut has_aggr);
         }
@@ -312,32 +359,37 @@ impl QueryPlanner {
         (has_aggr, aggrs)
     }
 
-    fn build_aggregate_schema(&self, _input_schema: &Schema, group_by: &[Expr], aggrs: &[Expr]) -> Schema {
+    fn build_aggregate_schema(
+        &self,
+        _input_schema: &Schema,
+        group_by: &[Expr],
+        aggrs: &[Expr],
+    ) -> Schema {
         let mut columns = Vec::new();
-        
+
         // Group columns
         for expr in group_by {
             // In a real DB, we'd infer type. For MVP, Text.
             let name = format!("{}", expr); // Need Expr::Display or manual format
             columns.push(Column::new(name, crate::core::DataType::Text));
         }
-        
+
         // Aggregate columns
         for expr in aggrs {
-            // Aggregate result type depends on function. 
+            // Aggregate result type depends on function.
             // COUNT -> Integer, others -> depends on input.
             // For MVP, simplistic inference.
             let name = self.format_aggregate(expr);
-            
+
             let data_type = if name.to_uppercase().starts_with("COUNT") {
                 crate::core::DataType::Integer
             } else {
                 crate::core::DataType::Float // Sum/Avg usually Float
             };
-            
+
             columns.push(Column::new(name, data_type));
         }
-        
+
         Schema::new(columns)
     }
 
@@ -351,7 +403,7 @@ impl QueryPlanner {
         for table in from.iter().skip(1) {
             let right = self.plan_table_with_joins(table, catalog)?;
             let schema = Schema::merge(plan.schema(), right.schema());
-            
+
             plan = LogicalPlan::Join(JoinNode {
                 left: Box::new(plan),
                 right: Box::new(right),
@@ -364,7 +416,11 @@ impl QueryPlanner {
         Ok(plan)
     }
 
-    fn plan_table_with_joins(&self, table: &TableWithJoins, catalog: &Catalog) -> Result<LogicalPlan> {
+    fn plan_table_with_joins(
+        &self,
+        table: &TableWithJoins,
+        catalog: &Catalog,
+    ) -> Result<LogicalPlan> {
         let mut plan = self.plan_table_factor(&table.relation, catalog)?;
 
         for join in &table.joins {
@@ -397,19 +453,24 @@ impl QueryPlanner {
                         if input_schema.column_count() != view_columns.len() {
                             return Err(DbError::ExecutionError(format!(
                                 "View '{}' column count mismatch: expected {}, got {}",
-                                name, view_columns.len(), input_schema.column_count()
+                                name,
+                                view_columns.len(),
+                                input_schema.column_count()
                             )));
                         }
-                        
-                        let expressions: Vec<Expr> = input_schema.columns()
+
+                        let expressions: Vec<Expr> = input_schema
+                            .columns()
                             .iter()
                             .map(|c| Expr::Column(c.name.clone()))
                             .collect();
-                            
-                        let new_cols = view_columns.iter().zip(input_schema.columns()).map(|(alias, col)| {
-                            Column::new(alias.clone(), col.data_type.clone())
-                        }).collect();
-                        
+
+                        let new_cols = view_columns
+                            .iter()
+                            .zip(input_schema.columns())
+                            .map(|(alias, col)| Column::new(alias.clone(), col.data_type.clone()))
+                            .collect();
+
                         plan = LogicalPlan::Projection(ProjectionNode {
                             input: Box::new(plan),
                             expressions,
@@ -422,7 +483,8 @@ impl QueryPlanner {
                         let new_schema = input_schema.qualify_columns(alias_name);
 
                         // Create identity projection with new schema names
-                        let expressions: Vec<Expr> = input_schema.columns()
+                        let expressions: Vec<Expr> = input_schema
+                            .columns()
                             .iter()
                             .map(|c| Expr::Column(c.name.clone()))
                             .collect();
@@ -453,17 +515,18 @@ impl QueryPlanner {
             }
             TableFactor::Derived { subquery, alias } => {
                 let plan = self.plan_query(subquery, catalog)?;
-                
+
                 if let Some(alias_name) = alias {
                     let input_schema = plan.schema().clone();
                     let new_schema = input_schema.qualify_columns(alias_name);
-                    
+
                     // Create identity projection with new schema names
-                    let expressions: Vec<Expr> = input_schema.columns()
+                    let expressions: Vec<Expr> = input_schema
+                        .columns()
                         .iter()
                         .map(|c| Expr::Column(c.name.clone()))
                         .collect();
-                        
+
                     Ok(LogicalPlan::Projection(ProjectionNode {
                         input: Box::new(plan),
                         expressions,
@@ -478,10 +541,18 @@ impl QueryPlanner {
 
     fn convert_join_operator(&self, op: &JoinOperator) -> Result<(JoinType, Expr)> {
         match op {
-            JoinOperator::Inner(constraint) => Ok((JoinType::Inner, self.convert_join_constraint(constraint)?)),
-            JoinOperator::LeftOuter(constraint) => Ok((JoinType::Left, self.convert_join_constraint(constraint)?)),
-            JoinOperator::RightOuter(constraint) => Ok((JoinType::Right, self.convert_join_constraint(constraint)?)),
-            JoinOperator::FullOuter(constraint) => Ok((JoinType::Full, self.convert_join_constraint(constraint)?)),
+            JoinOperator::Inner(constraint) => {
+                Ok((JoinType::Inner, self.convert_join_constraint(constraint)?))
+            }
+            JoinOperator::LeftOuter(constraint) => {
+                Ok((JoinType::Left, self.convert_join_constraint(constraint)?))
+            }
+            JoinOperator::RightOuter(constraint) => {
+                Ok((JoinType::Right, self.convert_join_constraint(constraint)?))
+            }
+            JoinOperator::FullOuter(constraint) => {
+                Ok((JoinType::Full, self.convert_join_constraint(constraint)?))
+            }
             JoinOperator::CrossJoin => Ok((JoinType::Cross, Expr::Literal(Value::Boolean(true)))),
         }
     }
@@ -493,7 +564,11 @@ impl QueryPlanner {
         }
     }
 
-    fn plan_projection(&self, input: LogicalPlan, projection: &[SelectItem]) -> Result<LogicalPlan> {
+    fn plan_projection(
+        &self,
+        input: LogicalPlan,
+        projection: &[SelectItem],
+    ) -> Result<LogicalPlan> {
         // Check if it's SELECT *
         if projection.len() == 1 && matches!(projection[0], SelectItem::Wildcard) {
             return Ok(input); // No projection needed
@@ -508,20 +583,18 @@ impl QueryPlanner {
             match item {
                 SelectItem::Wildcard => {
                     return Err(DbError::ParseError(
-                        "Wildcard cannot be mixed with other columns".into()
+                        "Wildcard cannot be mixed with other columns".into(),
                     ));
                 }
                 SelectItem::Expr { expr, alias } => {
                     expressions.push(expr.clone());
-                    
+
                     // Infer column name and type
-                    let name = alias.clone().unwrap_or_else(|| {
-                        match expr {
-                            Expr::Column(name) => name.clone(),
-                            _ => format!("col_{}", columns.len()),
-                        }
+                    let name = alias.clone().unwrap_or_else(|| match expr {
+                        Expr::Column(name) => name.clone(),
+                        _ => format!("col_{}", columns.len()),
                     });
-                    
+
                     let data_type = self.infer_expr_type(expr, input_schema);
 
                     columns.push(Column::new(name, data_type));
@@ -537,15 +610,22 @@ impl QueryPlanner {
     }
 
     /// Try to use an index for the WHERE clause
-    fn try_optimize_filter(&self, input: LogicalPlan, predicate: &Expr, catalog: &Catalog) -> Result<LogicalPlan> {
+    fn try_optimize_filter(
+        &self,
+        input: LogicalPlan,
+        predicate: &Expr,
+        catalog: &Catalog,
+    ) -> Result<LogicalPlan> {
         // Only optimize if input is a simple TableScan
         if let LogicalPlan::TableScan(ref scan) = input {
             let schema = catalog.get_table(&scan.table_name)?;
-            
+
             match predicate {
                 Expr::BinaryOp { left, op, right } => {
                     // Check for col op val/param
-                    if let (Expr::Column(col_name), Expr::Literal(_) | Expr::Parameter(_)) = (&**left, &**right) {
+                    if let (Expr::Column(col_name), Expr::Literal(_) | Expr::Parameter(_)) =
+                        (&**left, &**right)
+                    {
                         if schema.is_indexed(col_name) {
                             let index_op = match op {
                                 BinaryOp::Eq => Some(IndexOp::Eq),
@@ -570,16 +650,18 @@ impl QueryPlanner {
                     }
 
                     // Check for val op col
-                    if let (Expr::Literal(_) | Expr::Parameter(_), Expr::Column(col_name)) = (&**left, &**right) {
+                    if let (Expr::Literal(_) | Expr::Parameter(_), Expr::Column(col_name)) =
+                        (&**left, &**right)
+                    {
                         if schema.is_indexed(col_name) {
-                             let index_op = match op {
-                                 BinaryOp::Eq => Some(IndexOp::Eq),
-                                 BinaryOp::Gt => Some(IndexOp::Lt), // val > col <=> col < val
-                                 BinaryOp::GtEq => Some(IndexOp::LtEq),
-                                 BinaryOp::Lt => Some(IndexOp::Gt),
-                                 BinaryOp::LtEq => Some(IndexOp::GtEq),
-                                 _ => None,
-                             };
+                            let index_op = match op {
+                                BinaryOp::Eq => Some(IndexOp::Eq),
+                                BinaryOp::Gt => Some(IndexOp::Lt), // val > col <=> col < val
+                                BinaryOp::GtEq => Some(IndexOp::LtEq),
+                                BinaryOp::Lt => Some(IndexOp::Gt),
+                                BinaryOp::LtEq => Some(IndexOp::GtEq),
+                                _ => None,
+                            };
 
                             if let Some(op) = index_op {
                                 let mut new_scan = scan.clone();
@@ -594,9 +676,19 @@ impl QueryPlanner {
                         }
                     }
                 }
-                Expr::Between { expr, low, high, negated } => {
+                Expr::Between {
+                    expr,
+                    low,
+                    high,
+                    negated,
+                } => {
                     if !*negated {
-                        if let (Expr::Column(col_name), Expr::Literal(_) | Expr::Parameter(_), Expr::Literal(_) | Expr::Parameter(_)) = (&**expr, &**low, &**high) {
+                        if let (
+                            Expr::Column(col_name),
+                            Expr::Literal(_) | Expr::Parameter(_),
+                            Expr::Literal(_) | Expr::Parameter(_),
+                        ) = (&**expr, &**low, &**high)
+                        {
                             if schema.is_indexed(col_name) {
                                 let mut new_scan = scan.clone();
                                 new_scan.index_scan = Some(IndexScanInfo {
@@ -623,7 +715,11 @@ impl QueryPlanner {
         }))
     }
 
-    fn extract_window_functions(&self, projection: &[SelectItem], order_by: &[OrderByExpr]) -> (bool, Vec<Expr>) {
+    fn extract_window_functions(
+        &self,
+        projection: &[SelectItem],
+        order_by: &[OrderByExpr],
+    ) -> (bool, Vec<Expr>) {
         let mut wins = Vec::new();
         let mut has_win = false;
 
@@ -676,9 +772,17 @@ impl QueryPlanner {
             Expr::Not { expr } => Expr::Not {
                 expr: Box::new(self.rewrite_window_expression(expr, wins)),
             },
-            Expr::Function { name, args, distinct, over } => Expr::Function {
+            Expr::Function {
+                name,
+                args,
+                distinct,
+                over,
+            } => Expr::Function {
                 name: name.clone(),
-                args: args.iter().map(|a| self.rewrite_window_expression(a, wins)).collect(),
+                args: args
+                    .iter()
+                    .map(|a| self.rewrite_window_expression(a, wins))
+                    .collect(),
                 distinct: *distinct,
                 over: over.clone(),
             },
@@ -689,7 +793,10 @@ impl QueryPlanner {
     fn infer_expr_type(&self, expr: &Expr, schema: &Schema) -> crate::core::DataType {
         use crate::core::DataType;
         match expr {
-            Expr::Column(name) => schema.get_column(name).map(|c| c.data_type.clone()).unwrap_or(DataType::Text),
+            Expr::Column(name) => schema
+                .get_column(name)
+                .map(|c| c.data_type.clone())
+                .unwrap_or(DataType::Text),
             Expr::Literal(val) => match val {
                 Value::Integer(_) => DataType::Integer,
                 Value::Float(_) => DataType::Float,
@@ -702,14 +809,12 @@ impl QueryPlanner {
             },
             Expr::BinaryOp { left, .. } => self.infer_expr_type(left, schema),
             Expr::UnaryOp { expr, .. } => self.infer_expr_type(expr, schema),
-            Expr::Function { name, .. } => {
-                match name.to_uppercase().as_str() {
-                    "COUNT" | "ROW_NUMBER" | "RANK" | "LENGTH" => DataType::Integer,
-                    "SUM" | "AVG" => DataType::Float,
-                    "NOW" => DataType::Timestamp,
-                    _ => DataType::Text,
-                }
-            }
+            Expr::Function { name, .. } => match name.to_uppercase().as_str() {
+                "COUNT" | "ROW_NUMBER" | "RANK" | "LENGTH" => DataType::Integer,
+                "SUM" | "AVG" => DataType::Float,
+                "NOW" => DataType::Timestamp,
+                _ => DataType::Text,
+            },
             _ => DataType::Text,
         }
     }
