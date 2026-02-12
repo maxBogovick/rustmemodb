@@ -6,6 +6,8 @@
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
+extern crate self as rustmemodb;
+
 pub mod connection;
 pub mod core;
 mod evaluator;
@@ -16,12 +18,14 @@ pub mod interface;
 pub mod json;
 pub mod model_lang;
 mod parser;
+pub mod persist;
 pub mod planner;
 mod plugins;
 pub mod result;
 pub mod server;
 pub mod storage;
 pub mod transaction;
+pub use paste;
 
 // Re-export main types for convenience
 pub use core::{DataType, DbError, Result, Row, Value};
@@ -30,7 +34,32 @@ pub use interface::{DatabaseClient, DatabaseFactory};
 pub use model_lang::{
     FieldDecl, FieldType, ModelProgram, StructDecl, parse_and_materialize_models,
 };
+pub use persist::app::{
+    ManagedConflictKind, ManagedPersistVec, ManagedPersistVecStats, PersistApp,
+    PersistAppAutoPolicy, PersistAppPolicy, PersistCollection, PersistIndexedCollection,
+    PersistReplicationMode, PersistReplicationPolicy, classify_managed_conflict,
+};
+pub use persist::runtime::{
+    DeterministicCommandHandler, PersistEntityRuntime, RuntimeBackpressurePolicy,
+    RuntimeClosureHandler, RuntimeCommandPayloadSchema, RuntimeCompatIssue, RuntimeCompatReport,
+    RuntimeDurabilityMode, RuntimeEntityKey, RuntimeJournalOp, RuntimeJournalRecord,
+    RuntimeLifecyclePolicy, RuntimeLifecycleReport, RuntimeOperationalPolicy, RuntimePaths,
+    RuntimePayloadFieldContract, RuntimePayloadType, RuntimeReplicationMode,
+    RuntimeReplicationPolicy, RuntimeRetryPolicy, RuntimeSnapshotFile, RuntimeSnapshotPolicy,
+    RuntimeSnapshotWorker, RuntimeStats, RuntimeStoredEntity, runtime_snapshot_compat_check,
+    spawn_runtime_snapshot_worker,
+};
+pub use persist::{
+    FunctionDescriptor, HeteroPersistVec, HeteroPersistVecSnapshot, HeteroTypeSnapshot,
+    InvokeOutcome, InvokeStatus, ObjectDescriptor, PERSIST_SCHEMA_REGISTRY_TABLE,
+    PersistCommandContract, PersistCommandFieldContract, PersistCommandModel, PersistEntity,
+    PersistEntityFactory, PersistMetadata, PersistMigrationPlan, PersistMigrationStep,
+    PersistModelExt, PersistPatchContract, PersistSession, PersistState, PersistValue, PersistVec,
+    PersistVecSnapshot, RestoreConflictPolicy, SnapshotMode, StateMigrationFn,
+    default_schema_version,
+};
 pub use result::QueryResult;
+pub use rustmemodb_derive::PersistModel;
 
 // Re-export persistence types
 pub use storage::{DurabilityMode, PersistenceManager, WalEntry};

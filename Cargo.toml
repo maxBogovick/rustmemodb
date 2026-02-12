@@ -56,6 +56,8 @@ clap = { version = "4.5", features = ["derive"] }
 # Postgres Wire Protocol
 pgwire = "0.24"
 log = "0.4.28"
+paste = "1.0.15"
+rustmemodb_derive = { path = "rustmemodb_derive" }
 
 [features]
 default = []

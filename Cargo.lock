@@ -1839,11 +1839,13 @@ dependencies = [
  "lazy_static",
  "log",
  "lru 0.16.2",
+ "paste",
  "pgwire",
  "pprof",
  "ratatui",
  "regex",
  "rmp-serde",
+ "rustmemodb_derive",
  "serde",
  "serde_json",
  "sqlparser",
@@ -1854,6 +1856,15 @@ dependencies = [
  "tokio-test",
  "tui-textarea",
  "uuid",
+]
+
+[[package]]
+name = "rustmemodb_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.110",
 ]
 
 [[package]]

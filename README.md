@@ -24,6 +24,8 @@
 - [🔌 The "Drop-In" Architecture](#-the-drop-in-architecture)
 - [💾 Persistence & Durability](#-persistence--durability)
 - [🧩 Extensibility & Plugins](#-extensibility--plugins)
+- [🧱 Persist Macros](#-persist-macros-experimental)
+- [🧠 Persist Entity Runtime](#-persist-entity-runtime)
 - [⚙️ Engineering Internals](#-engineering-internals)
 - [❓ FAQ](#-faq)
 - [📦 Installation](#-installation)
@@ -34,6 +36,11 @@
 - [Quickstart](documentations/QUICKSTART.md)
 - [Database Implementation](documentations/SHORT_DOCUMENTATION.md)
 - [Metrics & Profiling](docs/metrics.md)
+- [Persist Roadmap](PERSIST_ROADMAP.md)
+- [Persist Command-First RFC](docs/persist/RFC_COMMAND_FIRST_PERSIST.md)
+- [Persist Showcase Example](examples/persist_showcase/README.md)
+- [Persist Runtime Showcase Example](examples/persist_runtime_showcase/README.md)
+- [Todo Persist Runtime Example](examples/todo_persist_runtime/README.md)
 
 ## ⚡ Why RustMemDB?
 
@@ -333,6 +340,378 @@ db.register_function("UPPER", Box::new(UpperEvaluator));
 // Use it immediately
 db.query("SELECT UPPER(name) FROM users");
 ```
+
+---
+
+## 🧱 Persist Macros (Experimental)
+
+RustMemDB now includes a persistence-oriented object layer:
+
+- `persist_struct!` generates an object that owns state and can persist itself.
+- `persist_vec!` manages collections of those objects.
+- `persist_vec!(hetero ...)` supports mixed object types in one collection.
+- `PersistApp` manages snapshot/recovery/replication lifecycle for collections.
+- `PersistApp::open_auto(...)` enables zero-thinking persistence defaults (auto recovery + auto snapshot policy).
+
+Command-first direction and API freeze are tracked in:
+- [PERSIST_ROADMAP.md](PERSIST_ROADMAP.md)
+- [docs/persist/RFC_COMMAND_FIRST_PERSIST.md](docs/persist/RFC_COMMAND_FIRST_PERSIST.md)
+
+### 1. Typed Mode (`struct` input)
+
+```rust
+use rustmemodb::{InMemoryDB, PersistSession, PersistEntity, persist_struct};
+
+persist_struct! {
+    pub struct UserState {
+        name: String,
+        score: i64,
+        active: bool,
+    }
+}
+
+# tokio_test::block_on(async {
+let session = PersistSession::new(InMemoryDB::new());
+let mut user = UserState::new("Alice".to_string(), 10, true);
+user.set_score(15);        // marks field as dirty
+user.save(&session).await?; // INSERT on first save, UPDATE on next save
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+### 2. Dynamic Mode from DDL
+
+```rust
+use rustmemodb::{PersistCommandModel, Value, persist_struct};
+
+persist_struct! {
+    pub struct DdlNote from_ddl =
+        "CREATE TABLE source_note (title TEXT NOT NULL, score INTEGER, active BOOLEAN)"
+}
+
+let mut note = DdlNote::new()?;
+note.set_field("title", Value::Text("Hello".into()))?;
+note.set_field("score", Value::Integer(42))?;
+
+// Command-first API is also generated for dynamic entities.
+let draft = DdlNoteDraft::new()
+    .with_field("title", Value::Text("From draft".into()))?
+    .with_field("score", Value::Integer(1))?;
+let mut from_draft = <DdlNote as PersistCommandModel>::try_from_draft(draft)?;
+from_draft.apply(DdlNoteCommand::set("active", Value::Boolean(true)))?;
+from_draft.patch(
+    DdlNotePatch::new().with_field("score", Value::Integer(2))?
+)?;
+```
+
+### 3. Dynamic Mode from JSON Schema
+
+```rust
+use rustmemodb::{PersistCommandModel, Value, persist_struct};
+
+persist_struct! {
+    pub struct JsonNote from_json_schema = r#"{
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "count": { "type": "integer" },
+        "flag": { "type": "boolean" }
+      },
+      "required": ["title"]
+    }"#
+}
+
+let mut note = JsonNote::new()?;
+note.set_field("title", Value::Text("Item".into()))?;
+
+// The same Draft/Patch/Command trio exists in JSON Schema mode.
+let draft = JsonNoteDraft::new().with_field("title", Value::Text("json".into()))?;
+let mut item = <JsonNote as PersistCommandModel>::try_from_draft(draft)?;
+item.apply(JsonNoteCommand::set("count", Value::Integer(3)))?;
+```
+
+### 4. Heterogeneous Collection
+
+```rust
+use rustmemodb::{
+    InMemoryDB, PersistSession, PersistEntityFactory, SnapshotMode,
+    RestoreConflictPolicy, persist_vec
+};
+
+persist_vec!(hetero pub MixedPersistVec);
+
+# tokio_test::block_on(async {
+let session = PersistSession::new(InMemoryDB::new());
+let mut mixed = MixedPersistVec::new("mixed");
+mixed.register_type::<UserState>();
+mixed.register_type::<DdlNote>();
+
+mixed.add_one(UserState::new("A".into(), 1, true))?;
+mixed.add_one(DdlNote::new()?)?;
+mixed.save_all(&session).await?;
+
+let snapshot = mixed.snapshot(SnapshotMode::WithData);
+
+let mut restored = MixedPersistVec::new("restored");
+restored.register_type::<UserState>();
+restored.register_type::<DdlNote>();
+restored
+    .restore_with_policy(snapshot, &session, RestoreConflictPolicy::OverwriteExisting)
+    .await?;
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+### 5. Managed Collection via `PersistApp`
+
+```rust
+use rustmemodb::{PersistApp, persist_struct, persist_vec};
+
+persist_struct! {
+    pub struct TodoItem {
+        title: String,
+        done: bool,
+    }
+}
+persist_vec!(pub TodoVec, TodoItem);
+
+# tokio_test::block_on(async {
+let app = PersistApp::open_auto("./.persist_data").await?;
+let mut todos = app.open_vec::<TodoVec>("todos").await?;
+
+let todo_id = todos
+    .create_from_draft(TodoItemDraft::new("Write RFC".to_string(), false))
+    .await?;
+
+todos
+    .patch(
+        &todo_id,
+        TodoItemPatch {
+            done: Some(true),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+todos
+    .apply_command(&todo_id, TodoItemCommand::SetTitle("Ship RFC".to_string()))
+    .await?;
+
+let items = todos.list_page(0, 50);
+assert_eq!(items.len(), 1);
+
+todos.delete(&todo_id).await?;
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+Managed write semantics for `PersistApp` collections:
+- `create/update/delete` and `create_many/apply_many/delete_many` are atomic.
+- Batch operations are `all-or-nothing`: on any write error, in-memory and DB state are rolled back.
+- Optimistic lock / write-write / unique-key failures are surfaced as explicit conflicts.
+
+```rust
+use rustmemodb::{classify_managed_conflict, ManagedConflictKind};
+# use rustmemodb::{PersistApp, persist_struct, persist_vec};
+# persist_struct! {
+#   pub struct TodoItem {
+#       title: String,
+#       done: bool,
+#   }
+# }
+# persist_vec!(pub TodoVec, TodoItem);
+# tokio_test::block_on(async {
+# let app = PersistApp::open_auto("./.persist_data").await?;
+# let mut todos = app.open_vec::<TodoVec>("todos").await?;
+# let todo_id = todos
+#     .create_from_draft(TodoItemDraft::new("Write RFC".to_string(), false))
+#     .await?;
+# let mut stale = app.open_vec::<TodoVec>("todos").await?;
+# todos
+#     .patch(
+#         &todo_id,
+#         TodoItemPatch {
+#             done: Some(true),
+#             ..Default::default()
+#         },
+#     )
+#     .await?;
+let err = stale
+    .apply_command(&todo_id, TodoItemCommand::SetDone(true))
+    .await
+    .expect_err("stale update should conflict");
+
+assert_eq!(
+    classify_managed_conflict(&err),
+    Some(ManagedConflictKind::OptimisticLock)
+);
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+### 5. Auto-Persist With Bound Session
+
+```rust
+use rustmemodb::{InMemoryDB, PersistSession, PersistEntity, persist_struct};
+
+persist_struct! {
+    pub struct LiveUser {
+        name: String,
+        score: i64,
+        active: bool,
+    }
+}
+
+# tokio_test::block_on(async {
+let session = PersistSession::new(InMemoryDB::new());
+let mut user = LiveUser::new("Mia".into(), 1, true);
+user.bind_session(session.clone());
+user.set_auto_persist(true)?;
+user.set_score_persisted(2).await?; // changes + save automatically
+user.mutate_persisted(|u| u.set_active(false)).await?; // batch mutate + auto-save
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+### 6. Existing Struct via Derive (`PersistModel`)
+
+```rust
+use rustmemodb::{PersistModel, PersistEntity, persist_struct};
+
+#[derive(PersistModel)]
+#[persist_model(schema_version = 2)]
+struct Task {
+    title: String,
+    done: bool,
+    attempts: i64,
+}
+
+persist_struct!(pub struct PersistedTask from_struct = Task);
+
+# tokio_test::block_on(async {
+let mut task = PersistedTask::from_draft(PersistedTaskDraft::new(
+    "Write tests".into(),
+    false,
+    0,
+));
+task.apply(PersistedTaskCommand::SetAttempts(1))?;
+task.patch(PersistedTaskPatch {
+    done: Some(true),
+    ..Default::default()
+})?;
+
+// Alias generated from existing struct:
+let _alias = PersistedTask::from_parts("Ship".into(), false, 1);
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+### 7. Schema Versioning and Migrations (Stable API)
+
+```rust
+use rustmemodb::{
+    InMemoryDB, PersistMigrationPlan, PersistMigrationStep, PersistSession,
+    RestoreConflictPolicy, SnapshotMode
+};
+
+# use rustmemodb::{persist_struct, persist_vec, PersistEntity};
+# persist_struct! {
+#   pub struct UserState {
+#       name: String,
+#       score: i64,
+#       active: bool,
+#   }
+# }
+# persist_vec!(pub UserStateVec, UserState);
+# tokio_test::block_on(async {
+let source_session = PersistSession::new(InMemoryDB::new());
+let mut users = UserStateVec::new("users");
+users.add_one(UserState::new("A".into(), 10, true));
+users.save_all(&source_session).await?;
+
+let mut snapshot = users.snapshot(SnapshotMode::WithData);
+for state in &mut snapshot.states {
+    state.metadata.schema_version = 1;
+}
+
+let mut plan = PersistMigrationPlan::new(2);
+plan.add_step(
+    PersistMigrationStep::new(1, 2).with_state_migrator(|state| {
+        let fields = state.fields_object_mut()?;
+        let score = fields.get("score").and_then(|v| v.as_i64()).unwrap_or(0);
+        fields.insert("score".to_string(), serde_json::json!(score * 10));
+        Ok(())
+    }),
+)?;
+
+let restore_session = PersistSession::new(InMemoryDB::new());
+let mut restored = UserStateVec::new("users-restored");
+restored
+    .restore_with_custom_migration_plan(
+        snapshot,
+        &restore_session,
+        RestoreConflictPolicy::FailFast,
+        plan,
+    )
+    .await?;
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+`restore_with_policy` supports:
+- `FailFast` (default)
+- `SkipExisting`
+- `OverwriteExisting`
+
+Persist macros and migration contracts above are exposed as stable public API.
+
+---
+
+## 🧠 Persist Entity Runtime
+
+For long-running autonomous entities (event-sourcing style), use `PersistEntityRuntime`.
+It gives:
+
+- deterministic command registry (replay-safe handlers),
+- strict payload contracts for command input (`RuntimeCommandPayloadSchema`),
+- durable JSONL journal + crash recovery,
+- snapshot scheduler + compaction,
+- optional background snapshot worker (`spawn_runtime_snapshot_worker`),
+- replication shipping for journal/snapshot (sync or async best-effort),
+- lifecycle passivation/resurrection/GC,
+- strict/eventual durability policies with retry/backpressure controls,
+- optional non-serializable runtime closures for local behavior.
+
+```rust
+use rustmemodb::{
+    PersistEntityRuntime, RuntimeDurabilityMode, RuntimeOperationalPolicy
+};
+use serde_json::json;
+
+# tokio_test::block_on(async {
+let mut policy = RuntimeOperationalPolicy::default();
+policy.durability = RuntimeDurabilityMode::Strict;
+
+let mut rt = PersistEntityRuntime::open("./runtime_data", policy).await?;
+rt.register_deterministic_command("Counter", "increment", std::sync::Arc::new(|state, payload| {
+    let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(1);
+    let fields = state.fields_object_mut()?;
+    let current = fields.get("count").and_then(|v| v.as_i64()).unwrap_or(0);
+    fields.insert("count".to_string(), json!(current + delta));
+    Ok(())
+}));
+
+let id = rt.create_entity("Counter", "counter_table", json!({"count": 0}), 1).await?;
+rt.apply_deterministic_command("Counter", &id, "increment", json!({"delta": 2})).await?;
+rt.force_snapshot_and_compact().await?;
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+See full scenario in:
+- [examples/persist_runtime_showcase](examples/persist_runtime_showcase/README.md)
+- [examples/todo_persist_runtime](examples/todo_persist_runtime/README.md)
+- CLI tooling: `cargo run --bin persist_tool -- --help`
 
 ---
 
