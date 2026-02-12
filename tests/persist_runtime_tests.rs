@@ -1,12 +1,15 @@
 use rustmemodb::{
-    PersistEntityRuntime, RuntimeCommandPayloadSchema, RuntimeDurabilityMode,
-    RuntimeLifecyclePolicy, RuntimeOperationalPolicy, RuntimePayloadType, RuntimeReplicationMode,
-    RuntimeSnapshotPolicy, Value, spawn_runtime_snapshot_worker,
+    PersistEntityRuntime, RuntimeCommandEnvelope, RuntimeCommandPayloadSchema,
+    RuntimeConsistencyMode, RuntimeDeterminismPolicy, RuntimeDurabilityMode,
+    RuntimeLifecyclePolicy, RuntimeOperationalPolicy, RuntimeOutboxStatus, RuntimePayloadType,
+    RuntimeProjectionContract, RuntimeProjectionField, RuntimeReplicationMode,
+    RuntimeSideEffectSpec, RuntimeSnapshotPolicy, Value, spawn_runtime_snapshot_worker,
 };
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 fn count_from_state(state: &rustmemodb::PersistState) -> i64 {
     state
@@ -430,4 +433,640 @@ async fn runtime_keeps_nonserializable_runtime_closures() {
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     assert_eq!(name, "box-z");
+}
+
+#[tokio::test]
+async fn runtime_envelope_path_supports_cas_idempotency_and_outbox_recovery() {
+    let dir = tempdir().unwrap();
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.durability = RuntimeDurabilityMode::Strict;
+
+    let persist_id = {
+        let mut runtime = PersistEntityRuntime::open(dir.path(), policy.clone())
+            .await
+            .unwrap();
+
+        runtime.register_deterministic_envelope_command_with_schema(
+            "Counter",
+            "increment",
+            RuntimeCommandPayloadSchema::object()
+                .require_field("delta", RuntimePayloadType::Integer)
+                .allow_extra_fields(false),
+            Arc::new(|state, envelope| {
+                let delta = envelope
+                    .payload_json
+                    .get("delta")
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| {
+                        rustmemodb::DbError::ExecutionError("Missing delta".to_string())
+                    })?;
+                let fields = state.fields_object_mut()?;
+                let current = fields
+                    .get("count")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or_default();
+                fields.insert("count".to_string(), json!(current + delta));
+                state.metadata.version = state.metadata.version.saturating_add(1);
+                Ok(vec![RuntimeSideEffectSpec {
+                    effect_type: "counter.incremented".to_string(),
+                    payload_json: json!({
+                        "delta": delta,
+                        "entity_id": envelope.entity_id,
+                    }),
+                }])
+            }),
+        );
+
+        let persist_id = runtime
+            .create_entity("Counter", "runtime_counter", json!({"count": 0}), 1)
+            .await
+            .unwrap();
+        let initial = runtime.get_state("Counter", &persist_id).unwrap();
+        assert_eq!(initial.metadata.version, 1);
+
+        let envelope =
+            RuntimeCommandEnvelope::new("Counter", &persist_id, "increment", json!({"delta": 2}))
+                .with_expected_version(1)
+                .with_idempotency_key("counter-op-1");
+
+        let applied = runtime
+            .apply_command_envelope(envelope.clone())
+            .await
+            .unwrap();
+        assert!(!applied.idempotent_replay);
+        assert_eq!(count_from_state(&applied.state), 2);
+        assert_eq!(applied.state.metadata.version, 2);
+        assert_eq!(applied.outbox.len(), 1);
+        assert_eq!(applied.outbox[0].status, RuntimeOutboxStatus::Pending);
+
+        let replay = runtime
+            .apply_command_envelope(envelope.clone())
+            .await
+            .unwrap();
+        assert!(replay.idempotent_replay);
+        assert_eq!(count_from_state(&replay.state), 2);
+
+        let cas_conflict = runtime
+            .apply_command_envelope(
+                RuntimeCommandEnvelope::new(
+                    "Counter",
+                    &persist_id,
+                    "increment",
+                    json!({"delta": 1}),
+                )
+                .with_expected_version(1),
+            )
+            .await;
+        assert!(cas_conflict.is_err());
+
+        let pending_before_dispatch = runtime.list_pending_outbox_records();
+        assert_eq!(pending_before_dispatch.len(), 1);
+
+        runtime
+            .mark_outbox_dispatched(&pending_before_dispatch[0].outbox_id)
+            .await
+            .unwrap();
+        assert!(runtime.list_pending_outbox_records().is_empty());
+
+        persist_id
+    };
+
+    let mut reopened = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+    reopened.register_deterministic_envelope_command_with_schema(
+        "Counter",
+        "increment",
+        RuntimeCommandPayloadSchema::object()
+            .require_field("delta", RuntimePayloadType::Integer)
+            .allow_extra_fields(false),
+        Arc::new(|state, envelope| {
+            let delta = envelope
+                .payload_json
+                .get("delta")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| rustmemodb::DbError::ExecutionError("Missing delta".to_string()))?;
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            state.metadata.version = state.metadata.version.saturating_add(1);
+            Ok(vec![RuntimeSideEffectSpec {
+                effect_type: "counter.incremented".to_string(),
+                payload_json: json!({
+                    "delta": delta,
+                    "entity_id": envelope.entity_id,
+                }),
+            }])
+        }),
+    );
+
+    let replay_after_restart = reopened
+        .apply_command_envelope(
+            RuntimeCommandEnvelope::new("Counter", &persist_id, "increment", json!({"delta": 2}))
+                .with_expected_version(1)
+                .with_idempotency_key("counter-op-1"),
+        )
+        .await
+        .unwrap();
+    assert!(replay_after_restart.idempotent_replay);
+    assert_eq!(count_from_state(&replay_after_restart.state), 2);
+    assert!(reopened.list_pending_outbox_records().is_empty());
+
+    let outbox = reopened.list_outbox_records();
+    assert_eq!(outbox.len(), 1);
+    assert_eq!(outbox[0].status, RuntimeOutboxStatus::Dispatched);
+}
+
+#[tokio::test]
+async fn runtime_strict_context_policy_rejects_unsafe_handler_modes() {
+    let dir = tempdir().unwrap();
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.determinism = RuntimeDeterminismPolicy::StrictContextOnly;
+
+    let mut runtime = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+    runtime.register_deterministic_command(
+        "Counter",
+        "increment",
+        Arc::new(|state, payload| {
+            let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(0);
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            Ok(())
+        }),
+    );
+
+    let id = runtime
+        .create_entity("Counter", "runtime_counter", json!({"count": 0}), 1)
+        .await
+        .unwrap();
+
+    let err = runtime
+        .apply_command_envelope(RuntimeCommandEnvelope::new(
+            "Counter",
+            &id,
+            "increment",
+            json!({"delta": 1}),
+        ))
+        .await
+        .unwrap_err();
+    let message = format!("{err}");
+    assert!(message.contains("StrictContextOnly"));
+}
+
+#[tokio::test]
+async fn runtime_context_handler_gets_deterministic_context_and_panic_rolls_back() {
+    let dir = tempdir().unwrap();
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.determinism = RuntimeDeterminismPolicy::StrictContextOnly;
+
+    let mut runtime = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+
+    runtime.register_deterministic_context_command_with_schema(
+        "Counter",
+        "increment",
+        RuntimeCommandPayloadSchema::object()
+            .require_field("delta", RuntimePayloadType::Integer)
+            .allow_extra_fields(false),
+        Arc::new(|state, payload, ctx| {
+            let delta = payload
+                .get("delta")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            Ok(vec![RuntimeSideEffectSpec {
+                effect_type: "counter.incremented".to_string(),
+                payload_json: json!({
+                    "event_id": ctx.deterministic_uuid("counter.incremented"),
+                    "delta": delta
+                }),
+            }])
+        }),
+    );
+
+    runtime.register_deterministic_context_command(
+        "Counter",
+        "explode",
+        Arc::new(|state, _payload, _ctx| {
+            let fields = state.fields_object_mut()?;
+            fields.insert("count".to_string(), json!(999));
+            panic!("deterministic handler panic");
+        }),
+    );
+
+    let id = runtime
+        .create_entity("Counter", "runtime_counter", json!({"count": 0}), 1)
+        .await
+        .unwrap();
+
+    let envelope = RuntimeCommandEnvelope::new("Counter", &id, "increment", json!({"delta": 3}))
+        .with_expected_version(1);
+    let expected_event_id = Uuid::new_v5(&envelope.envelope_id, b"counter.incremented");
+
+    let applied = runtime.apply_command_envelope(envelope).await.unwrap();
+    assert_eq!(count_from_state(&applied.state), 3);
+    assert_eq!(
+        applied.outbox[0]
+            .payload_json
+            .get("event_id")
+            .and_then(|v| v.as_str())
+            .unwrap(),
+        expected_event_id.to_string()
+    );
+
+    let panic_result = runtime
+        .apply_command_envelope(RuntimeCommandEnvelope::new(
+            "Counter",
+            &id,
+            "explode",
+            json!({}),
+        ))
+        .await;
+    assert!(panic_result.is_err());
+
+    let after_panic = runtime.get_state("Counter", &id).unwrap();
+    assert_eq!(count_from_state(&after_panic), 3);
+}
+
+#[tokio::test]
+async fn runtime_projection_sync_index_lookup_and_rebuild() {
+    let dir = tempdir().unwrap();
+    let policy = RuntimeOperationalPolicy::default();
+
+    let user_id = {
+        let mut runtime = PersistEntityRuntime::open(dir.path(), policy.clone())
+            .await
+            .unwrap();
+        runtime.register_deterministic_command_with_schema(
+            "User",
+            "rename",
+            RuntimeCommandPayloadSchema::object()
+                .require_field("email", RuntimePayloadType::Text)
+                .allow_extra_fields(false),
+            Arc::new(|state, payload| {
+                let email = payload
+                    .get("email")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| {
+                        rustmemodb::DbError::ExecutionError("Missing email".to_string())
+                    })?;
+                let fields = state.fields_object_mut()?;
+                fields.insert("email".to_string(), json!(email));
+                Ok(())
+            }),
+        );
+
+        runtime
+            .register_projection_contract(
+                RuntimeProjectionContract::new("User", "user_projection")
+                    .with_field(
+                        RuntimeProjectionField::new("email", "email", RuntimePayloadType::Text)
+                            .indexed(true),
+                    )
+                    .with_field(RuntimeProjectionField::new(
+                        "balance",
+                        "balance",
+                        RuntimePayloadType::Integer,
+                    )),
+            )
+            .unwrap();
+
+        let user_id = runtime
+            .create_entity(
+                "User",
+                "user_state",
+                json!({
+                    "email": "alice@example.com",
+                    "balance": 10
+                }),
+                1,
+            )
+            .await
+            .unwrap();
+
+        let created_rows = runtime.list_projection_rows("User").unwrap();
+        assert_eq!(created_rows.len(), 1);
+        assert_eq!(
+            created_rows[0]
+                .values
+                .get("email")
+                .and_then(|value| value.as_str()),
+            Some("alice@example.com")
+        );
+
+        let ids_by_alice = runtime
+            .find_projection_entity_ids_by_index("User", "email", &json!("alice@example.com"))
+            .unwrap();
+        assert_eq!(ids_by_alice, vec![user_id.clone()]);
+
+        let renamed = RuntimeCommandEnvelope::new(
+            "User",
+            &user_id,
+            "rename",
+            json!({"email": "alice+v2@example.com"}),
+        )
+        .with_expected_version(1);
+        runtime.apply_command_envelope(renamed).await.unwrap();
+
+        let ids_by_old = runtime
+            .find_projection_entity_ids_by_index("User", "email", &json!("alice@example.com"))
+            .unwrap();
+        assert!(ids_by_old.is_empty());
+
+        let ids_by_new = runtime
+            .find_projection_entity_ids_by_index("User", "email", &json!("alice+v2@example.com"))
+            .unwrap();
+        assert_eq!(ids_by_new, vec![user_id.clone()]);
+
+        runtime.rebuild_registered_projections().unwrap();
+        let rows_after_rebuild = runtime
+            .find_projection_rows_by_index("User", "email", &json!("alice+v2@example.com"))
+            .unwrap();
+        assert_eq!(rows_after_rebuild.len(), 1);
+        assert_eq!(rows_after_rebuild[0].entity_id, user_id);
+
+        user_id
+    };
+
+    let mut reopened = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+    reopened.register_deterministic_command_with_schema(
+        "User",
+        "rename",
+        RuntimeCommandPayloadSchema::object()
+            .require_field("email", RuntimePayloadType::Text)
+            .allow_extra_fields(false),
+        Arc::new(|state, payload| {
+            let email = payload
+                .get("email")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| rustmemodb::DbError::ExecutionError("Missing email".to_string()))?;
+            let fields = state.fields_object_mut()?;
+            fields.insert("email".to_string(), json!(email));
+            Ok(())
+        }),
+    );
+    reopened
+        .register_projection_contract(
+            RuntimeProjectionContract::new("User", "user_projection")
+                .with_field(
+                    RuntimeProjectionField::new("email", "email", RuntimePayloadType::Text)
+                        .indexed(true),
+                )
+                .with_field(RuntimeProjectionField::new(
+                    "balance",
+                    "balance",
+                    RuntimePayloadType::Integer,
+                )),
+        )
+        .unwrap();
+
+    let restored_rows = reopened
+        .find_projection_rows_by_index("User", "email", &json!("alice+v2@example.com"))
+        .unwrap();
+    assert_eq!(restored_rows.len(), 1);
+    assert_eq!(restored_rows[0].entity_id, user_id);
+}
+
+#[tokio::test]
+async fn runtime_consistency_mode_normalizes_operational_policy() {
+    let dir = tempdir().unwrap();
+
+    let mut strong_policy = RuntimeOperationalPolicy::default();
+    strong_policy.consistency = RuntimeConsistencyMode::Strong;
+    strong_policy.durability = RuntimeDurabilityMode::Eventual {
+        sync_interval_ms: 9_999,
+    };
+    strong_policy.replication.mode = RuntimeReplicationMode::AsyncBestEffort;
+    let strong_runtime = PersistEntityRuntime::open(dir.path().join("strong"), strong_policy)
+        .await
+        .unwrap();
+    assert!(matches!(
+        strong_runtime.policy().durability,
+        RuntimeDurabilityMode::Strict
+    ));
+    assert_eq!(
+        strong_runtime.policy().replication.mode,
+        RuntimeReplicationMode::Sync
+    );
+
+    let mut eventual_policy = RuntimeOperationalPolicy::default();
+    eventual_policy.consistency = RuntimeConsistencyMode::Eventual;
+    let eventual_runtime = PersistEntityRuntime::open(dir.path().join("eventual"), eventual_policy)
+        .await
+        .unwrap();
+    match eventual_runtime.policy().durability {
+        RuntimeDurabilityMode::Eventual { sync_interval_ms } => {
+            assert_eq!(sync_interval_ms, 250);
+        }
+        RuntimeDurabilityMode::Strict => {
+            panic!("expected eventual durability mode");
+        }
+    }
+    assert_eq!(
+        eventual_runtime.policy().replication.mode,
+        RuntimeReplicationMode::AsyncBestEffort
+    );
+}
+
+#[tokio::test]
+async fn runtime_stats_expose_slo_metrics_and_lifecycle_churn() {
+    let dir = tempdir().unwrap();
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.lifecycle = RuntimeLifecyclePolicy {
+        passivate_after_ms: 0,
+        gc_after_ms: 30_000,
+        max_hot_objects: 100,
+        gc_only_if_never_touched: false,
+    };
+
+    let mut runtime = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+    runtime.register_deterministic_command(
+        "Counter",
+        "increment",
+        Arc::new(|state, payload| {
+            let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(1);
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            Ok(())
+        }),
+    );
+    runtime
+        .register_projection_contract(
+            RuntimeProjectionContract::new("Counter", "counter_projection").with_field(
+                RuntimeProjectionField::new("count", "count", RuntimePayloadType::Integer),
+            ),
+        )
+        .unwrap();
+
+    let id = runtime
+        .create_entity("Counter", "counter_state", json!({"count": 0}), 1)
+        .await
+        .unwrap();
+    let applied = runtime
+        .apply_command_envelope(
+            RuntimeCommandEnvelope::new("Counter", &id, "increment", json!({"delta": 3}))
+                .with_expected_version(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(count_from_state(&applied.state), 3);
+
+    let stats = runtime.stats();
+    let slo = runtime.slo_metrics();
+    assert_eq!(stats.projection_lag_entities, 0);
+    assert_eq!(stats.mailbox_entities, 1);
+    assert_eq!(stats.mailbox_busy_entities, 0);
+    assert!(stats.durability_lag_ms <= 5_000);
+    assert_eq!(slo.projection_lag_entities, stats.projection_lag_entities);
+    assert_eq!(slo.lifecycle_churn_total, stats.lifecycle_churn_total);
+    assert_eq!(slo.mailbox_busy_entities, stats.mailbox_busy_entities);
+
+    let report = runtime.run_lifecycle_maintenance().await.unwrap();
+    assert_eq!(report.passivated, 1);
+    let stats_after_lifecycle = runtime.stats();
+    assert_eq!(stats_after_lifecycle.lifecycle_passivated_total, 1);
+    assert_eq!(stats_after_lifecycle.lifecycle_gc_deleted_total, 0);
+    assert_eq!(
+        stats_after_lifecycle.lifecycle_churn_total,
+        stats_after_lifecycle.lifecycle_passivated_total
+            + stats_after_lifecycle.lifecycle_resurrected_total
+            + stats_after_lifecycle.lifecycle_gc_deleted_total
+    );
+}
+
+#[tokio::test]
+async fn runtime_chaos_crash_recovery_with_lifecycle_preserves_state() {
+    let dir = tempdir().unwrap();
+
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.consistency = RuntimeConsistencyMode::Strong;
+    policy.snapshot = RuntimeSnapshotPolicy {
+        snapshot_every_ops: 4,
+        compact_if_journal_exceeds_bytes: 1024 * 1024,
+        background_worker_interval_ms: None,
+    };
+    policy.lifecycle = RuntimeLifecyclePolicy {
+        passivate_after_ms: 0,
+        gc_after_ms: 60_000,
+        max_hot_objects: 100,
+        gc_only_if_never_touched: false,
+    };
+
+    let mut entity_id: Option<String> = None;
+    let mut expected = 0i64;
+
+    for step in 0..24 {
+        let mut runtime = PersistEntityRuntime::open(dir.path(), policy.clone())
+            .await
+            .unwrap();
+        runtime.register_deterministic_command_with_schema(
+            "Counter",
+            "increment",
+            RuntimeCommandPayloadSchema::object()
+                .require_field("delta", RuntimePayloadType::Integer)
+                .allow_extra_fields(false),
+            Arc::new(|state, payload| {
+                let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(0);
+                let fields = state.fields_object_mut()?;
+                let current = fields
+                    .get("count")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or_default();
+                fields.insert("count".to_string(), json!(current + delta));
+                Ok(())
+            }),
+        );
+
+        let current_id = if let Some(existing) = entity_id.clone() {
+            existing
+        } else {
+            let id = runtime
+                .create_entity("Counter", "counter_state", json!({"count": 0}), 1)
+                .await
+                .unwrap();
+            entity_id = Some(id.clone());
+            id
+        };
+
+        let delta = if step % 3 == 0 { 2 } else { 1 };
+        let version = runtime
+            .get_state("Counter", &current_id)
+            .unwrap()
+            .metadata
+            .version as u64;
+        runtime
+            .apply_command_envelope(
+                RuntimeCommandEnvelope::new(
+                    "Counter",
+                    &current_id,
+                    "increment",
+                    json!({ "delta": delta }),
+                )
+                .with_expected_version(version)
+                .with_idempotency_key(format!("chaos-step-{step}")),
+            )
+            .await
+            .unwrap();
+        expected += delta;
+
+        if step % 2 == 0 {
+            let _ = runtime.run_lifecycle_maintenance().await.unwrap();
+        }
+        if step % 5 == 0 {
+            runtime.force_snapshot_and_compact().await.unwrap();
+        }
+    }
+
+    let mut recovered = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+    recovered.register_deterministic_command_with_schema(
+        "Counter",
+        "increment",
+        RuntimeCommandPayloadSchema::object()
+            .require_field("delta", RuntimePayloadType::Integer)
+            .allow_extra_fields(false),
+        Arc::new(|state, payload| {
+            let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(0);
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            Ok(())
+        }),
+    );
+
+    let final_id = entity_id.expect("entity id must be created");
+    let recovered_state = recovered.get_state("Counter", &final_id).unwrap();
+    assert_eq!(count_from_state(&recovered_state), expected);
+
+    let report = recovered.run_lifecycle_maintenance().await.unwrap();
+    assert!(report.passivated >= 1);
+    let stats = recovered.stats();
+    assert_eq!(stats.lifecycle_gc_deleted_total, 0);
 }

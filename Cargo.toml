@@ -45,7 +45,7 @@ pprof = { version = "0.13", features = ["flamegraph"], optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 
 # UUID
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
 
 # CLI dependencies
 ratatui = "0.29.0"
@@ -56,6 +56,7 @@ clap = { version = "4.5", features = ["derive"] }
 # Postgres Wire Protocol
 pgwire = "0.24"
 log = "0.4.28"
+tracing = "0.1"
 paste = "1.0.15"
 rustmemodb_derive = { path = "rustmemodb_derive" }
 
@@ -67,4 +68,4 @@ pprof = ["dep:pprof"]
 [dev-dependencies]
 tokio-test = "0.4"
 tokio-postgres = "0.7"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "v5", "serde"] }

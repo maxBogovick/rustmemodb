@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 pub mod app;
+pub mod cluster;
 mod macros;
 pub mod runtime;
 

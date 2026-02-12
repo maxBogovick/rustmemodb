@@ -606,7 +606,74 @@ let _alias = PersistedTask::from_parts("Ship".into(), false, 1);
 # })?;
 ```
 
-### 7. Schema Versioning and Migrations (Stable API)
+### 7. Attribute DSL (`#[persistent]`, `#[persistent_impl]`, `#[command]`)
+
+```rust
+use rustmemodb::{InMemoryDB, PersistEntityRuntime, PersistSession, RuntimeOperationalPolicy};
+
+#[rustmemodb::persistent(schema_version = 2, table = "wallets")]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+struct Wallet {
+    #[sql(index)]
+    owner: String,
+    #[sql]
+    balance: i64,
+}
+
+#[rustmemodb::persistent_impl]
+impl Wallet {
+    #[rustmemodb::command]
+    fn deposit(&mut self, amount: i64) -> rustmemodb::Result<i64> {
+        self.balance += amount;
+        Ok(self.balance)
+    }
+}
+
+# tokio_test::block_on(async {
+let session = PersistSession::new(InMemoryDB::new());
+let mut wallet = Wallet { owner: "A".into(), balance: 10 }.into_persisted();
+wallet.bind_session(session);
+wallet.save_bound().await?;
+
+let output = wallet
+    .apply_domain_command_persisted(WalletPersistentCommand::Deposit { amount: 5 })
+    .await?;
+assert_eq!(output.as_i64(), Some(15));
+
+let command = WalletPersistentCommand::Deposit { amount: 3 };
+let envelope = wallet.domain_command_envelope_with_expected_version(&command)?;
+assert_eq!(envelope.command_name, "deposit");
+assert_eq!(envelope.payload_json["amount"], serde_json::json!(3));
+
+// Optional bridge: register all #[command] methods as runtime deterministic handlers.
+let mut runtime = PersistEntityRuntime::open(
+    "./tmp_wallet_runtime",
+    RuntimeOperationalPolicy::default(),
+).await?;
+WalletPersisted::try_register_domain_commands_in_runtime(&mut runtime)?;
+
+// Projection helpers are generated for indexed #[sql(index)] fields.
+let wallet_id = runtime
+    .create_entity(
+        "Wallet",
+        "wallet_state",
+        serde_json::json!({"owner": "A", "balance": 15}),
+        1,
+    )
+    .await?;
+let ids = WalletPersisted::find_projection_ids_by_owner(&runtime, "A".to_string())?;
+assert_eq!(ids, vec![wallet_id]);
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
+
+Full end-to-end usage is shown in `examples/crm_no_sql.rs`.
+
+Projection mapping rules:
+- if no field has `#[sql(...)]`, all model fields are projected by default;
+- if at least one field has `#[sql(...)]`, only explicitly annotated fields are projected.
+
+### 8. Schema Versioning and Migrations (Stable API)
 
 ```rust
 use rustmemodb::{
@@ -673,36 +740,67 @@ For long-running autonomous entities (event-sourcing style), use `PersistEntityR
 It gives:
 
 - deterministic command registry (replay-safe handlers),
+- envelope-first command API (`RuntimeCommandEnvelope`),
+- deterministic context API for sanctioned handlers (`RuntimeDeterministicContext`),
+- consistency profiles (`RuntimeConsistencyMode::{Strong, LocalDurable, Eventual}`),
+- expected-version CAS checks on write,
+- scoped idempotency deduplication (`entity_type:entity_id:command:idempotency_key`),
 - strict payload contracts for command input (`RuntimeCommandPayloadSchema`),
+- deterministic side-effects to durable outbox records,
+- projection contracts (`RuntimeProjectionContract`) with synchronous write path,
+- indexed projection lookups (`find_projection_*`) for `#[sql(index)]` fields,
+- projection rebuild from loaded snapshot+journal state (`rebuild_registered_projections`),
 - durable JSONL journal + crash recovery,
 - snapshot scheduler + compaction,
 - optional background snapshot worker (`spawn_runtime_snapshot_worker`),
 - replication shipping for journal/snapshot (sync or async best-effort),
 - lifecycle passivation/resurrection/GC,
+- mailbox-backed lifecycle safety (busy entities are excluded from passivate/GC),
+- tracing spans/events for envelope flow and outbox dispatch (OpenTelemetry-friendly via `tracing`),
+- SLO runtime stats (`durability_lag_ms`, `projection_lag_entities`, `lifecycle_churn_total`) via `stats()`/`slo_metrics()`,
 - strict/eventual durability policies with retry/backpressure controls,
 - optional non-serializable runtime closures for local behavior.
 
 ```rust
 use rustmemodb::{
-    PersistEntityRuntime, RuntimeDurabilityMode, RuntimeOperationalPolicy
+    PersistEntityRuntime, RuntimeCommandEnvelope, RuntimeConsistencyMode,
+    RuntimeDeterminismPolicy, RuntimeOperationalPolicy, RuntimeSideEffectSpec
 };
 use serde_json::json;
 
 # tokio_test::block_on(async {
 let mut policy = RuntimeOperationalPolicy::default();
-policy.durability = RuntimeDurabilityMode::Strict;
+policy.consistency = RuntimeConsistencyMode::Strong;
+policy.determinism = RuntimeDeterminismPolicy::StrictContextOnly;
 
 let mut rt = PersistEntityRuntime::open("./runtime_data", policy).await?;
-rt.register_deterministic_command("Counter", "increment", std::sync::Arc::new(|state, payload| {
+rt.register_deterministic_context_command("Counter", "increment", std::sync::Arc::new(|state, payload, ctx| {
     let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(1);
     let fields = state.fields_object_mut()?;
     let current = fields.get("count").and_then(|v| v.as_i64()).unwrap_or(0);
     fields.insert("count".to_string(), json!(current + delta));
-    Ok(())
+    state.metadata.version = state.metadata.version.saturating_add(1);
+    Ok(vec![RuntimeSideEffectSpec {
+        effect_type: "counter.incremented".to_string(),
+        payload_json: json!({
+            "delta": delta,
+            "event_id": ctx.deterministic_uuid("counter.incremented")
+        }),
+    }])
 }));
 
 let id = rt.create_entity("Counter", "counter_table", json!({"count": 0}), 1).await?;
-rt.apply_deterministic_command("Counter", &id, "increment", json!({"delta": 2})).await?;
+let envelope = RuntimeCommandEnvelope::new("Counter", &id, "increment", json!({"delta": 2}))
+    .with_expected_version(1)
+    .with_idempotency_key("inc-1");
+let applied = rt.apply_command_envelope(envelope).await?;
+for event in applied.outbox {
+    rt.mark_outbox_dispatched(&event.outbox_id).await?;
+}
+let stats = rt.stats();
+assert_eq!(stats.projection_lag_entities, 0);
+let slo = rt.slo_metrics();
+assert_eq!(slo.projection_lag_entities, 0);
 rt.force_snapshot_and_compact().await?;
 # Ok::<(), rustmemodb::DbError>(())
 # })?;
@@ -712,6 +810,54 @@ See full scenario in:
 - [examples/persist_runtime_showcase](examples/persist_runtime_showcase/README.md)
 - [examples/todo_persist_runtime](examples/todo_persist_runtime/README.md)
 - CLI tooling: `cargo run --bin persist_tool -- --help`
+
+### Cluster Bootstrap (Shard Routing + Forwarding + Quorum Baseline)
+
+```rust
+use rustmemodb::{
+    InMemoryRuntimeForwarder, PersistEntityRuntime, RuntimeClusterNode,
+    RuntimeClusterMembership, RuntimeClusterWritePolicy, RuntimeOperationalPolicy, RuntimeShardRoutingTable
+};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+# tokio_test::block_on(async {
+let forwarder = InMemoryRuntimeForwarder::new();
+let remote = Arc::new(Mutex::new(
+    PersistEntityRuntime::open("./cluster_remote", RuntimeOperationalPolicy::default()).await?
+));
+let mut remote_routing = RuntimeShardRoutingTable::new(16, "node-local")?;
+remote_routing.set_shard_leader(0, "node-remote", 2)?;
+forwarder
+    .register_peer_with_routing("node-remote", remote.clone(), Some(remote_routing))
+    .await?;
+
+let mut routing = RuntimeShardRoutingTable::new(16, "node-local")?;
+routing.set_shard_leader(0, "node-remote", 2)?;
+routing.set_shard_followers(0, vec!["node-follower-b".to_string()])?;
+routing.set_shard_quorum(0, 2)?;
+let membership = RuntimeClusterMembership::new(vec![
+    "node-local".to_string(),
+    "node-remote".to_string(),
+    "node-follower-b".to_string(),
+])?;
+let _movement = routing.move_shard_leader(0, "node-remote", Some(&membership))?;
+
+let node = RuntimeClusterNode::new_with_policy(
+    "node-local",
+    routing,
+    Arc::new(forwarder),
+    RuntimeClusterWritePolicy {
+        require_quorum: true,
+        enforce_epoch_fencing: true,
+    },
+)?;
+# let mut local_rt = PersistEntityRuntime::open("./cluster_local", RuntimeOperationalPolicy::default()).await?;
+# let _ = node;
+# let _ = local_rt;
+# Ok::<(), rustmemodb::DbError>(())
+# })?;
+```
 
 ---
 

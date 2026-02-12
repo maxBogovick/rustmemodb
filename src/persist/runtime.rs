@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -12,6 +13,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, Semaphore, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration as TokioDuration, sleep, timeout};
+use tracing::{Level, event, info_span};
+use uuid::Uuid;
 
 const RUNTIME_SNAPSHOT_FILE: &str = "runtime_snapshot.json";
 const RUNTIME_JOURNAL_FILE: &str = "runtime_journal.log";
@@ -19,8 +22,166 @@ const RUNTIME_FORMAT_VERSION: u16 = 1;
 
 pub type DeterministicCommandHandler =
     Arc<dyn Fn(&mut PersistState, &serde_json::Value) -> Result<()> + Send + Sync>;
+pub type DeterministicEnvelopeCommandHandler = Arc<
+    dyn Fn(&mut PersistState, &RuntimeCommandEnvelope) -> Result<Vec<RuntimeSideEffectSpec>>
+        + Send
+        + Sync,
+>;
+pub type DeterministicContextCommandHandler = Arc<
+    dyn Fn(
+            &mut PersistState,
+            &serde_json::Value,
+            &RuntimeDeterministicContext,
+        ) -> Result<Vec<RuntimeSideEffectSpec>>
+        + Send
+        + Sync,
+>;
 pub type RuntimeClosureHandler =
     Arc<dyn Fn(&mut PersistState, Vec<Value>) -> Result<Value> + Send + Sync>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCommandEnvelope {
+    pub envelope_id: Uuid,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub causation_id: Option<Uuid>,
+    pub correlation_id: Option<Uuid>,
+    pub expected_version: Option<u64>,
+    pub command_name: String,
+    pub payload_json: serde_json::Value,
+    pub payload_version: u32,
+    pub created_at: DateTime<Utc>,
+    pub idempotency_key: Option<String>,
+    pub actor_id: Option<String>,
+}
+
+impl RuntimeCommandEnvelope {
+    pub fn new(
+        entity_type: impl Into<String>,
+        entity_id: impl Into<String>,
+        command_name: impl Into<String>,
+        payload_json: serde_json::Value,
+    ) -> Self {
+        Self {
+            envelope_id: Uuid::new_v4(),
+            entity_type: entity_type.into(),
+            entity_id: entity_id.into(),
+            causation_id: None,
+            correlation_id: None,
+            expected_version: None,
+            command_name: command_name.into(),
+            payload_json,
+            payload_version: 1,
+            created_at: Utc::now(),
+            idempotency_key: None,
+            actor_id: None,
+        }
+    }
+
+    pub fn with_expected_version(mut self, expected_version: u64) -> Self {
+        self.expected_version = Some(expected_version);
+        self
+    }
+
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+
+    pub fn with_actor_id(mut self, actor_id: impl Into<String>) -> Self {
+        self.actor_id = Some(actor_id.into());
+        self
+    }
+
+    pub fn with_correlation_id(mut self, correlation_id: Uuid) -> Self {
+        self.correlation_id = Some(correlation_id);
+        self
+    }
+
+    pub fn with_causation_id(mut self, causation_id: Uuid) -> Self {
+        self.causation_id = Some(causation_id);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeDeterministicContext {
+    pub envelope_id: Uuid,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub command_name: String,
+    pub payload_version: u32,
+    pub created_at: DateTime<Utc>,
+    pub expected_version: Option<u64>,
+    pub causation_id: Option<Uuid>,
+    pub correlation_id: Option<Uuid>,
+    pub idempotency_key: Option<String>,
+    pub actor_id: Option<String>,
+}
+
+impl RuntimeDeterministicContext {
+    fn from_envelope(envelope: &RuntimeCommandEnvelope) -> Self {
+        Self {
+            envelope_id: envelope.envelope_id,
+            entity_type: envelope.entity_type.clone(),
+            entity_id: envelope.entity_id.clone(),
+            command_name: envelope.command_name.clone(),
+            payload_version: envelope.payload_version,
+            created_at: envelope.created_at,
+            expected_version: envelope.expected_version,
+            causation_id: envelope.causation_id,
+            correlation_id: envelope.correlation_id,
+            idempotency_key: envelope.idempotency_key.clone(),
+            actor_id: envelope.actor_id.clone(),
+        }
+    }
+
+    pub fn deterministic_uuid(&self, namespace: &str) -> Uuid {
+        Uuid::new_v5(&self.envelope_id, namespace.as_bytes())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSideEffectSpec {
+    pub effect_type: String,
+    pub payload_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RuntimeOutboxStatus {
+    Pending,
+    Dispatched,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeOutboxRecord {
+    pub outbox_id: String,
+    pub envelope_id: Uuid,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub effect_type: String,
+    pub payload_json: serde_json::Value,
+    pub status: RuntimeOutboxStatus,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeIdempotencyReceipt {
+    pub envelope_id: Uuid,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub command_name: String,
+    pub state: PersistState,
+    pub outbox: Vec<RuntimeOutboxRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeEnvelopeApplyResult {
+    pub envelope_id: Uuid,
+    pub state: PersistState,
+    pub idempotent_replay: bool,
+    pub outbox: Vec<RuntimeOutboxRecord>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RuntimePayloadType {
@@ -253,14 +414,42 @@ impl Default for RuntimeLifecyclePolicy {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RuntimeDeterminismPolicy {
+    Permissive,
+    StrictContextOnly,
+}
+
+impl Default for RuntimeDeterminismPolicy {
+    fn default() -> Self {
+        Self::Permissive
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RuntimeConsistencyMode {
+    Strong,
+    LocalDurable,
+    Eventual,
+}
+
+impl Default for RuntimeConsistencyMode {
+    fn default() -> Self {
+        Self::LocalDurable
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RuntimeOperationalPolicy {
+    #[serde(default)]
+    pub consistency: RuntimeConsistencyMode,
     pub durability: RuntimeDurabilityMode,
     pub retry: RuntimeRetryPolicy,
     pub backpressure: RuntimeBackpressurePolicy,
     pub snapshot: RuntimeSnapshotPolicy,
     pub replication: RuntimeReplicationPolicy,
     pub lifecycle: RuntimeLifecyclePolicy,
+    pub determinism: RuntimeDeterminismPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -324,10 +513,19 @@ pub enum RuntimeJournalOp {
         entity: RuntimeStoredEntity,
         reason: String,
         command: Option<RuntimeCommandInvocation>,
+        #[serde(default)]
+        envelope: Option<RuntimeCommandEnvelope>,
+        #[serde(default)]
+        outbox: Vec<RuntimeOutboxRecord>,
+        #[serde(default)]
+        idempotency_scope_key: Option<String>,
     },
     Delete {
         key: RuntimeEntityKey,
         reason: String,
+    },
+    OutboxUpsert {
+        record: RuntimeOutboxRecord,
     },
 }
 
@@ -344,6 +542,259 @@ pub struct RuntimeSnapshotFile {
     pub created_at_unix_ms: i64,
     pub last_seq: u64,
     pub entities: Vec<RuntimeStoredEntity>,
+    #[serde(default)]
+    pub outbox: Vec<RuntimeOutboxRecord>,
+    #[serde(default)]
+    pub idempotency_index: HashMap<String, RuntimeIdempotencyReceipt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeProjectionField {
+    pub state_field: String,
+    pub column_name: String,
+    pub payload_type: RuntimePayloadType,
+    pub indexed: bool,
+}
+
+impl RuntimeProjectionField {
+    pub fn new(
+        state_field: impl Into<String>,
+        column_name: impl Into<String>,
+        payload_type: RuntimePayloadType,
+    ) -> Self {
+        Self {
+            state_field: state_field.into(),
+            column_name: column_name.into(),
+            payload_type,
+            indexed: false,
+        }
+    }
+
+    pub fn indexed(mut self, indexed: bool) -> Self {
+        self.indexed = indexed;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeProjectionContract {
+    pub entity_type: String,
+    pub table_name: String,
+    pub schema_version: u32,
+    pub fields: Vec<RuntimeProjectionField>,
+}
+
+impl RuntimeProjectionContract {
+    pub fn new(entity_type: impl Into<String>, table_name: impl Into<String>) -> Self {
+        Self {
+            entity_type: entity_type.into(),
+            table_name: table_name.into(),
+            schema_version: 1,
+            fields: Vec::new(),
+        }
+    }
+
+    pub fn with_schema_version(mut self, schema_version: u32) -> Self {
+        self.schema_version = schema_version.max(1);
+        self
+    }
+
+    pub fn with_field(mut self, field: RuntimeProjectionField) -> Self {
+        self.fields.push(field);
+        self
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.entity_type.trim().is_empty() {
+            return Err(DbError::ExecutionError(
+                "Projection contract entity_type must not be empty".to_string(),
+            ));
+        }
+
+        if self.table_name.trim().is_empty() {
+            return Err(DbError::ExecutionError(
+                "Projection contract table_name must not be empty".to_string(),
+            ));
+        }
+
+        if self.fields.is_empty() {
+            return Err(DbError::ExecutionError(format!(
+                "Projection contract '{}' must declare at least one field",
+                self.entity_type
+            )));
+        }
+
+        let mut state_fields = HashSet::<String>::new();
+        let mut column_names = HashSet::<String>::new();
+        for field in &self.fields {
+            if field.state_field.trim().is_empty() {
+                return Err(DbError::ExecutionError(format!(
+                    "Projection contract '{}' has empty state_field",
+                    self.entity_type
+                )));
+            }
+            if field.column_name.trim().is_empty() {
+                return Err(DbError::ExecutionError(format!(
+                    "Projection contract '{}' has empty column_name",
+                    self.entity_type
+                )));
+            }
+
+            if !state_fields.insert(field.state_field.clone()) {
+                return Err(DbError::ExecutionError(format!(
+                    "Projection contract '{}' has duplicate state_field '{}'",
+                    self.entity_type, field.state_field
+                )));
+            }
+            if !column_names.insert(field.column_name.clone()) {
+                return Err(DbError::ExecutionError(format!(
+                    "Projection contract '{}' has duplicate column_name '{}'",
+                    self.entity_type, field.column_name
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeProjectionRow {
+    pub entity_id: String,
+    pub values: serde_json::Map<String, serde_json::Value>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeProjectionTable {
+    contract: RuntimeProjectionContract,
+    rows: HashMap<String, RuntimeProjectionRow>,
+    indexes: HashMap<String, HashMap<String, HashSet<String>>>,
+}
+
+impl RuntimeProjectionTable {
+    fn new(contract: RuntimeProjectionContract) -> Self {
+        let mut indexes = HashMap::new();
+        for field in &contract.fields {
+            if field.indexed {
+                indexes.insert(field.column_name.clone(), HashMap::new());
+            }
+        }
+
+        Self {
+            contract,
+            rows: HashMap::new(),
+            indexes,
+        }
+    }
+
+    fn upsert_state(&mut self, state: &PersistState) -> Result<Option<RuntimeProjectionRow>> {
+        let row = build_projection_row(&self.contract, state)?;
+        let entity_id = state.persist_id.clone();
+        let previous = self.rows.insert(entity_id.clone(), row.clone());
+        if let Some(prev) = &previous {
+            self.remove_from_indexes(prev);
+        }
+        self.add_to_indexes(&row);
+        Ok(previous)
+    }
+
+    fn remove_entity(&mut self, entity_id: &str) -> Option<RuntimeProjectionRow> {
+        let previous = self.rows.remove(entity_id);
+        if let Some(prev) = &previous {
+            self.remove_from_indexes(prev);
+        }
+        previous
+    }
+
+    fn restore_entity(&mut self, entity_id: &str, previous: Option<RuntimeProjectionRow>) {
+        self.remove_entity(entity_id);
+        if let Some(previous) = previous {
+            self.add_to_indexes(&previous);
+            self.rows.insert(entity_id.to_string(), previous);
+        }
+    }
+
+    fn rows_sorted(&self) -> Vec<RuntimeProjectionRow> {
+        let mut rows = self.rows.values().cloned().collect::<Vec<_>>();
+        rows.sort_by(|a, b| a.entity_id.cmp(&b.entity_id));
+        rows
+    }
+
+    fn find_entity_ids_by_index(&self, column: &str, value: &serde_json::Value) -> Vec<String> {
+        let key = projection_index_key(value);
+        let mut ids = self
+            .indexes
+            .get(column)
+            .and_then(|entries| entries.get(&key))
+            .map(|set| set.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        ids.sort();
+        ids
+    }
+
+    fn add_to_indexes(&mut self, row: &RuntimeProjectionRow) {
+        for field in &self.contract.fields {
+            if !field.indexed {
+                continue;
+            }
+            let Some(value) = row.values.get(field.column_name.as_str()) else {
+                continue;
+            };
+            let key = projection_index_key(value);
+            let bucket = self
+                .indexes
+                .entry(field.column_name.clone())
+                .or_default()
+                .entry(key)
+                .or_default();
+            bucket.insert(row.entity_id.clone());
+        }
+    }
+
+    fn remove_from_indexes(&mut self, row: &RuntimeProjectionRow) {
+        for field in &self.contract.fields {
+            if !field.indexed {
+                continue;
+            }
+            let Some(value) = row.values.get(field.column_name.as_str()) else {
+                continue;
+            };
+            let key = projection_index_key(value);
+            if let Some(entries) = self.indexes.get_mut(field.column_name.as_str()) {
+                if let Some(bucket) = entries.get_mut(&key) {
+                    bucket.remove(row.entity_id.as_str());
+                    if bucket.is_empty() {
+                        entries.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeProjectionUndo {
+    entity_type: String,
+    entity_id: String,
+    previous_row: Option<RuntimeProjectionRow>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeEntityMailbox {
+    pending_commands: u64,
+    inflight: bool,
+    last_command_at: DateTime<Utc>,
+}
+
+impl RuntimeEntityMailbox {
+    fn new(now: DateTime<Utc>) -> Self {
+        Self {
+            pending_commands: 0,
+            inflight: false,
+            last_command_at: now,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -361,12 +812,36 @@ pub struct RuntimeStats {
     pub registered_deterministic_commands: usize,
     pub deterministic_commands_with_payload_contracts: usize,
     pub registered_runtime_closures: usize,
+    pub registered_projections: usize,
+    pub projection_rows: usize,
+    pub projection_index_columns: usize,
+    pub projection_lag_entities: usize,
     pub replication_targets: usize,
     pub replication_failures: u64,
+    pub durability_lag_ms: u64,
     pub snapshot_worker_running: bool,
     pub snapshot_worker_errors: u64,
     pub next_seq: u64,
     pub ops_since_snapshot: usize,
+    pub outbox_total: usize,
+    pub outbox_pending: usize,
+    pub idempotency_entries: usize,
+    pub mailbox_entities: usize,
+    pub mailbox_busy_entities: usize,
+    pub lifecycle_passivated_total: u64,
+    pub lifecycle_resurrected_total: u64,
+    pub lifecycle_gc_deleted_total: u64,
+    pub lifecycle_churn_total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeSloMetrics {
+    pub durability_lag_ms: u64,
+    pub projection_lag_entities: usize,
+    pub lifecycle_churn_total: u64,
+    pub outbox_pending: usize,
+    pub replication_failures: u64,
+    pub mailbox_busy_entities: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -377,8 +852,15 @@ pub struct RuntimePaths {
 }
 
 #[derive(Clone)]
+enum RegisteredDeterministicCommandHandler {
+    Legacy(DeterministicCommandHandler),
+    Envelope(DeterministicEnvelopeCommandHandler),
+    Context(DeterministicContextCommandHandler),
+}
+
+#[derive(Clone)]
 struct RegisteredDeterministicCommand {
-    handler: DeterministicCommandHandler,
+    handler: RegisteredDeterministicCommandHandler,
     payload_schema: Option<RuntimeCommandPayloadSchema>,
 }
 
@@ -389,11 +871,19 @@ pub struct PersistEntityRuntime {
     cold_entities: HashMap<RuntimeEntityKey, RuntimeStoredEntity>,
     deterministic_registry: HashMap<String, HashMap<String, RegisteredDeterministicCommand>>,
     runtime_closure_registry: HashMap<String, HashMap<String, RuntimeClosureHandler>>,
+    projection_registry: HashMap<String, RuntimeProjectionContract>,
+    projection_tables: HashMap<String, RuntimeProjectionTable>,
+    entity_mailboxes: HashMap<RuntimeEntityKey, RuntimeEntityMailbox>,
+    outbox_records: HashMap<String, RuntimeOutboxRecord>,
+    idempotency_index: HashMap<String, RuntimeIdempotencyReceipt>,
     seq_next: u64,
     ops_since_snapshot: usize,
     last_sync_unix_ms: i64,
     inflight: Arc<Semaphore>,
     resurrected_since_last_report: usize,
+    lifecycle_passivated_total: u64,
+    lifecycle_resurrected_total: u64,
+    lifecycle_gc_deleted_total: u64,
     snapshot_worker_running: bool,
     snapshot_worker_errors: Arc<AtomicU64>,
     replica_targets: Vec<RuntimePaths>,
@@ -406,6 +896,7 @@ impl PersistEntityRuntime {
         policy: RuntimeOperationalPolicy,
     ) -> Result<Self> {
         let root_dir = root_dir.into();
+        let policy = normalize_runtime_policy(policy);
         fs::create_dir_all(&root_dir)
             .await
             .map_err(|err| DbError::IoError(err.to_string()))?;
@@ -425,11 +916,19 @@ impl PersistEntityRuntime {
             cold_entities: HashMap::new(),
             deterministic_registry: HashMap::new(),
             runtime_closure_registry: HashMap::new(),
+            projection_registry: HashMap::new(),
+            projection_tables: HashMap::new(),
+            entity_mailboxes: HashMap::new(),
+            outbox_records: HashMap::new(),
+            idempotency_index: HashMap::new(),
             seq_next: 1,
             ops_since_snapshot: 0,
             last_sync_unix_ms: Utc::now().timestamp_millis(),
             inflight: Arc::new(Semaphore::new(max_inflight)),
             resurrected_since_last_report: 0,
+            lifecycle_passivated_total: 0,
+            lifecycle_resurrected_total: 0,
+            lifecycle_gc_deleted_total: 0,
             snapshot_worker_running: false,
             snapshot_worker_errors: Arc::new(AtomicU64::new(0)),
             replica_targets,
@@ -471,6 +970,29 @@ impl PersistEntityRuntime {
             .map(|commands| commands.len())
             .sum();
 
+        let projection_rows = self
+            .projection_tables
+            .values()
+            .map(|table| table.rows.len())
+            .sum();
+        let projection_index_columns = self
+            .projection_tables
+            .values()
+            .map(|table| table.indexes.len())
+            .sum();
+        let projection_lag_entities = self.projection_lag_entities_count();
+        let durability_lag_ms =
+            (Utc::now().timestamp_millis() - self.last_sync_unix_ms).max(0) as u64;
+        let mailbox_busy_entities = self
+            .entity_mailboxes
+            .values()
+            .filter(|mailbox| mailbox.inflight || mailbox.pending_commands > 0)
+            .count();
+        let lifecycle_churn_total = self
+            .lifecycle_passivated_total
+            .saturating_add(self.lifecycle_resurrected_total)
+            .saturating_add(self.lifecycle_gc_deleted_total);
+
         RuntimeStats {
             hot_entities: self.hot_entities.len(),
             cold_entities: self.cold_entities.len(),
@@ -478,17 +1000,48 @@ impl PersistEntityRuntime {
                 .deterministic_registry
                 .keys()
                 .chain(self.runtime_closure_registry.keys())
+                .chain(self.projection_registry.keys())
                 .collect::<HashSet<_>>()
                 .len(),
             registered_deterministic_commands: command_count,
             deterministic_commands_with_payload_contracts: command_schema_count,
             registered_runtime_closures: closure_count,
+            registered_projections: self.projection_registry.len(),
+            projection_rows,
+            projection_index_columns,
+            projection_lag_entities,
             replication_targets: self.replica_targets.len(),
             replication_failures: self.replication_failures.load(AtomicOrdering::Relaxed),
+            durability_lag_ms,
             snapshot_worker_running: self.snapshot_worker_running,
             snapshot_worker_errors: self.snapshot_worker_errors.load(AtomicOrdering::Relaxed),
             next_seq: self.seq_next,
             ops_since_snapshot: self.ops_since_snapshot,
+            outbox_total: self.outbox_records.len(),
+            outbox_pending: self
+                .outbox_records
+                .values()
+                .filter(|record| record.status == RuntimeOutboxStatus::Pending)
+                .count(),
+            idempotency_entries: self.idempotency_index.len(),
+            mailbox_entities: self.entity_mailboxes.len(),
+            mailbox_busy_entities,
+            lifecycle_passivated_total: self.lifecycle_passivated_total,
+            lifecycle_resurrected_total: self.lifecycle_resurrected_total,
+            lifecycle_gc_deleted_total: self.lifecycle_gc_deleted_total,
+            lifecycle_churn_total,
+        }
+    }
+
+    pub fn slo_metrics(&self) -> RuntimeSloMetrics {
+        let stats = self.stats();
+        RuntimeSloMetrics {
+            durability_lag_ms: stats.durability_lag_ms,
+            projection_lag_entities: stats.projection_lag_entities,
+            lifecycle_churn_total: stats.lifecycle_churn_total,
+            outbox_pending: stats.outbox_pending,
+            replication_failures: stats.replication_failures,
+            mailbox_busy_entities: stats.mailbox_busy_entities,
         }
     }
 
@@ -505,7 +1058,7 @@ impl PersistEntityRuntime {
         entry.insert(
             command.into(),
             RegisteredDeterministicCommand {
-                handler,
+                handler: RegisteredDeterministicCommandHandler::Legacy(handler),
                 payload_schema: None,
             },
         );
@@ -525,7 +1078,85 @@ impl PersistEntityRuntime {
         entry.insert(
             command.into(),
             RegisteredDeterministicCommand {
-                handler,
+                handler: RegisteredDeterministicCommandHandler::Legacy(handler),
+                payload_schema: Some(payload_schema),
+            },
+        );
+    }
+
+    pub fn register_deterministic_envelope_command(
+        &mut self,
+        entity_type: impl Into<String>,
+        command: impl Into<String>,
+        handler: DeterministicEnvelopeCommandHandler,
+    ) {
+        let entry = self
+            .deterministic_registry
+            .entry(entity_type.into())
+            .or_default();
+        entry.insert(
+            command.into(),
+            RegisteredDeterministicCommand {
+                handler: RegisteredDeterministicCommandHandler::Envelope(handler),
+                payload_schema: None,
+            },
+        );
+    }
+
+    pub fn register_deterministic_envelope_command_with_schema(
+        &mut self,
+        entity_type: impl Into<String>,
+        command: impl Into<String>,
+        payload_schema: RuntimeCommandPayloadSchema,
+        handler: DeterministicEnvelopeCommandHandler,
+    ) {
+        let entry = self
+            .deterministic_registry
+            .entry(entity_type.into())
+            .or_default();
+        entry.insert(
+            command.into(),
+            RegisteredDeterministicCommand {
+                handler: RegisteredDeterministicCommandHandler::Envelope(handler),
+                payload_schema: Some(payload_schema),
+            },
+        );
+    }
+
+    pub fn register_deterministic_context_command(
+        &mut self,
+        entity_type: impl Into<String>,
+        command: impl Into<String>,
+        handler: DeterministicContextCommandHandler,
+    ) {
+        let entry = self
+            .deterministic_registry
+            .entry(entity_type.into())
+            .or_default();
+        entry.insert(
+            command.into(),
+            RegisteredDeterministicCommand {
+                handler: RegisteredDeterministicCommandHandler::Context(handler),
+                payload_schema: None,
+            },
+        );
+    }
+
+    pub fn register_deterministic_context_command_with_schema(
+        &mut self,
+        entity_type: impl Into<String>,
+        command: impl Into<String>,
+        payload_schema: RuntimeCommandPayloadSchema,
+        handler: DeterministicContextCommandHandler,
+    ) {
+        let entry = self
+            .deterministic_registry
+            .entry(entity_type.into())
+            .or_default();
+        entry.insert(
+            command.into(),
+            RegisteredDeterministicCommand {
+                handler: RegisteredDeterministicCommandHandler::Context(handler),
                 payload_schema: Some(payload_schema),
             },
         );
@@ -542,6 +1173,97 @@ impl PersistEntityRuntime {
             .entry(entity_type.into())
             .or_default();
         entry.insert(function.into(), handler);
+    }
+
+    pub fn register_projection_contract(
+        &mut self,
+        contract: RuntimeProjectionContract,
+    ) -> Result<()> {
+        contract.validate()?;
+        let entity_type = contract.entity_type.clone();
+        self.projection_registry
+            .insert(entity_type.clone(), contract.clone());
+        self.projection_tables
+            .insert(entity_type.clone(), RuntimeProjectionTable::new(contract));
+        self.rebuild_projection_for_entity_type(&entity_type)
+    }
+
+    pub fn projection_contract(&self, entity_type: &str) -> Option<&RuntimeProjectionContract> {
+        self.projection_registry.get(entity_type)
+    }
+
+    pub fn list_projection_rows(&self, entity_type: &str) -> Result<Vec<RuntimeProjectionRow>> {
+        let table = self.projection_tables.get(entity_type).ok_or_else(|| {
+            DbError::ExecutionError(format!(
+                "Projection contract is not registered for entity type '{}'",
+                entity_type
+            ))
+        })?;
+        Ok(table.rows_sorted())
+    }
+
+    pub fn find_projection_entity_ids_by_index(
+        &self,
+        entity_type: &str,
+        column: &str,
+        value: &serde_json::Value,
+    ) -> Result<Vec<String>> {
+        let contract = self.projection_registry.get(entity_type).ok_or_else(|| {
+            DbError::ExecutionError(format!(
+                "Projection contract is not registered for entity type '{}'",
+                entity_type
+            ))
+        })?;
+
+        let indexed = contract
+            .fields
+            .iter()
+            .any(|field| field.column_name == column && field.indexed);
+        if !indexed {
+            return Err(DbError::ExecutionError(format!(
+                "Projection column '{}.{}' is not indexed",
+                entity_type, column
+            )));
+        }
+
+        let table = self.projection_tables.get(entity_type).ok_or_else(|| {
+            DbError::ExecutionError(format!(
+                "Projection table is not initialized for entity type '{}'",
+                entity_type
+            ))
+        })?;
+
+        Ok(table.find_entity_ids_by_index(column, value))
+    }
+
+    pub fn find_projection_rows_by_index(
+        &self,
+        entity_type: &str,
+        column: &str,
+        value: &serde_json::Value,
+    ) -> Result<Vec<RuntimeProjectionRow>> {
+        let table = self.projection_tables.get(entity_type).ok_or_else(|| {
+            DbError::ExecutionError(format!(
+                "Projection table is not initialized for entity type '{}'",
+                entity_type
+            ))
+        })?;
+
+        let ids = self.find_projection_entity_ids_by_index(entity_type, column, value)?;
+        let mut rows = ids
+            .into_iter()
+            .filter_map(|entity_id| table.rows.get(&entity_id).cloned())
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| a.entity_id.cmp(&b.entity_id));
+        Ok(rows)
+    }
+
+    pub fn rebuild_registered_projections(&mut self) -> Result<()> {
+        let entity_types = self.projection_registry.keys().cloned().collect::<Vec<_>>();
+        for entity_type in entity_types {
+            self.rebuild_projection_for_entity_type(&entity_type)?;
+        }
+        Ok(())
     }
 
     pub async fn create_entity(
@@ -596,18 +1318,38 @@ impl PersistEntityRuntime {
     ) -> Result<()> {
         let permit = self.acquire_inflight_permit().await?;
         let _keep_permit_until_drop = permit;
+        let delete_reason = reason.into();
+        let span = info_span!(
+            "runtime.entity.delete",
+            entity_type = %entity_type,
+            entity_id = %persist_id,
+            reason = %delete_reason
+        );
+        let _enter = span.enter();
 
         let key = RuntimeEntityKey::new(entity_type, persist_id);
-        self.hot_entities.remove(&key);
-        self.cold_entities.remove(&key);
+        let projection_undo = self.apply_projection_delete(&key);
 
-        self.append_record(RuntimeJournalOp::Delete {
-            key,
-            reason: reason.into(),
-        })
-        .await?;
+        let append_result = self
+            .append_record(RuntimeJournalOp::Delete {
+                key,
+                reason: delete_reason,
+            })
+            .await;
+        if let Err(err) = append_result {
+            self.rollback_projection_undo(projection_undo);
+            event!(Level::ERROR, error = %err, "runtime entity delete append failed");
+            return Err(err);
+        }
+
+        self.hot_entities
+            .remove(&RuntimeEntityKey::new(entity_type, persist_id));
+        self.cold_entities
+            .remove(&RuntimeEntityKey::new(entity_type, persist_id));
+        self.mailbox_drop_entity(&RuntimeEntityKey::new(entity_type, persist_id));
 
         self.maybe_snapshot_and_compact().await?;
+        event!(Level::DEBUG, "runtime entity deleted");
         Ok(())
     }
 
@@ -624,8 +1366,7 @@ impl PersistEntityRuntime {
             cold.touch();
             let state = cold.state.clone();
             self.hot_entities.insert(key, cold);
-            self.resurrected_since_last_report =
-                self.resurrected_since_last_report.saturating_add(1);
+            self.record_resurrection();
             return Ok(state);
         }
 
@@ -642,6 +1383,54 @@ impl PersistEntityRuntime {
         states
     }
 
+    pub fn list_outbox_records(&self) -> Vec<RuntimeOutboxRecord> {
+        let mut records = self.outbox_records.values().cloned().collect::<Vec<_>>();
+        records.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then(a.outbox_id.cmp(&b.outbox_id))
+        });
+        records
+    }
+
+    pub fn list_pending_outbox_records(&self) -> Vec<RuntimeOutboxRecord> {
+        self.list_outbox_records()
+            .into_iter()
+            .filter(|record| record.status == RuntimeOutboxStatus::Pending)
+            .collect()
+    }
+
+    pub async fn mark_outbox_dispatched(&mut self, outbox_id: &str) -> Result<()> {
+        let permit = self.acquire_inflight_permit().await?;
+        let _keep_permit_until_drop = permit;
+        let span = info_span!("runtime.outbox.dispatch", outbox_id = %outbox_id);
+        let _enter = span.enter();
+
+        let Some(current) = self.outbox_records.get(outbox_id).cloned() else {
+            return Err(DbError::ExecutionError(format!(
+                "Outbox record not found: {}",
+                outbox_id
+            )));
+        };
+
+        if current.status == RuntimeOutboxStatus::Dispatched {
+            event!(Level::DEBUG, "outbox already dispatched");
+            return Ok(());
+        }
+
+        let mut updated = current;
+        updated.status = RuntimeOutboxStatus::Dispatched;
+        let persisted = updated.clone();
+        self.append_record(RuntimeJournalOp::OutboxUpsert { record: updated })
+            .await?;
+        self.outbox_records
+            .insert(outbox_id.to_string(), persisted.clone());
+        self.update_idempotency_outbox_status(&persisted);
+        self.maybe_snapshot_and_compact().await?;
+        event!(Level::INFO, envelope_id = %persisted.envelope_id, "outbox dispatched");
+        Ok(())
+    }
+
     pub async fn apply_deterministic_command(
         &mut self,
         entity_type: &str,
@@ -649,46 +1438,145 @@ impl PersistEntityRuntime {
         command: &str,
         payload: serde_json::Value,
     ) -> Result<PersistState> {
+        let envelope = RuntimeCommandEnvelope::new(entity_type, persist_id, command, payload);
+        let result = self.apply_command_envelope(envelope).await?;
+        Ok(result.state)
+    }
+
+    pub async fn apply_command_envelope(
+        &mut self,
+        envelope: RuntimeCommandEnvelope,
+    ) -> Result<RuntimeEnvelopeApplyResult> {
         let permit = self.acquire_inflight_permit().await?;
         let _keep_permit_until_drop = permit;
+        let span = info_span!(
+            "runtime.command.envelope",
+            envelope_id = %envelope.envelope_id,
+            entity_type = %envelope.entity_type,
+            entity_id = %envelope.entity_id,
+            command = %envelope.command_name
+        );
+        let _enter = span.enter();
+
+        validate_command_envelope(&envelope)?;
+        event!(
+            Level::DEBUG,
+            payload_version = envelope.payload_version,
+            "runtime envelope accepted"
+        );
 
         let command_handler = self
             .deterministic_registry
-            .get(entity_type)
-            .and_then(|commands| commands.get(command))
+            .get(envelope.entity_type.as_str())
+            .and_then(|commands| commands.get(envelope.command_name.as_str()))
             .cloned()
             .ok_or_else(|| {
                 DbError::ExecutionError(format!(
                     "Deterministic command '{}' is not registered for entity type '{}'",
-                    command, entity_type
+                    envelope.command_name, envelope.entity_type
                 ))
             })?;
         if let Some(payload_schema) = &command_handler.payload_schema {
-            payload_schema.validate(&payload).map_err(|err| {
-                DbError::ExecutionError(format!(
-                    "Payload validation for command '{}': {}",
-                    command, err
-                ))
-            })?;
+            payload_schema
+                .validate(&envelope.payload_json)
+                .map_err(|err| {
+                    DbError::ExecutionError(format!(
+                        "Payload validation for command '{}': {}",
+                        envelope.command_name, err
+                    ))
+                })?;
         }
 
-        let key = RuntimeEntityKey::new(entity_type, persist_id);
+        let idempotency_scope_key = build_idempotency_scope_key(&envelope);
+        if let Some(scope_key) = &idempotency_scope_key {
+            if let Some(existing) = self.idempotency_index.get(scope_key) {
+                event!(Level::INFO, "runtime envelope idempotent replay");
+                return Ok(RuntimeEnvelopeApplyResult {
+                    envelope_id: existing.envelope_id,
+                    state: existing.state.clone(),
+                    idempotent_replay: true,
+                    outbox: existing.outbox.clone(),
+                });
+            }
+        }
+
+        if self.policy.determinism == RuntimeDeterminismPolicy::StrictContextOnly
+            && !matches!(
+                &command_handler.handler,
+                RegisteredDeterministicCommandHandler::Context(_)
+            )
+        {
+            return Err(DbError::ExecutionError(format!(
+                "Determinism policy is StrictContextOnly; command '{}::{}' must be registered via register_deterministic_context_command[_with_schema]",
+                envelope.entity_type, envelope.command_name
+            )));
+        }
+
+        let key = RuntimeEntityKey::new(envelope.entity_type.clone(), envelope.entity_id.clone());
         let base = self.take_entity_for_mutation(&key)?;
+        self.mailbox_start_command(&key);
+        if let Some(expected_version) = envelope.expected_version {
+            let actual_version = base.state.metadata.version.max(0) as u64;
+            if expected_version != actual_version {
+                self.hot_entities.insert(key.clone(), base);
+                self.mailbox_complete_command(&key);
+                event!(
+                    Level::WARN,
+                    expected_version,
+                    actual_version,
+                    "runtime envelope expected version mismatch"
+                );
+                return Err(DbError::ExecutionError(format!(
+                    "Expected version mismatch for {}:{} (expected {}, actual {})",
+                    envelope.entity_type, envelope.entity_id, expected_version, actual_version
+                )));
+            }
+        }
 
         let max_attempts = self.policy.retry.max_attempts.max(1);
         let mut last_err: Option<DbError> = None;
+        let deterministic_ctx = RuntimeDeterministicContext::from_envelope(&envelope);
 
         for attempt in 1..=max_attempts {
             let mut working = base.clone();
-            let result = (command_handler.handler)(&mut working.state, &payload);
+            let result = invoke_registered_handler(
+                &command_handler.handler,
+                &mut working.state,
+                &envelope,
+                &deterministic_ctx,
+            );
+
             match result {
-                Ok(()) => {
+                Ok(side_effects) => {
                     working.state.metadata.persisted = true;
                     working.touch();
+                    let outbox_records = side_effects
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, effect)| RuntimeOutboxRecord {
+                            outbox_id: format!("{}:{}", envelope.envelope_id, index),
+                            envelope_id: envelope.envelope_id,
+                            entity_type: envelope.entity_type.clone(),
+                            entity_id: envelope.entity_id.clone(),
+                            effect_type: effect.effect_type,
+                            payload_json: effect.payload_json,
+                            status: RuntimeOutboxStatus::Pending,
+                            created_at: envelope.created_at,
+                        })
+                        .collect::<Vec<_>>();
 
                     let invocation = RuntimeCommandInvocation {
-                        command: command.to_string(),
-                        payload: payload.clone(),
+                        command: envelope.command_name.clone(),
+                        payload: envelope.payload_json.clone(),
+                    };
+
+                    let projection_undo = match self.apply_projection_upsert(&working.state) {
+                        Ok(undo) => undo,
+                        Err(err) => {
+                            event!(Level::ERROR, error = %err, "runtime projection upsert failed");
+                            last_err = Some(err);
+                            continue;
+                        }
                     };
 
                     match self
@@ -696,20 +1584,63 @@ impl PersistEntityRuntime {
                             entity: working.clone(),
                             reason: "command".to_string(),
                             command: Some(invocation),
+                            envelope: Some(envelope.clone()),
+                            outbox: outbox_records.clone(),
+                            idempotency_scope_key: idempotency_scope_key.clone(),
                         })
                         .await
                     {
                         Ok(()) => {
                             self.hot_entities.insert(key.clone(), working.clone());
-                            self.maybe_snapshot_and_compact().await?;
-                            return Ok(working.state);
+                            for record in &outbox_records {
+                                self.outbox_records
+                                    .insert(record.outbox_id.clone(), record.clone());
+                            }
+                            if let Some(scope_key) = idempotency_scope_key.as_ref() {
+                                self.idempotency_index.insert(
+                                    scope_key.clone(),
+                                    RuntimeIdempotencyReceipt {
+                                        envelope_id: envelope.envelope_id,
+                                        entity_type: envelope.entity_type.clone(),
+                                        entity_id: envelope.entity_id.clone(),
+                                        command_name: envelope.command_name.clone(),
+                                        state: working.state.clone(),
+                                        outbox: outbox_records.clone(),
+                                    },
+                                );
+                            }
+                            let snapshot_result = self.maybe_snapshot_and_compact().await;
+                            self.mailbox_complete_command(&key);
+                            if let Err(err) = snapshot_result {
+                                event!(
+                                    Level::ERROR,
+                                    error = %err,
+                                    "runtime post-commit snapshot/compaction failed"
+                                );
+                                return Err(err);
+                            }
+                            event!(
+                                Level::INFO,
+                                attempt,
+                                outbox_records = outbox_records.len(),
+                                "runtime envelope applied"
+                            );
+                            return Ok(RuntimeEnvelopeApplyResult {
+                                envelope_id: envelope.envelope_id,
+                                state: working.state,
+                                idempotent_replay: false,
+                                outbox: outbox_records,
+                            });
                         }
                         Err(err) => {
+                            self.rollback_projection_undo(projection_undo);
+                            event!(Level::ERROR, error = %err, "runtime journal append failed");
                             last_err = Some(err);
                         }
                     }
                 }
                 Err(err) => {
+                    event!(Level::ERROR, error = %err, "runtime deterministic handler failed");
                     last_err = Some(err);
                 }
             }
@@ -719,10 +1650,13 @@ impl PersistEntityRuntime {
             }
         }
 
-        self.hot_entities.insert(key, base);
-        Err(last_err.unwrap_or_else(|| {
+        self.hot_entities.insert(key.clone(), base);
+        self.mailbox_complete_command(&key);
+        let err = last_err.unwrap_or_else(|| {
             DbError::ExecutionError("Failed to apply deterministic command".to_string())
-        }))
+        });
+        event!(Level::ERROR, error = %err, "runtime envelope apply failed");
+        Err(err)
     }
 
     pub async fn invoke_runtime_closure(
@@ -734,6 +1668,13 @@ impl PersistEntityRuntime {
     ) -> Result<Value> {
         let permit = self.acquire_inflight_permit().await?;
         let _keep_permit_until_drop = permit;
+        let span = info_span!(
+            "runtime.closure.invoke",
+            entity_type = %entity_type,
+            entity_id = %persist_id,
+            function = %function
+        );
+        let _enter = span.enter();
 
         let runtime_handler = self
             .runtime_closure_registry
@@ -749,13 +1690,31 @@ impl PersistEntityRuntime {
 
         let key = RuntimeEntityKey::new(entity_type, persist_id);
         let mut entity = self.take_entity_for_mutation(&key)?;
-        let result = runtime_handler(&mut entity.state, args)?;
+        self.mailbox_start_command(&key);
+        let base = entity.clone();
+        let result = runtime_handler(&mut entity.state, args);
+        let result = match result {
+            Ok(value) => value,
+            Err(err) => {
+                self.hot_entities.insert(key.clone(), base);
+                self.mailbox_complete_command(&key);
+                event!(Level::ERROR, error = %err, "runtime closure handler failed");
+                return Err(err);
+            }
+        };
 
         // Runtime closures are intentionally not deterministic/serializable.
         // We keep them available for local runtime behavior, and persist only
         // the final state snapshot as an upsert event.
         entity.touch();
-        self.apply_upsert(entity, "runtime_closure", None).await?;
+        if let Err(err) = self.apply_upsert(entity, "runtime_closure", None).await {
+            self.hot_entities.insert(key.clone(), base);
+            self.mailbox_complete_command(&key);
+            event!(Level::ERROR, error = %err, "runtime closure persist failed");
+            return Err(err);
+        }
+        self.mailbox_complete_command(&key);
+        event!(Level::DEBUG, "runtime closure applied");
 
         Ok(result)
     }
@@ -771,6 +1730,9 @@ impl PersistEntityRuntime {
 
         let mut to_passivate = Vec::new();
         for (key, entity) in &self.hot_entities {
+            if self.mailbox_is_busy(key) {
+                continue;
+            }
             let idle_ms = (now - entity.last_access_at).num_milliseconds();
             if idle_ms >= passivate_after.as_millis() as i64 {
                 to_passivate.push(key.clone());
@@ -816,23 +1778,37 @@ impl PersistEntityRuntime {
                 true
             };
 
-            if old_enough && eligible_by_touch {
+            if old_enough && eligible_by_touch && !self.mailbox_is_busy(key) {
                 to_gc.push(key.clone());
             }
         }
 
         for key in to_gc {
-            if self.cold_entities.remove(&key).is_some() {
+            if let Some(removed) = self.cold_entities.remove(&key) {
+                let projection_undo = self.apply_projection_delete(&key);
+                let append = self
+                    .append_record(RuntimeJournalOp::Delete {
+                        key: key.clone(),
+                        reason: "lifecycle_gc".to_string(),
+                    })
+                    .await;
+                if let Err(err) = append {
+                    self.rollback_projection_undo(projection_undo);
+                    self.cold_entities.insert(key, removed);
+                    return Err(err);
+                }
                 gc_deleted = gc_deleted.saturating_add(1);
-                self.append_record(RuntimeJournalOp::Delete {
-                    key,
-                    reason: "lifecycle_gc".to_string(),
-                })
-                .await?;
+                self.mailbox_drop_entity(&key);
             }
         }
 
         self.maybe_snapshot_and_compact().await?;
+        self.lifecycle_passivated_total = self
+            .lifecycle_passivated_total
+            .saturating_add(passivated as u64);
+        self.lifecycle_gc_deleted_total = self
+            .lifecycle_gc_deleted_total
+            .saturating_add(gc_deleted as u64);
 
         let resurrected = self.resurrected_since_last_report;
         self.resurrected_since_last_report = 0;
@@ -869,12 +1845,20 @@ impl PersistEntityRuntime {
         let mut entities = Vec::with_capacity(self.hot_entities.len() + self.cold_entities.len());
         entities.extend(self.hot_entities.values().cloned());
         entities.extend(self.cold_entities.values().cloned());
+        let mut outbox = self.outbox_records.values().cloned().collect::<Vec<_>>();
+        outbox.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then(a.outbox_id.cmp(&b.outbox_id))
+        });
 
         RuntimeSnapshotFile {
             format_version: RUNTIME_FORMAT_VERSION,
             created_at_unix_ms: Utc::now().timestamp_millis(),
             last_seq: self.seq_next.saturating_sub(1),
             entities,
+            outbox,
+            idempotency_index: self.idempotency_index.clone(),
         }
     }
 
@@ -908,6 +1892,10 @@ impl PersistEntityRuntime {
                     self.cold_entities.insert(key, entity);
                 }
             }
+            for record in snapshot.outbox {
+                self.outbox_records.insert(record.outbox_id.clone(), record);
+            }
+            self.idempotency_index = snapshot.idempotency_index;
             last_seq = snapshot.last_seq;
         }
 
@@ -924,7 +1912,13 @@ impl PersistEntityRuntime {
 
     fn apply_journal_record_to_memory(&mut self, record: RuntimeJournalRecord) {
         match record.op {
-            RuntimeJournalOp::Upsert { entity, .. } => {
+            RuntimeJournalOp::Upsert {
+                entity,
+                envelope,
+                outbox,
+                idempotency_scope_key,
+                ..
+            } => {
                 let key = RuntimeEntityKey::from_state(&entity.state);
                 if entity.resident {
                     self.cold_entities.remove(&key);
@@ -933,12 +1927,207 @@ impl PersistEntityRuntime {
                     self.hot_entities.remove(&key);
                     self.cold_entities.insert(key, entity);
                 }
+
+                for record in &outbox {
+                    self.outbox_records
+                        .insert(record.outbox_id.clone(), record.clone());
+                }
+
+                if let (Some(scope_key), Some(envelope)) = (idempotency_scope_key, envelope) {
+                    let state = self
+                        .hot_entities
+                        .get(&RuntimeEntityKey::new(
+                            envelope.entity_type.clone(),
+                            envelope.entity_id.clone(),
+                        ))
+                        .map(|stored| stored.state.clone())
+                        .or_else(|| {
+                            self.cold_entities
+                                .get(&RuntimeEntityKey::new(
+                                    envelope.entity_type.clone(),
+                                    envelope.entity_id.clone(),
+                                ))
+                                .map(|stored| stored.state.clone())
+                        });
+
+                    if let Some(state) = state {
+                        self.idempotency_index.insert(
+                            scope_key,
+                            RuntimeIdempotencyReceipt {
+                                envelope_id: envelope.envelope_id,
+                                entity_type: envelope.entity_type,
+                                entity_id: envelope.entity_id,
+                                command_name: envelope.command_name,
+                                state,
+                                outbox,
+                            },
+                        );
+                    }
+                }
             }
             RuntimeJournalOp::Delete { key, .. } => {
                 self.hot_entities.remove(&key);
                 self.cold_entities.remove(&key);
+                self.mailbox_drop_entity(&key);
+            }
+            RuntimeJournalOp::OutboxUpsert { record } => {
+                self.outbox_records
+                    .insert(record.outbox_id.clone(), record.clone());
+                self.update_idempotency_outbox_status(&record);
             }
         }
+    }
+
+    fn rebuild_projection_for_entity_type(&mut self, entity_type: &str) -> Result<()> {
+        let contract = self
+            .projection_registry
+            .get(entity_type)
+            .cloned()
+            .ok_or_else(|| {
+                DbError::ExecutionError(format!(
+                    "Projection contract is not registered for entity type '{}'",
+                    entity_type
+                ))
+            })?;
+
+        let states = self
+            .hot_entities
+            .values()
+            .chain(self.cold_entities.values())
+            .filter(|entity| entity.state.type_name == entity_type)
+            .map(|entity| entity.state.clone())
+            .collect::<Vec<_>>();
+
+        self.projection_tables.insert(
+            entity_type.to_string(),
+            RuntimeProjectionTable::new(contract),
+        );
+        let table = self.projection_tables.get_mut(entity_type).ok_or_else(|| {
+            DbError::ExecutionError(format!(
+                "Projection table is not initialized for entity type '{}'",
+                entity_type
+            ))
+        })?;
+
+        for state in states {
+            table.upsert_state(&state)?;
+        }
+        Ok(())
+    }
+
+    fn apply_projection_upsert(
+        &mut self,
+        state: &PersistState,
+    ) -> Result<Option<RuntimeProjectionUndo>> {
+        let Some(table) = self.projection_tables.get_mut(state.type_name.as_str()) else {
+            return Ok(None);
+        };
+
+        let previous_row = table.upsert_state(state)?;
+        Ok(Some(RuntimeProjectionUndo {
+            entity_type: state.type_name.clone(),
+            entity_id: state.persist_id.clone(),
+            previous_row,
+        }))
+    }
+
+    fn apply_projection_delete(&mut self, key: &RuntimeEntityKey) -> Option<RuntimeProjectionUndo> {
+        let table = self.projection_tables.get_mut(key.entity_type.as_str())?;
+        let previous_row = table.remove_entity(key.persist_id.as_str());
+        Some(RuntimeProjectionUndo {
+            entity_type: key.entity_type.clone(),
+            entity_id: key.persist_id.clone(),
+            previous_row,
+        })
+    }
+
+    fn rollback_projection_undo(&mut self, undo: Option<RuntimeProjectionUndo>) {
+        let Some(undo) = undo else {
+            return;
+        };
+        if let Some(table) = self.projection_tables.get_mut(undo.entity_type.as_str()) {
+            table.restore_entity(undo.entity_id.as_str(), undo.previous_row);
+        }
+    }
+
+    fn projection_lag_entities_count(&self) -> usize {
+        let mut lag = 0usize;
+
+        for (entity_type, table) in &self.projection_tables {
+            let states = self
+                .hot_entities
+                .values()
+                .chain(self.cold_entities.values())
+                .filter(|entity| &entity.state.type_name == entity_type)
+                .map(|entity| &entity.state)
+                .collect::<Vec<_>>();
+
+            let mut expected_ids = HashSet::<&str>::new();
+            for state in states {
+                expected_ids.insert(state.persist_id.as_str());
+                let Some(row) = table.rows.get(state.persist_id.as_str()) else {
+                    lag = lag.saturating_add(1);
+                    continue;
+                };
+
+                match build_projection_row(&table.contract, state) {
+                    Ok(expected_row) => {
+                        if row.values != expected_row.values
+                            || row.updated_at != expected_row.updated_at
+                        {
+                            lag = lag.saturating_add(1);
+                        }
+                    }
+                    Err(_) => {
+                        lag = lag.saturating_add(1);
+                    }
+                }
+            }
+
+            for entity_id in table.rows.keys() {
+                if !expected_ids.contains(entity_id.as_str()) {
+                    lag = lag.saturating_add(1);
+                }
+            }
+        }
+
+        lag
+    }
+
+    fn mailbox_start_command(&mut self, key: &RuntimeEntityKey) {
+        let now = Utc::now();
+        let entry = self
+            .entity_mailboxes
+            .entry(key.clone())
+            .or_insert_with(|| RuntimeEntityMailbox::new(now));
+        entry.pending_commands = entry.pending_commands.saturating_add(1);
+        entry.inflight = true;
+        entry.last_command_at = now;
+    }
+
+    fn mailbox_complete_command(&mut self, key: &RuntimeEntityKey) {
+        let Some(entry) = self.entity_mailboxes.get_mut(key) else {
+            return;
+        };
+        entry.pending_commands = entry.pending_commands.saturating_sub(1);
+        entry.inflight = false;
+        entry.last_command_at = Utc::now();
+    }
+
+    fn mailbox_is_busy(&self, key: &RuntimeEntityKey) -> bool {
+        self.entity_mailboxes
+            .get(key)
+            .map(|entry| entry.inflight || entry.pending_commands > 0)
+            .unwrap_or(false)
+    }
+
+    fn mailbox_drop_entity(&mut self, key: &RuntimeEntityKey) {
+        self.entity_mailboxes.remove(key);
+    }
+
+    fn record_resurrection(&mut self) {
+        self.resurrected_since_last_report = self.resurrected_since_last_report.saturating_add(1);
+        self.lifecycle_resurrected_total = self.lifecycle_resurrected_total.saturating_add(1);
     }
 
     fn take_entity_for_mutation(&mut self, key: &RuntimeEntityKey) -> Result<RuntimeStoredEntity> {
@@ -948,8 +2137,7 @@ impl PersistEntityRuntime {
 
         if let Some(mut entity) = self.cold_entities.remove(key) {
             entity.resident = true;
-            self.resurrected_since_last_report =
-                self.resurrected_since_last_report.saturating_add(1);
+            self.record_resurrection();
             return Ok(entity);
         }
 
@@ -968,12 +2156,22 @@ impl PersistEntityRuntime {
         managed.state.metadata.persisted = true;
         managed.resident = true;
 
-        self.append_record(RuntimeJournalOp::Upsert {
-            entity: managed.clone(),
-            reason: reason.into(),
-            command,
-        })
-        .await?;
+        let projection_undo = self.apply_projection_upsert(&managed.state)?;
+
+        let append_result = self
+            .append_record(RuntimeJournalOp::Upsert {
+                entity: managed.clone(),
+                reason: reason.into(),
+                command,
+                envelope: None,
+                outbox: Vec::new(),
+                idempotency_scope_key: None,
+            })
+            .await;
+        if let Err(err) = append_result {
+            self.rollback_projection_undo(projection_undo);
+            return Err(err);
+        }
 
         let key = RuntimeEntityKey::from_state(&managed.state);
         self.cold_entities.remove(&key);
@@ -1425,6 +2623,115 @@ impl PersistEntityRuntime {
         let factor = 2u64.saturating_pow(attempt.saturating_sub(1));
         base.saturating_mul(factor).min(max)
     }
+
+    fn update_idempotency_outbox_status(&mut self, updated: &RuntimeOutboxRecord) {
+        for receipt in self.idempotency_index.values_mut() {
+            for outbox in &mut receipt.outbox {
+                if outbox.outbox_id == updated.outbox_id {
+                    outbox.status = updated.status.clone();
+                }
+            }
+        }
+    }
+}
+
+fn invoke_registered_handler(
+    handler: &RegisteredDeterministicCommandHandler,
+    state: &mut PersistState,
+    envelope: &RuntimeCommandEnvelope,
+    context: &RuntimeDeterministicContext,
+) -> Result<Vec<RuntimeSideEffectSpec>> {
+    let apply = || match handler {
+        RegisteredDeterministicCommandHandler::Legacy(handler) => {
+            handler(state, &envelope.payload_json).map(|_| Vec::new())
+        }
+        RegisteredDeterministicCommandHandler::Envelope(handler) => handler(state, envelope),
+        RegisteredDeterministicCommandHandler::Context(handler) => {
+            handler(state, &envelope.payload_json, context)
+        }
+    };
+
+    catch_unwind(AssertUnwindSafe(apply)).map_err(|_| {
+        DbError::ExecutionError(format!(
+            "Deterministic handler panicked for '{}::{}'",
+            envelope.entity_type, envelope.command_name
+        ))
+    })?
+}
+
+fn validate_command_envelope(envelope: &RuntimeCommandEnvelope) -> Result<()> {
+    if envelope.entity_type.trim().is_empty() {
+        return Err(DbError::ExecutionError(
+            "Command envelope entity_type must not be empty".to_string(),
+        ));
+    }
+    if envelope.entity_id.trim().is_empty() {
+        return Err(DbError::ExecutionError(
+            "Command envelope entity_id must not be empty".to_string(),
+        ));
+    }
+    if envelope.command_name.trim().is_empty() {
+        return Err(DbError::ExecutionError(
+            "Command envelope command_name must not be empty".to_string(),
+        ));
+    }
+    if envelope.payload_version == 0 {
+        return Err(DbError::ExecutionError(
+            "Command envelope payload_version must be >= 1".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn build_idempotency_scope_key(envelope: &RuntimeCommandEnvelope) -> Option<String> {
+    envelope.idempotency_key.as_ref().map(|key| {
+        format!(
+            "{}:{}:{}:{}",
+            envelope.entity_type, envelope.entity_id, envelope.command_name, key
+        )
+    })
+}
+
+fn build_projection_row(
+    contract: &RuntimeProjectionContract,
+    state: &PersistState,
+) -> Result<RuntimeProjectionRow> {
+    let fields = state.fields_object()?;
+    let mut values = serde_json::Map::with_capacity(contract.fields.len());
+
+    for projection_field in &contract.fields {
+        let value = fields
+            .get(projection_field.state_field.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                DbError::ExecutionError(format!(
+                    "Projection field '{}.{}' is missing in state '{}'",
+                    contract.entity_type, projection_field.state_field, state.persist_id
+                ))
+            })?;
+
+        if !payload_matches_type(&value, &projection_field.payload_type) {
+            return Err(DbError::ExecutionError(format!(
+                "Projection field '{}.{}' type mismatch: expected {:?}, got {}",
+                contract.entity_type,
+                projection_field.state_field,
+                projection_field.payload_type,
+                json_type_name(&value)
+            )));
+        }
+
+        values.insert(projection_field.column_name.clone(), value);
+    }
+
+    Ok(RuntimeProjectionRow {
+        entity_id: state.persist_id.clone(),
+        values,
+        updated_at: state.metadata.updated_at,
+    })
+}
+
+fn projection_index_key(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }
 
 fn payload_matches_type(value: &serde_json::Value, payload_type: &RuntimePayloadType) -> bool {
@@ -1462,6 +2769,25 @@ fn json_type_name(value: &serde_json::Value) -> &'static str {
         return "object";
     }
     "unknown"
+}
+
+fn normalize_runtime_policy(mut policy: RuntimeOperationalPolicy) -> RuntimeOperationalPolicy {
+    match policy.consistency {
+        RuntimeConsistencyMode::Strong => {
+            policy.durability = RuntimeDurabilityMode::Strict;
+            policy.replication.mode = RuntimeReplicationMode::Sync;
+        }
+        RuntimeConsistencyMode::LocalDurable => {
+            policy.durability = RuntimeDurabilityMode::Strict;
+        }
+        RuntimeConsistencyMode::Eventual => {
+            policy.durability = RuntimeDurabilityMode::Eventual {
+                sync_interval_ms: 250,
+            };
+            policy.replication.mode = RuntimeReplicationMode::AsyncBestEffort;
+        }
+    }
+    policy
 }
 
 fn runtime_replica_targets(root_dir: &Path, replica_roots: &[PathBuf]) -> Vec<RuntimePaths> {

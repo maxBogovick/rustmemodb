@@ -39,14 +39,25 @@ pub use persist::app::{
     PersistAppAutoPolicy, PersistAppPolicy, PersistCollection, PersistIndexedCollection,
     PersistReplicationMode, PersistReplicationPolicy, classify_managed_conflict,
 };
+pub use persist::cluster::{
+    InMemoryRuntimeForwarder, RuntimeClusterApplyResult, RuntimeClusterForwarder,
+    RuntimeClusterMembership, RuntimeClusterNode, RuntimeClusterQuorumStatus,
+    RuntimeClusterWritePolicy, RuntimeShardLeader, RuntimeShardMovement, RuntimeShardRoute,
+    RuntimeShardRoutingTable, stable_shard_for,
+};
 pub use persist::runtime::{
-    DeterministicCommandHandler, PersistEntityRuntime, RuntimeBackpressurePolicy,
-    RuntimeClosureHandler, RuntimeCommandPayloadSchema, RuntimeCompatIssue, RuntimeCompatReport,
-    RuntimeDurabilityMode, RuntimeEntityKey, RuntimeJournalOp, RuntimeJournalRecord,
-    RuntimeLifecyclePolicy, RuntimeLifecycleReport, RuntimeOperationalPolicy, RuntimePaths,
-    RuntimePayloadFieldContract, RuntimePayloadType, RuntimeReplicationMode,
-    RuntimeReplicationPolicy, RuntimeRetryPolicy, RuntimeSnapshotFile, RuntimeSnapshotPolicy,
-    RuntimeSnapshotWorker, RuntimeStats, RuntimeStoredEntity, runtime_snapshot_compat_check,
+    DeterministicCommandHandler, DeterministicContextCommandHandler,
+    DeterministicEnvelopeCommandHandler, PersistEntityRuntime, RuntimeBackpressurePolicy,
+    RuntimeClosureHandler, RuntimeCommandEnvelope, RuntimeCommandPayloadSchema, RuntimeCompatIssue,
+    RuntimeCompatReport, RuntimeConsistencyMode, RuntimeDeterminismPolicy,
+    RuntimeDeterministicContext, RuntimeDurabilityMode, RuntimeEntityKey,
+    RuntimeEnvelopeApplyResult, RuntimeIdempotencyReceipt, RuntimeJournalOp, RuntimeJournalRecord,
+    RuntimeLifecyclePolicy, RuntimeLifecycleReport, RuntimeOperationalPolicy, RuntimeOutboxRecord,
+    RuntimeOutboxStatus, RuntimePaths, RuntimePayloadFieldContract, RuntimePayloadType,
+    RuntimeProjectionContract, RuntimeProjectionField, RuntimeProjectionRow,
+    RuntimeReplicationMode, RuntimeReplicationPolicy, RuntimeRetryPolicy, RuntimeSideEffectSpec,
+    RuntimeSloMetrics, RuntimeSnapshotFile, RuntimeSnapshotPolicy, RuntimeSnapshotWorker,
+    RuntimeStats, RuntimeStoredEntity, runtime_snapshot_compat_check,
     spawn_runtime_snapshot_worker,
 };
 pub use persist::{
@@ -59,7 +70,7 @@ pub use persist::{
     default_schema_version,
 };
 pub use result::QueryResult;
-pub use rustmemodb_derive::PersistModel;
+pub use rustmemodb_derive::{PersistModel, command, persistent, persistent_impl};
 
 // Re-export persistence types
 pub use storage::{DurabilityMode, PersistenceManager, WalEntry};
