@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:17
+    container_name: habit-hero-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: habit
+      POSTGRES_PASSWORD: habit
+      POSTGRES_DB: habit_hero
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U habit -d habit_hero"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - habit_hero_pgdata:/var/lib/postgresql/data
+
+volumes:
+  habit_hero_pgdata:

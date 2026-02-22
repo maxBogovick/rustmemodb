@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust Scheduler</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .card { border: 1px solid #ccc; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
+        .form-group { margin-bottom: 10px; }
+        label { display: block; margin-bottom: 5px; }
+        input, select { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { padding: 10px 20px; background-color: #28a745; color: white; border: none; cursor: pointer; }
+        button:hover { background-color: #218838; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .status-Pending { color: orange; font-weight: bold; }
+        .status-Completed { color: green; font-weight: bold; }
+        .status-Failed { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Scheduler</h1>
+    
+    <div class="card">
+        <h2>New Task</h2>
+        <div class="form-group">
+            <label>Task Name</label>
+            <input type="text" id="name" placeholder="e.g. Morning Alarm">
+        </div>
+        <div class="form-group">
+            <label>Schedule Time (Seconds from now)</label>
+            <input type="number" id="delay" value="5">
+        </div>
+        <div class="form-group">
+            <label>Command Type</label>
+            <select id="type">
+                <option value="log">Log Message</option>
+                <option value="play">Play Sound (mock)</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Payload (Message or File Path)</label>
+            <input type="text" id="payload" placeholder="Hello World">
+        </div>
+        <button onclick="createTask()">Schedule Task</button>
+    </div>
+
+    <h2>Tasks</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Scheduled For</th>
+                <th>Command</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody id="taskList"></tbody>
+    </table>
+
+    <script>
+        async function fetchTasks() {
+            const res = await fetch('/api/tasks');
+            const tasks = await res.json();
+            const tbody = document.getElementById('taskList');
+            tbody.innerHTML = '';
+            
+            tasks.forEach(task => {
+                const tr = document.createElement('tr');
+                const date = new Date(task.schedule_time * 1000).toLocaleString();
+                const cmdStr = JSON.stringify(task.command);
+                tr.innerHTML = `
+                    <td>${task.id}</td>
+                    <td>${task.name}</td>
+                    <td>${date}</td>
+                    <td>${cmdStr}</td>
+                    <td class="status-${task.status}">${task.status}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function createTask() {
+            const name = document.getElementById('name').value;
+            const delay = parseInt(document.getElementById('delay').value);
+            const type = document.getElementById('type').value;
+            const payload = document.getElementById('payload').value;
+            
+            const now = Math.floor(Date.now() / 1000);
+            const schedule_time = now + delay;
+
+            await fetch('/api/tasks', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    name,
+                    schedule_time,
+                    command_type: type,
+                    payload
+                })
+            });
+            
+            fetchTasks();
+        }
+
+        // Poll every 2 seconds
+        setInterval(fetchTasks, 2000);
+        fetchTasks();
+    </script>
+</body>
+</html>

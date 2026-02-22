@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use rustmemodb::{
-    HeteroPersistVecSnapshot, PersistVecSnapshot, RuntimeCompatIssue, runtime_snapshot_compat_check,
+    HeteroPersistVecSnapshot, PERSIST_PUBLIC_API_VERSION_STRING, PersistVecSnapshot,
+    RuntimeCompatIssue, persist_public_api_version, runtime_journal_compat_check,
+    runtime_snapshot_compat_check,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,10 +24,13 @@ enum Command {
     },
     CompatCheck {
         #[arg(long)]
-        snapshot: PathBuf,
+        snapshot: Option<PathBuf>,
+        #[arg(long)]
+        journal: Option<PathBuf>,
         #[arg(long)]
         current_version: u32,
     },
+    ApiVersion,
 }
 
 #[derive(Subcommand)]
@@ -75,8 +80,17 @@ fn main() -> Result<()> {
         },
         Command::CompatCheck {
             snapshot,
+            journal,
             current_version,
-        } => compat_check(&snapshot, current_version),
+        } => compat_check(snapshot.as_deref(), journal.as_deref(), current_version),
+        Command::ApiVersion => {
+            let version = persist_public_api_version();
+            println!(
+                "Persist public API version: {} (major={}, minor={}, patch={})",
+                PERSIST_PUBLIC_API_VERSION_STRING, version.major, version.minor, version.patch
+            );
+            Ok(())
+        }
     }
 }
 
@@ -170,7 +184,33 @@ fn generate_migration(entity: &str, from: u32, to: u32, sql: &[String], out: &Pa
     Ok(())
 }
 
-fn compat_check(snapshot: &Path, current_version: u32) -> Result<()> {
+fn compat_check(
+    snapshot: Option<&Path>,
+    journal: Option<&Path>,
+    current_version: u32,
+) -> Result<()> {
+    if snapshot.is_none() && journal.is_none() {
+        return Err(anyhow!(
+            "At least one source must be provided: --snapshot <path> and/or --journal <path>"
+        ));
+    }
+
+    if let Some(snapshot) = snapshot {
+        compat_check_snapshot(snapshot, current_version)?;
+    }
+    if let Some(journal) = journal {
+        compat_check_journal(journal, current_version)?;
+    }
+    Ok(())
+}
+
+fn compat_check_journal(journal: &Path, current_version: u32) -> Result<()> {
+    let report = runtime_journal_compat_check(journal, current_version)?;
+    print_runtime_compat_report(&report.issues, current_version, &report.snapshot_path);
+    Ok(())
+}
+
+fn compat_check_snapshot(snapshot: &Path, current_version: u32) -> Result<()> {
     if let Ok(report) = runtime_snapshot_compat_check(snapshot, current_version) {
         print_runtime_compat_report(&report.issues, current_version, &report.snapshot_path);
         return Ok(());

@@ -1,0 +1,326 @@
+{
+  "format_version": 1,
+  "created_at_unix_ms": 1770978760120,
+  "mode": "WithData",
+  "vec_name": "metrics_store",
+  "object_type": "MetricPointModel",
+  "table_name": "persist_metricpointmodel",
+  "schema_version": 1,
+  "states": [
+    {
+      "persist_id": "4a636a7e-90ee-4f13-9bcd-90d8245d920f",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:32:53.656825Z",
+        "updated_at": "2026-02-13T10:32:37.594746Z",
+        "last_touch_at": "2026-02-13T10:32:37.594746Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 58.72714294541449,
+        "disk_io": 1497,
+        "host": "localhost-dev",
+        "ram_usage": 20.22358241590391,
+        "ts": "2026-02-12T09:32:53.656781+00:00"
+      }
+    },
+    {
+      "persist_id": "7e6eceee-77f9-4e70-aecc-e82f33d59e1a",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:32:54.160981Z",
+        "updated_at": "2026-02-13T10:32:37.595066Z",
+        "last_touch_at": "2026-02-13T10:32:37.595066Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 25.278831283752545,
+        "disk_io": 2597,
+        "host": "localhost-dev",
+        "ram_usage": 39.9603483133686,
+        "ts": "2026-02-12T09:32:54.160970+00:00"
+      }
+    },
+    {
+      "persist_id": "694d9f53-1aa3-4432-8de7-c4f428b6151b",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:32:54.664348Z",
+        "updated_at": "2026-02-13T10:32:37.595384Z",
+        "last_touch_at": "2026-02-13T10:32:37.595384Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 26.34870040186436,
+        "disk_io": 3247,
+        "host": "localhost-dev",
+        "ram_usage": 37.57393434796283,
+        "ts": "2026-02-12T09:32:54.664338+00:00"
+      }
+    },
+    {
+      "persist_id": "7604de09-29b0-44d0-b532-bdd444e69e3a",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:32:55.169823Z",
+        "updated_at": "2026-02-13T10:32:37.595691Z",
+        "last_touch_at": "2026-02-13T10:32:37.595691Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 42.44474501657747,
+        "disk_io": 1148,
+        "host": "localhost-dev",
+        "ram_usage": 38.00297218391443,
+        "ts": "2026-02-12T09:32:55.169812+00:00"
+      }
+    },
+    {
+      "persist_id": "dd2763bf-7a7c-4704-9ed5-3c3235eb4d4c",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:32:55.672897Z",
+        "updated_at": "2026-02-13T10:32:37.595996Z",
+        "last_touch_at": "2026-02-13T10:32:37.595996Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 18.818069880857305,
+        "disk_io": 1673,
+        "host": "localhost-dev",
+        "ram_usage": 46.39078084390522,
+        "ts": "2026-02-12T09:32:55.672886+00:00"
+      }
+    },
+    {
+      "persist_id": "78de73d5-7bc6-4294-a470-a56e64b8f8d7",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:33:35.457170Z",
+        "updated_at": "2026-02-13T10:32:37.596296Z",
+        "last_touch_at": "2026-02-13T10:32:37.596296Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 36.84387513710463,
+        "disk_io": 1473,
+        "host": "localhost-dev",
+        "ram_usage": 20.78948601530542,
+        "ts": "2026-02-12T09:33:35.457088+00:00"
+      }
+    },
+    {
+      "persist_id": "1ad5c06f-60d1-4c4c-b6b9-c690a09abd29",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:33:35.960628Z",
+        "updated_at": "2026-02-13T10:32:37.596598Z",
+        "last_touch_at": "2026-02-13T10:32:37.596598Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 65.38821474496434,
+        "disk_io": 2036,
+        "host": "localhost-dev",
+        "ram_usage": 43.77392784267043,
+        "ts": "2026-02-12T09:33:35.960614+00:00"
+      }
+    },
+    {
+      "persist_id": "be2502d1-8278-4b97-ba9a-2ea7a8d89c4c",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:33:36.463243Z",
+        "updated_at": "2026-02-13T10:32:37.596899Z",
+        "last_touch_at": "2026-02-13T10:32:37.596899Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 13.512537068592977,
+        "disk_io": 211,
+        "host": "localhost-dev",
+        "ram_usage": 32.47326186373264,
+        "ts": "2026-02-12T09:33:36.463236+00:00"
+      }
+    },
+    {
+      "persist_id": "6634afef-4d87-4ca8-95bf-96f30d22b73f",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:33:36.967437Z",
+        "updated_at": "2026-02-13T10:32:37.597199Z",
+        "last_touch_at": "2026-02-13T10:32:37.597199Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 22.41899071862723,
+        "disk_io": 4589,
+        "host": "localhost-dev",
+        "ram_usage": 51.24726132976782,
+        "ts": "2026-02-12T09:33:36.967429+00:00"
+      }
+    },
+    {
+      "persist_id": "d77c3d12-221b-4f5e-99a5-54e658d58052",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:33:37.472779Z",
+        "updated_at": "2026-02-13T10:32:37.597501Z",
+        "last_touch_at": "2026-02-13T10:32:37.597501Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 80.41003579434478,
+        "disk_io": 2381,
+        "host": "localhost-dev",
+        "ram_usage": 54.03182421800815,
+        "ts": "2026-02-12T09:33:37.472769+00:00"
+      }
+    },
+    {
+      "persist_id": "10984c86-2e06-47bb-a53d-040f7caec5fe",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-13T10:32:38.101066Z",
+        "updated_at": "2026-02-13T10:32:38.101489Z",
+        "last_touch_at": "2026-02-13T10:32:38.101489Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 78.34354485726129,
+        "disk_io": 4361,
+        "host": "localhost-dev",
+        "ram_usage": 43.16000087793492,
+        "ts": "2026-02-13T10:32:38.101049+00:00"
+      }
+    },
+    {
+      "persist_id": "e6150a00-8f31-4439-8e3b-9f8aa891e117",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-13T10:32:38.606123Z",
+        "updated_at": "2026-02-13T10:32:38.606644Z",
+        "last_touch_at": "2026-02-13T10:32:38.606644Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 86.17550243746203,
+        "disk_io": 1543,
+        "host": "localhost-dev",
+        "ram_usage": 26.605179726911715,
+        "ts": "2026-02-13T10:32:38.606112+00:00"
+      }
+    },
+    {
+      "persist_id": "058a1025-efa6-43c2-8b0e-d875b5de5d82",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-13T10:32:39.112183Z",
+        "updated_at": "2026-02-13T10:32:39.112506Z",
+        "last_touch_at": "2026-02-13T10:32:39.112506Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 37.25291761010313,
+        "disk_io": 1157,
+        "host": "localhost-dev",
+        "ram_usage": 23.599690871552063,
+        "ts": "2026-02-13T10:32:39.112176+00:00"
+      }
+    },
+    {
+      "persist_id": "df554e66-145a-46b4-8fc3-ecb4edc912df",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-13T10:32:39.616341Z",
+        "updated_at": "2026-02-13T10:32:39.617040Z",
+        "last_touch_at": "2026-02-13T10:32:39.617040Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 47.75134400115424,
+        "disk_io": 2013,
+        "host": "localhost-dev",
+        "ram_usage": 40.16898780594728,
+        "ts": "2026-02-13T10:32:39.616321+00:00"
+      }
+    },
+    {
+      "persist_id": "de0ce9cb-2438-4a30-b2fc-bc67bbbeaf91",
+      "type_name": "MetricPointModel",
+      "table_name": "persist_metricpointmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-13T10:32:40.120073Z",
+        "updated_at": "2026-02-13T10:32:40.120710Z",
+        "last_touch_at": "2026-02-13T10:32:40.120710Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "cpu_usage": 63.055651414600895,
+        "disk_io": 3590,
+        "host": "localhost-dev",
+        "ram_usage": 21.848969942530026,
+        "ts": "2026-02-13T10:32:40.120063+00:00"
+      }
+    }
+  ]
+}

@@ -32,6 +32,7 @@ fn register_counter_increment(runtime: &mut PersistEntityRuntime) {
                 .and_then(|v| v.as_i64())
                 .unwrap_or_default();
             fields.insert("count".to_string(), json!(current + delta));
+            state.metadata.version = state.metadata.version.saturating_add(1);
             Ok(())
         }),
     );
@@ -437,4 +438,152 @@ async fn cluster_quorum_preflight_rejects_when_insufficient_replicas_online() {
         guard.get_state("Counter", &entity_id).unwrap()
     };
     assert_eq!(count_from_state(&leader_state), 0);
+}
+
+#[tokio::test]
+async fn cluster_failover_leader_movement_preserves_writes_and_fences_old_leader() {
+    let (dir_a, dir_b, dir_c, entity_id) = bootstrap_counter_replica_dirs().await;
+
+    let runtime_a = Arc::new(Mutex::new(
+        PersistEntityRuntime::open(dir_a.path(), RuntimeOperationalPolicy::default())
+            .await
+            .unwrap(),
+    ));
+    let runtime_b = Arc::new(Mutex::new(
+        PersistEntityRuntime::open(dir_b.path(), RuntimeOperationalPolicy::default())
+            .await
+            .unwrap(),
+    ));
+    let runtime_c = Arc::new(Mutex::new(
+        PersistEntityRuntime::open(dir_c.path(), RuntimeOperationalPolicy::default())
+            .await
+            .unwrap(),
+    ));
+
+    for runtime in [&runtime_a, &runtime_b, &runtime_c] {
+        let mut guard = runtime.lock().await;
+        register_counter_increment(&mut guard);
+    }
+
+    let mut routing_epoch1 = RuntimeShardRoutingTable::new(1, "node-a").unwrap();
+    routing_epoch1.set_shard_leader(0, "node-a", 1).unwrap();
+    routing_epoch1
+        .set_shard_followers(0, vec!["node-b".to_string(), "node-c".to_string()])
+        .unwrap();
+    routing_epoch1.set_shard_quorum(0, 2).unwrap();
+
+    let forwarder_a = InMemoryRuntimeForwarder::new();
+    forwarder_a
+        .register_peer_with_routing("node-b", runtime_b.clone(), Some(routing_epoch1.clone()))
+        .await
+        .unwrap();
+    forwarder_a
+        .register_peer_with_routing("node-c", runtime_c.clone(), Some(routing_epoch1.clone()))
+        .await
+        .unwrap();
+
+    let node_a = RuntimeClusterNode::new(
+        "node-a",
+        routing_epoch1.clone(),
+        Arc::new(forwarder_a.clone()),
+    )
+    .unwrap();
+
+    {
+        let mut guard = runtime_a.lock().await;
+        node_a
+            .apply_command_envelope(
+                &mut guard,
+                RuntimeCommandEnvelope::new(
+                    "Counter",
+                    &entity_id,
+                    "increment",
+                    json!({ "delta": 2 }),
+                )
+                .with_expected_version(1),
+            )
+            .await
+            .unwrap();
+    }
+
+    let mut routing_epoch2 = routing_epoch1.clone();
+    let membership = RuntimeClusterMembership::new(vec![
+        "node-a".to_string(),
+        "node-b".to_string(),
+        "node-c".to_string(),
+    ])
+    .unwrap();
+    let movement = routing_epoch2
+        .move_shard_leader(0, "node-b", Some(&membership))
+        .unwrap();
+    assert_eq!(movement.next_leader.node_id, "node-b");
+    assert_eq!(movement.next_leader.epoch, 2);
+
+    forwarder_a
+        .update_peer_routing_table("node-b", Some(routing_epoch2.clone()))
+        .await
+        .unwrap();
+    forwarder_a
+        .update_peer_routing_table("node-c", Some(routing_epoch2.clone()))
+        .await
+        .unwrap();
+
+    let forwarder_b = InMemoryRuntimeForwarder::new();
+    forwarder_b
+        .register_peer_with_routing("node-a", runtime_a.clone(), Some(routing_epoch2.clone()))
+        .await
+        .unwrap();
+    forwarder_b
+        .register_peer_with_routing("node-c", runtime_c.clone(), Some(routing_epoch2.clone()))
+        .await
+        .unwrap();
+
+    let node_b =
+        RuntimeClusterNode::new("node-b", routing_epoch2.clone(), Arc::new(forwarder_b)).unwrap();
+    {
+        let mut guard = runtime_b.lock().await;
+        node_b
+            .apply_command_envelope(
+                &mut guard,
+                RuntimeCommandEnvelope::new(
+                    "Counter",
+                    &entity_id,
+                    "increment",
+                    json!({ "delta": 5 }),
+                )
+                .with_expected_version(2),
+            )
+            .await
+            .unwrap();
+    }
+
+    for runtime in [&runtime_a, &runtime_b, &runtime_c] {
+        let state = {
+            let mut guard = runtime.lock().await;
+            guard.get_state("Counter", &entity_id).unwrap()
+        };
+        assert_eq!(count_from_state(&state), 7);
+    }
+
+    let stale_err = {
+        let mut guard = runtime_a.lock().await;
+        node_a
+            .apply_command_envelope(
+                &mut guard,
+                RuntimeCommandEnvelope::new(
+                    "Counter",
+                    &entity_id,
+                    "increment",
+                    json!({ "delta": 1 }),
+                )
+                .with_expected_version(3),
+            )
+            .await
+            .unwrap_err()
+    };
+    assert!(
+        stale_err.to_string().contains("Epoch fence rejected"),
+        "unexpected stale leader error: {}",
+        stale_err
+    );
 }

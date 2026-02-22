@@ -1,0 +1,125 @@
+openapi: 3.1.0
+info:
+  title: Habit Hero API
+  version: 1.0.0
+  description: |
+    A/B contract for Lesson 1. Goal: user registration with professional error handling.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: Healthcheck
+      operationId: healthcheck
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/v1/users:
+    post:
+      summary: Register user
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Validation error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+components:
+  schemas:
+    CreateUserRequest:
+      type: object
+      additionalProperties: false
+      required: [email, display_name]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+    UserResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - email
+        - display_name
+        - active
+        - version
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        active:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProblemDetails:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail, correlation_id]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          format: int32
+        detail:
+          type: string
+        correlation_id:
+          type: string
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]

@@ -1423,11 +1423,6 @@ impl InMemoryDB {
         Ok(())
     }
 
-    async fn rebuild_catalog(&mut self) -> Result<()> {
-        self.rebuild_catalog_with_views(std::collections::HashMap::new())
-            .await
-    }
-
     async fn rebuild_catalog_with_views(
         &mut self,
         views: std::collections::HashMap<String, (crate::parser::ast::QueryStmt, Vec<String>)>,

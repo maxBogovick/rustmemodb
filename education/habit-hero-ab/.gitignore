@@ -1,0 +1,14 @@
+/target/
+/lesson1/target/
+/lesson2/target/
+/lesson3/target/
+/lesson4/target/
+**/.data/
+lesson1/classic-api/.env
+lesson1/product-api/.env
+lesson2/classic-api/.env
+lesson2/product-api/.env
+lesson3/classic-api/.env
+lesson3/product-api/.env
+lesson4/classic-api/.env
+lesson4/product-api/.env

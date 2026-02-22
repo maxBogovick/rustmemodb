@@ -326,9 +326,6 @@ enum WalCommand {
         is_commit: bool,
         ack: Option<Sender<()>>,
     },
-    Flush {
-        ack: Sender<()>,
-    },
     Truncate {
         ack: Sender<()>,
     },
@@ -338,7 +335,6 @@ enum WalCommand {
 struct WalWriter {
     sender: Sender<WalCommand>,
     join: Option<thread::JoinHandle<()>>,
-    metrics: Arc<WalMetrics>,
 }
 
 impl WalWriter {
@@ -354,7 +350,6 @@ impl WalWriter {
         Ok(Self {
             sender: tx,
             join: Some(join),
-            metrics,
         })
     }
 
@@ -432,10 +427,10 @@ fn wal_writer_loop(
         let mut commit_pending = false;
         let mut drain_deadline = None::<Instant>;
 
-        let mut process_cmd = |cmd: WalCommand,
-                               file: &mut BufWriter<File>,
-                               pending_commit_acks: &mut Vec<Sender<()>>,
-                               commit_pending: &mut bool| {
+        let process_cmd = |cmd: WalCommand,
+                           file: &mut BufWriter<File>,
+                           pending_commit_acks: &mut Vec<Sender<()>>,
+                           commit_pending: &mut bool| {
             match cmd {
                 WalCommand::Append {
                     bytes,
@@ -449,11 +444,6 @@ fn wal_writer_loop(
                             pending_commit_acks.push(ack);
                         }
                     }
-                }
-                WalCommand::Flush { ack } => {
-                    let _ = file.flush();
-                    metrics.on_flush();
-                    let _ = ack.send(());
                 }
                 WalCommand::Truncate { ack } => {
                     let _ = file.flush();

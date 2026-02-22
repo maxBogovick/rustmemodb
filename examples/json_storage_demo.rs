@@ -5,7 +5,8 @@
 //!
 //! Run with: cargo run --example json_storage_demo
 
-use rustmemodb::{InMemoryDB, JsonResult, JsonStorageAdapter};
+use rustmemodb::InMemoryDB;
+use rustmemodb::json::{JsonResult, JsonStorageAdapter};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 

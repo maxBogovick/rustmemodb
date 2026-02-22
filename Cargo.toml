@@ -20,6 +20,18 @@ name = "rustmemodb"
 path = "src/main.rs"
 required-features = []
 
+[[example]]
+name = "persistence_demo"
+path = "examples/managed/persistence_demo.rs"
+
+[[example]]
+name = "crm_no_sql"
+path = "examples/managed/crm_no_sql.rs"
+
+[[example]]
+name = "web_demo"
+path = "examples/web_demo/main.rs"
+
 [dependencies]
 thiserror = "2.0.17"
 anyhow = "1.0"
@@ -53,17 +65,26 @@ crossterm = "0.28.1"
 tui-textarea = "0.7.0"
 clap = { version = "4.5", features = ["derive"] }
 
+# Web Framework
+axum = { version = "0.7", features = ["macros"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+http = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+
 # Postgres Wire Protocol
 pgwire = "0.24"
 log = "0.4.28"
 tracing = "0.1"
 paste = "1.0.15"
 rustmemodb_derive = { path = "rustmemodb_derive" }
+unistructgen-macro = { version = "0.2.0", optional = true }
 
 [features]
 default = []
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
 pprof = ["dep:pprof"]
+unistructgen = ["dep:unistructgen-macro"]
 
 [dev-dependencies]
 tokio-test = "0.4"

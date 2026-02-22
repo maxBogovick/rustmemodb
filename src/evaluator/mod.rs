@@ -45,18 +45,6 @@ pub struct EvaluationContext<'a> {
 }
 
 impl<'a> EvaluationContext<'a> {
-    pub fn new(
-        registry: &'a EvaluatorRegistry,
-        subquery_handler: Option<&'a dyn SubqueryHandler>,
-    ) -> Self {
-        Self {
-            registry,
-            subquery_handler,
-            params: &[],
-            column_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
-        }
-    }
-
     pub fn with_params(
         registry: &'a EvaluatorRegistry,
         subquery_handler: Option<&'a dyn SubqueryHandler>,

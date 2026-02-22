@@ -3,7 +3,8 @@ use rustmemodb::{
     RuntimeConsistencyMode, RuntimeDeterminismPolicy, RuntimeDurabilityMode,
     RuntimeLifecyclePolicy, RuntimeOperationalPolicy, RuntimeOutboxStatus, RuntimePayloadType,
     RuntimeProjectionContract, RuntimeProjectionField, RuntimeReplicationMode,
-    RuntimeSideEffectSpec, RuntimeSnapshotPolicy, Value, spawn_runtime_snapshot_worker,
+    RuntimeSideEffectSpec, RuntimeSnapshotPolicy, RuntimeTombstonePolicy, Value,
+    runtime_journal_compat_check, runtime_snapshot_compat_check, spawn_runtime_snapshot_worker,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -151,6 +152,48 @@ async fn runtime_snapshot_scheduler_compacts_journal() {
 }
 
 #[tokio::test]
+async fn runtime_snapshot_and_journal_compat_checks_flag_newer_schema_versions() {
+    let dir = tempdir().unwrap();
+    let mut runtime = PersistEntityRuntime::open(dir.path(), RuntimeOperationalPolicy::default())
+        .await
+        .unwrap();
+
+    let _legacy = runtime
+        .create_entity("Counter", "counter_state", json!({"count": 1}), 1)
+        .await
+        .unwrap();
+    let newer = runtime
+        .create_entity("Counter", "counter_state", json!({"count": 2}), 3)
+        .await
+        .unwrap();
+
+    let paths = runtime.paths();
+    let journal_report = runtime_journal_compat_check(&paths.journal_file, 2).unwrap();
+    assert!(!journal_report.compatible);
+    assert!(
+        journal_report
+            .issues
+            .iter()
+            .any(|issue| issue.persist_id == newer)
+    );
+
+    runtime.force_snapshot_and_compact().await.unwrap();
+
+    let snapshot_report = runtime_snapshot_compat_check(&paths.snapshot_file, 2).unwrap();
+    assert!(!snapshot_report.compatible);
+    assert!(
+        snapshot_report
+            .issues
+            .iter()
+            .any(|issue| issue.persist_id == newer)
+    );
+
+    let snapshot_ok = runtime_snapshot_compat_check(&paths.snapshot_file, 3).unwrap();
+    assert!(snapshot_ok.compatible);
+    assert!(snapshot_ok.issues.is_empty());
+}
+
+#[tokio::test]
 async fn runtime_payload_schema_validation_enforces_contract() {
     let dir = tempdir().unwrap();
     let mut runtime = PersistEntityRuntime::open(dir.path(), RuntimeOperationalPolicy::default())
@@ -194,6 +237,129 @@ async fn runtime_payload_schema_validation_enforces_contract() {
         .unwrap();
     let state = runtime.get_state("Counter", &id).unwrap();
     assert_eq!(count_from_state(&state), 3);
+}
+
+#[tokio::test]
+async fn runtime_command_migration_rewrites_legacy_envelope_contract() {
+    let dir = tempdir().unwrap();
+    let mut runtime = PersistEntityRuntime::open(dir.path(), RuntimeOperationalPolicy::default())
+        .await
+        .unwrap();
+
+    runtime.register_deterministic_command_with_schema(
+        "Counter",
+        "increment_v2",
+        RuntimeCommandPayloadSchema::object()
+            .require_field("delta", RuntimePayloadType::Integer)
+            .allow_extra_fields(false),
+        Arc::new(|state, payload| {
+            let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(0);
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            Ok(())
+        }),
+    );
+    runtime
+        .register_command_migration(
+            "Counter",
+            "increment",
+            1,
+            "increment_v2",
+            2,
+            Arc::new(|payload| {
+                let amount = payload
+                    .get("amount")
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| {
+                        rustmemodb::DbError::ExecutionError(
+                            "legacy payload missing amount".to_string(),
+                        )
+                    })?;
+                Ok(json!({ "delta": amount }))
+            }),
+        )
+        .unwrap();
+
+    let migrations = runtime.list_command_migrations("Counter");
+    assert_eq!(migrations.len(), 1);
+    assert_eq!(migrations[0].from_command, "increment");
+    assert_eq!(migrations[0].to_command, "increment_v2");
+    assert_eq!(migrations[0].from_payload_version, 1);
+    assert_eq!(migrations[0].to_payload_version, 2);
+    assert_eq!(runtime.stats().registered_command_migrations, 1);
+
+    let id = runtime
+        .create_entity("Counter", "counter_state", json!({"count": 0}), 1)
+        .await
+        .unwrap();
+
+    let legacy_envelope =
+        RuntimeCommandEnvelope::new("Counter", &id, "increment", json!({ "amount": 7 }))
+            .with_expected_version(1)
+            .with_idempotency_key("legacy-op-1");
+    let applied = runtime
+        .apply_command_envelope(legacy_envelope.clone())
+        .await
+        .unwrap();
+    assert_eq!(count_from_state(&applied.state), 7);
+    assert!(!applied.idempotent_replay);
+
+    let replay = runtime
+        .apply_command_envelope(legacy_envelope)
+        .await
+        .unwrap();
+    assert!(replay.idempotent_replay);
+    assert_eq!(count_from_state(&replay.state), 7);
+}
+
+#[tokio::test]
+async fn runtime_legacy_envelope_without_migration_is_rejected() {
+    let dir = tempdir().unwrap();
+    let mut runtime = PersistEntityRuntime::open(dir.path(), RuntimeOperationalPolicy::default())
+        .await
+        .unwrap();
+
+    runtime.register_deterministic_command_with_schema(
+        "Counter",
+        "increment_v2",
+        RuntimeCommandPayloadSchema::object()
+            .require_field("delta", RuntimePayloadType::Integer)
+            .allow_extra_fields(false),
+        Arc::new(|state, payload| {
+            let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(0);
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            Ok(())
+        }),
+    );
+
+    let id = runtime
+        .create_entity("Counter", "counter_state", json!({"count": 0}), 1)
+        .await
+        .unwrap();
+    let err = runtime
+        .apply_command_envelope(RuntimeCommandEnvelope::new(
+            "Counter",
+            &id,
+            "increment",
+            json!({"amount": 3}),
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Deterministic command 'increment' is not registered"),
+        "unexpected error: {}",
+        err
+    );
 }
 
 #[tokio::test]
@@ -334,6 +500,82 @@ async fn runtime_replication_journal_shipping_recovers_on_replica() {
 
     let recovered = follower.get_state("Counter", &id).unwrap();
     assert_eq!(count_from_state(&recovered), 5);
+}
+
+#[tokio::test]
+async fn runtime_async_replication_eventually_recovers_on_replica() {
+    let primary = tempdir().unwrap();
+    let replica = tempdir().unwrap();
+
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.replication.mode = RuntimeReplicationMode::AsyncBestEffort;
+    policy
+        .replication
+        .replica_roots
+        .push(replica.path().to_path_buf());
+
+    let mut runtime = PersistEntityRuntime::open(primary.path(), policy)
+        .await
+        .unwrap();
+    runtime.register_deterministic_command(
+        "Counter",
+        "increment",
+        Arc::new(|state, payload| {
+            let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(1);
+            let fields = state.fields_object_mut()?;
+            let current = fields
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            fields.insert("count".to_string(), json!(current + delta));
+            state.metadata.version = state.metadata.version.saturating_add(1);
+            Ok(())
+        }),
+    );
+
+    let id = runtime
+        .create_entity("Counter", "runtime_counter", json!({"count": 0}), 1)
+        .await
+        .unwrap();
+    runtime
+        .apply_deterministic_command("Counter", &id, "increment", json!({"delta": 9}))
+        .await
+        .unwrap();
+    assert_eq!(runtime.stats().replication_failures, 0);
+
+    let mut recovered: Option<i64> = None;
+    for _ in 0..30 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let mut follower =
+            PersistEntityRuntime::open(replica.path(), RuntimeOperationalPolicy::default())
+                .await
+                .unwrap();
+        follower.register_deterministic_command(
+            "Counter",
+            "increment",
+            Arc::new(|state, payload| {
+                let delta = payload.get("delta").and_then(|v| v.as_i64()).unwrap_or(1);
+                let fields = state.fields_object_mut()?;
+                let current = fields
+                    .get("count")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or_default();
+                fields.insert("count".to_string(), json!(current + delta));
+                state.metadata.version = state.metadata.version.saturating_add(1);
+                Ok(())
+            }),
+        );
+
+        if let Ok(state) = follower.get_state("Counter", &id) {
+            let count = count_from_state(&state);
+            if count == 9 {
+                recovered = Some(count);
+                break;
+            }
+        }
+    }
+
+    assert_eq!(recovered, Some(9));
 }
 
 #[tokio::test]
@@ -1069,4 +1311,102 @@ async fn runtime_chaos_crash_recovery_with_lifecycle_preserves_state() {
     assert!(report.passivated >= 1);
     let stats = recovered.stats();
     assert_eq!(stats.lifecycle_gc_deleted_total, 0);
+}
+
+#[tokio::test]
+async fn runtime_tombstones_survive_compaction_until_ttl_expires() {
+    let dir = tempdir().unwrap();
+
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.tombstone = RuntimeTombstonePolicy {
+        ttl_ms: 1_000,
+        retain_for_lifecycle_gc: true,
+    };
+
+    let mut runtime = PersistEntityRuntime::open(dir.path(), policy.clone())
+        .await
+        .unwrap();
+
+    let id = runtime
+        .create_entity(
+            "Todo",
+            "todo_state",
+            json!({"title": "demo", "done": false}),
+            1,
+        )
+        .await
+        .unwrap();
+    runtime
+        .delete_entity("Todo", &id, "user_delete")
+        .await
+        .unwrap();
+
+    assert_eq!(runtime.list_tombstones().len(), 1);
+    runtime.force_snapshot_and_compact().await.unwrap();
+
+    let journal = std::fs::read_to_string(runtime.paths().journal_file).unwrap_or_default();
+    assert_eq!(
+        journal
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        0
+    );
+
+    let reopened = PersistEntityRuntime::open(dir.path(), policy.clone())
+        .await
+        .unwrap();
+    assert_eq!(reopened.list_tombstones().len(), 1);
+    assert_eq!(reopened.stats().tombstones, 1);
+    drop(reopened);
+
+    tokio::time::sleep(std::time::Duration::from_millis(1_600)).await;
+
+    let mut expired = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+    let _ = expired.run_lifecycle_maintenance().await.unwrap();
+    assert!(expired.list_tombstones().is_empty());
+    expired.force_snapshot_and_compact().await.unwrap();
+
+    let restored = PersistEntityRuntime::open(dir.path(), RuntimeOperationalPolicy::default())
+        .await
+        .unwrap();
+    assert!(restored.list_tombstones().is_empty());
+}
+
+#[tokio::test]
+async fn runtime_lifecycle_gc_can_skip_tombstones_by_policy() {
+    let dir = tempdir().unwrap();
+
+    let mut policy = RuntimeOperationalPolicy::default();
+    policy.lifecycle = RuntimeLifecyclePolicy {
+        passivate_after_ms: 0,
+        gc_after_ms: 10,
+        max_hot_objects: 100,
+        gc_only_if_never_touched: false,
+    };
+    policy.tombstone = RuntimeTombstonePolicy {
+        ttl_ms: 5_000,
+        retain_for_lifecycle_gc: false,
+    };
+
+    let mut runtime = PersistEntityRuntime::open(dir.path(), policy)
+        .await
+        .unwrap();
+    let id = runtime
+        .create_entity("Ephemeral", "ephemeral_state", json!({"count": 1}), 1)
+        .await
+        .unwrap();
+    let _ = runtime.get_state("Ephemeral", &id).unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let report1 = runtime.run_lifecycle_maintenance().await.unwrap();
+    assert!(report1.passivated >= 1);
+
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    let report2 = runtime.run_lifecycle_maintenance().await.unwrap();
+    assert!(report2.gc_deleted >= 1);
+    assert!(runtime.list_tombstones().is_empty());
+    assert_eq!(runtime.stats().tombstones, 0);
 }

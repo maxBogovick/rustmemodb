@@ -1,0 +1,378 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::domain::{
+    errors::DomainError,
+    user::{
+        PaginatedUsers, SortOrder, UpdateUserPatch, User, UserAuditEvent, UserLifecycleCommand,
+        UserListQuery, UserSortBy,
+    },
+};
+
+#[derive(Debug, Deserialize)]
+pub struct CreateUserRequest {
+    pub email: String,
+    pub display_name: String,
+}
+
+impl CreateUserRequest {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        let email = self.email.trim();
+        let display_name = self.display_name.trim();
+
+        if email.is_empty() {
+            return Err(DomainError::validation("email must not be blank"));
+        }
+        if email.len() > 320 {
+            return Err(DomainError::validation(
+                "email must be at most 320 characters",
+            ));
+        }
+        if !is_valid_email(email) {
+            return Err(DomainError::validation("email must be a valid address"));
+        }
+
+        if display_name.is_empty() {
+            return Err(DomainError::validation("display_name must not be blank"));
+        }
+        if display_name.len() > 100 {
+            return Err(DomainError::validation(
+                "display_name must be at most 100 characters",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserRequest {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub active: Option<bool>,
+}
+
+impl UpdateUserRequest {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.display_name.is_none() && self.active.is_none() {
+            return Err(DomainError::validation(
+                "at least one field must be provided: display_name, active",
+            ));
+        }
+
+        if let Some(display_name) = self.display_name.as_ref() {
+            let normalized = display_name.trim();
+            if normalized.is_empty() {
+                return Err(DomainError::validation("display_name must not be blank"));
+            }
+            if normalized.len() > 100 {
+                return Err(DomainError::validation(
+                    "display_name must be at most 100 characters",
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn into_patch(self) -> UpdateUserPatch {
+        UpdateUserPatch {
+            display_name: self.display_name.map(|value| value.trim().to_string()),
+            active: self.active,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApplyUserCommandRequest {
+    pub command: UserLifecycleCommandRequest,
+}
+
+impl ApplyUserCommandRequest {
+    pub fn into_domain(self) -> UserLifecycleCommand {
+        self.command.into_domain()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BulkLifecycleCommandRequest {
+    pub ids: Vec<String>,
+    pub command: UserLifecycleCommandRequest,
+}
+
+impl BulkLifecycleCommandRequest {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.ids.is_empty() {
+            return Err(DomainError::validation("ids must not be empty"));
+        }
+
+        if self.ids.len() > 1000 {
+            return Err(DomainError::validation(
+                "ids must contain at most 1000 entries",
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn into_domain(self) -> Result<(Vec<Uuid>, UserLifecycleCommand), DomainError> {
+        let mut ids = Vec::with_capacity(self.ids.len());
+
+        for id in self.ids {
+            let parsed = Uuid::parse_str(id.trim())
+                .map_err(|_| DomainError::validation("each id must be a valid UUID string"))?;
+            ids.push(parsed);
+        }
+
+        Ok((ids, self.command.into_domain()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserLifecycleCommandRequest {
+    Activate,
+    Deactivate,
+}
+
+impl UserLifecycleCommandRequest {
+    pub const fn into_domain(self) -> UserLifecycleCommand {
+        match self {
+            Self::Activate => UserLifecycleCommand::Activate,
+            Self::Deactivate => UserLifecycleCommand::Deactivate,
+        }
+    }
+}
+
+impl From<UserLifecycleCommand> for UserLifecycleCommandRequest {
+    fn from(value: UserLifecycleCommand) -> Self {
+        match value {
+            UserLifecycleCommand::Activate => Self::Activate,
+            UserLifecycleCommand::Deactivate => Self::Deactivate,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkLifecycleCommandResponse {
+    pub requested: usize,
+    pub processed: u64,
+    pub command: UserLifecycleCommandRequest,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListUserEventsQueryRequest {
+    #[serde(default = "default_events_limit")]
+    pub limit: u32,
+}
+
+impl ListUserEventsQueryRequest {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.limit == 0 || self.limit > 100 {
+            return Err(DomainError::validation("limit must be between 1 and 100"));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserAuditEventResponse {
+    pub id: String,
+    pub user_id: Uuid,
+    pub event_type: String,
+    pub message: String,
+    pub resulting_version: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<UserAuditEvent> for UserAuditEventResponse {
+    fn from(value: UserAuditEvent) -> Self {
+        Self {
+            id: value.id,
+            user_id: value.user_id,
+            event_type: value.event_type,
+            message: value.message,
+            resulting_version: value.resulting_version,
+            created_at: value.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserEventsResponse {
+    pub items: Vec<UserAuditEventResponse>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserResponse {
+    pub id: Uuid,
+    pub email: String,
+    pub display_name: String,
+    pub active: bool,
+    pub version: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl TryFrom<User> for UserResponse {
+    type Error = DomainError;
+
+    fn try_from(value: User) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id()?,
+            email: value.email().to_string(),
+            display_name: value.display_name().to_string(),
+            active: *value.active(),
+            version: value.version(),
+            created_at: value.created_at(),
+            updated_at: value.updated_at(),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListUsersQueryRequest {
+    #[serde(default = "default_page")]
+    pub page: u32,
+    #[serde(default = "default_per_page")]
+    pub per_page: u32,
+    #[serde(default)]
+    pub email_contains: Option<String>,
+    #[serde(default)]
+    pub active: Option<bool>,
+    #[serde(default)]
+    pub sort_by: UserSortByRequest,
+    #[serde(default)]
+    pub order: SortOrderRequest,
+}
+
+impl ListUsersQueryRequest {
+    pub fn validate(&self) -> Result<(), DomainError> {
+        if self.page == 0 {
+            return Err(DomainError::validation("page must be greater than 0"));
+        }
+        if self.per_page == 0 || self.per_page > 100 {
+            return Err(DomainError::validation(
+                "per_page must be between 1 and 100",
+            ));
+        }
+        if let Some(email_contains) = self.email_contains.as_ref()
+            && email_contains.trim().is_empty()
+        {
+            return Err(DomainError::validation("email_contains must not be blank"));
+        }
+        Ok(())
+    }
+
+    pub fn into_domain(self) -> UserListQuery {
+        UserListQuery {
+            page: self.page,
+            per_page: self.per_page,
+            email_contains: self.email_contains.map(|value| value.trim().to_lowercase()),
+            active: self.active,
+            sort_by: self.sort_by.into_domain(),
+            sort_order: self.order.into_domain(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UserSortByRequest {
+    #[default]
+    CreatedAt,
+    Email,
+    DisplayName,
+}
+
+impl UserSortByRequest {
+    fn into_domain(self) -> UserSortBy {
+        match self {
+            Self::CreatedAt => UserSortBy::CreatedAt,
+            Self::Email => UserSortBy::Email,
+            Self::DisplayName => UserSortBy::DisplayName,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrderRequest {
+    #[default]
+    Desc,
+    Asc,
+}
+
+impl SortOrderRequest {
+    fn into_domain(self) -> SortOrder {
+        match self {
+            Self::Asc => SortOrder::Asc,
+            Self::Desc => SortOrder::Desc,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PaginatedUsersResponse {
+    pub items: Vec<UserResponse>,
+    pub page: u32,
+    pub per_page: u32,
+    pub total: u64,
+    pub total_pages: u32,
+}
+
+impl TryFrom<PaginatedUsers> for PaginatedUsersResponse {
+    type Error = DomainError;
+
+    fn try_from(value: PaginatedUsers) -> Result<Self, Self::Error> {
+        let mut items = Vec::with_capacity(value.items.len());
+        for user in value.items {
+            items.push(UserResponse::try_from(user)?);
+        }
+
+        Ok(Self {
+            items,
+            page: value.page,
+            per_page: value.per_page,
+            total: value.total,
+            total_pages: value.total_pages,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct HealthResponse {
+    pub status: &'static str,
+}
+
+fn is_valid_email(value: &str) -> bool {
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+
+    if local.is_empty() || domain.is_empty() {
+        return false;
+    }
+
+    if domain.starts_with('.') || domain.ends_with('.') || !domain.contains('.') {
+        return false;
+    }
+
+    !value.contains(' ')
+}
+
+const fn default_page() -> u32 {
+    1
+}
+
+const fn default_per_page() -> u32 {
+    20
+}
+
+const fn default_events_limit() -> u32 {
+    20
+}

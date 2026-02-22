@@ -265,15 +265,52 @@ impl Table {
             let mut new_versions = versions.clone();
 
             if !new_versions.is_empty() {
-                let old_version_idx = new_versions.len() - 1;
+                let old_version_idx =
+                    new_versions
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find_map(|(idx, version)| {
+                            if self.is_visible(version, snapshot) || version.xmin == snapshot.tx_id
+                            {
+                                Some(idx)
+                            } else {
+                                None
+                            }
+                        });
+                let Some(old_version_idx) = old_version_idx else {
+                    return Ok(false);
+                };
+
+                // If there are newer versions after our target, they are only acceptable when
+                // they are from aborted transactions; committed/active newer versions must
+                // still trigger a conflict to avoid lost updates.
+                if old_version_idx + 1 < new_versions.len() {
+                    let has_blocking_newer_version =
+                        new_versions[old_version_idx + 1..].iter().any(|version| {
+                            if snapshot.aborted.contains(&version.xmin) {
+                                return false;
+                            }
+                            version.xmin != snapshot.tx_id
+                        });
+                    if has_blocking_newer_version {
+                        return Ok(false);
+                    }
+                }
+
                 let old_visible = self.is_visible(&new_versions[old_version_idx], snapshot);
                 let latest = new_versions.get_mut(old_version_idx).unwrap();
-                if latest.xmax.is_some() {
-                    return Ok(false);
+                if let Some(xmax) = latest.xmax {
+                    if snapshot.aborted.contains(&xmax) {
+                        latest.xmax = None;
+                    } else {
+                        return Ok(false);
+                    }
                 }
                 if !old_visible && latest.xmin != snapshot.tx_id {
                     return Ok(false);
                 }
+
                 latest.xmax = Some(snapshot.tx_id);
                 let new_version = MvccRow {
                     row: new_row.clone(),
@@ -790,6 +827,15 @@ mod tests {
         }
     }
 
+    fn snapshot_with_aborted(tx_id: u64, aborted: &[u64]) -> Snapshot {
+        Snapshot {
+            tx_id,
+            active: Arc::new(HashSet::new()),
+            aborted: Arc::new(aborted.iter().copied().collect()),
+            max_tx_id: tx_id + 1,
+        }
+    }
+
     #[test]
     fn fail_11_index_entries_should_be_removed_on_vacuum() {
         let schema = TableSchema::new(
@@ -819,5 +865,44 @@ mod tests {
             old_entries.is_empty(),
             "expected stale index entries to be removed on vacuum"
         );
+    }
+
+    #[test]
+    fn update_ignores_aborted_tail_version_and_allows_next_writer() {
+        let schema = TableSchema::new(
+            "t",
+            vec![
+                Column::new("id", DataType::Integer).primary_key(),
+                Column::new("v", DataType::Integer),
+            ],
+        );
+        let mut table = Table::new(schema);
+
+        let tx1 = snapshot(1);
+        let row_id = table
+            .insert(vec![Value::Integer(1), Value::Integer(10)], &tx1)
+            .expect("seed row");
+
+        // Simulate a writer that later aborts after creating a newer tail version.
+        let tx2 = snapshot(2);
+        let updated = table
+            .update(row_id, vec![Value::Integer(1), Value::Integer(20)], &tx2)
+            .expect("first update should apply");
+        assert!(updated, "first update should produce a new version");
+
+        // Next writer sees tx2 as aborted and must be able to update the row.
+        let tx3 = snapshot_with_aborted(3, &[2]);
+        let updated = table
+            .update(row_id, vec![Value::Integer(1), Value::Integer(30)], &tx3)
+            .expect("second update should not be blocked by aborted tail");
+        assert!(
+            updated,
+            "aborted tail version must not cause false conflict"
+        );
+
+        let visible = table
+            .get_visible_row(row_id, &tx3)
+            .expect("row must remain visible");
+        assert_eq!(visible[1], Value::Integer(30));
     }
 }

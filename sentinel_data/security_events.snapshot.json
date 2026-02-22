@@ -1,0 +1,91 @@
+{
+  "format_version": 1,
+  "created_at_unix_ms": 1770978759113,
+  "mode": "WithData",
+  "vec_name": "security_events",
+  "object_type": "SecurityEventModel",
+  "table_name": "persist_securityeventmodel",
+  "schema_version": 1,
+  "states": [
+    {
+      "persist_id": "a9e5bef8-8864-4146-955f-f4c14e4d281c",
+      "type_name": "SecurityEventModel",
+      "table_name": "persist_securityeventmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:32:54.666121Z",
+        "updated_at": "2026-02-13T10:32:37.598461Z",
+        "last_touch_at": "2026-02-13T10:32:37.598461Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "details": "{\"msg\":\"USB device connected\"}",
+        "severity": "INFO",
+        "source": "kernel",
+        "ts": "2026-02-12T09:32:54.666119+00:00"
+      }
+    },
+    {
+      "persist_id": "65aac5d7-d288-44f4-bcda-7afe41ed9e13",
+      "type_name": "SecurityEventModel",
+      "table_name": "persist_securityeventmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-12T09:33:36.464255Z",
+        "updated_at": "2026-02-13T10:32:37.598780Z",
+        "last_touch_at": "2026-02-13T10:32:37.598780Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "details": "{\"msg\":\"USB device connected\"}",
+        "severity": "INFO",
+        "source": "kernel",
+        "ts": "2026-02-12T09:33:36.464254+00:00"
+      }
+    },
+    {
+      "persist_id": "0ca6f08b-f667-4cd0-ac1a-a92757efbae3",
+      "type_name": "SecurityEventModel",
+      "table_name": "persist_securityeventmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-13T10:32:38.607548Z",
+        "updated_at": "2026-02-13T10:32:38.607901Z",
+        "last_touch_at": "2026-02-13T10:32:38.607901Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "details": "{\"cpu\":86.17550243746203,\"limit\":85.0}",
+        "severity": "CRITICAL",
+        "source": "system_monitor",
+        "ts": "2026-02-13T10:32:38.607546+00:00"
+      }
+    },
+    {
+      "persist_id": "19dd3c1c-145d-47ff-be44-b4bd87443999",
+      "type_name": "SecurityEventModel",
+      "table_name": "persist_securityeventmodel",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-13T10:32:39.113418Z",
+        "updated_at": "2026-02-13T10:32:39.113691Z",
+        "last_touch_at": "2026-02-13T10:32:39.113691Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "details": "{\"msg\":\"USB device connected\"}",
+        "severity": "INFO",
+        "source": "kernel",
+        "ts": "2026-02-13T10:32:39.113416+00:00"
+      }
+    }
+  ]
+}

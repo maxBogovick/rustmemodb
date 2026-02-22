@@ -353,7 +353,7 @@ The repository contains a more advanced storage implementation (`InMemoryStorage
 
 * MVCC rows and visibility checks (`is_visible`, `is_committed`, `is_version_live`) and vacuum implementation to free obsolete versions. These functions use transaction snapshots and the transaction manager to determine visibility and to implement `vacuum` to free storage from old transactions.
 * Indexing: per-table indexes and functions `create_index`, `get_index`, and `update_indexes` to maintain simple value → row id mappings (`OrdMap` used). Unique constraint checks consult indexes and visible version checks before insert (`check unique` logic).
-* Persistence manager with durability modes (`DurabilityMode::Sync`, `Async`, `None`) and checkpoint/WAL support. Examples show `enable_persistence(data_dir, DurabilityMode::Async).await` and `checkpoint().await`. Persistence is optional and integrated with storage and the DB object's `persistence` field. See `examples/persistence_demo.rs` for usage patterns.
+* Persistence manager with durability modes (`DurabilityMode::Sync`, `Async`, `None`) and checkpoint/WAL support. Examples show `enable_persistence(data_dir, DurabilityMode::Async).await` and `checkpoint().await`. Persistence is optional and integrated with storage and the DB object's `persistence` field. See `examples/managed/persistence_demo.rs` for usage patterns.
 
 ---
 

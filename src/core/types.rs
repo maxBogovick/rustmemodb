@@ -99,14 +99,20 @@ impl DataType {
                 if let Some(stripped) = s.strip_suffix(" UTC") {
                     if let Ok(dt) = NaiveDateTime::parse_from_str(stripped, "%Y-%m-%d %H:%M:%S%.f")
                     {
-                        return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                        return Ok(Value::Timestamp(DateTime::from_naive_utc_and_offset(
+                            dt, Utc,
+                        )));
                     }
                 }
                 if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-                    return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                    return Ok(Value::Timestamp(DateTime::from_naive_utc_and_offset(
+                        dt, Utc,
+                    )));
                 }
                 if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-                    return Ok(Value::Timestamp(DateTime::from_utc(dt, Utc)));
+                    return Ok(Value::Timestamp(DateTime::from_naive_utc_and_offset(
+                        dt, Utc,
+                    )));
                 }
                 Err(DbError::TypeMismatch(format!(
                     "Invalid Timestamp format: {}",

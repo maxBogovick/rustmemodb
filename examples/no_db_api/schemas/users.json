@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "username": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "age": {
+      "type": "integer"
+    },
+    "active": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "username",
+    "email"
+  ]
+}

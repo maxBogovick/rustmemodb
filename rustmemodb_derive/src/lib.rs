@@ -1,3 +1,6 @@
+mod api_service_impl;
+
+use api_service_impl::expand_api_service;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -5,9 +8,18 @@ use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{
     Data, DeriveInput, Fields, FnArg, Ident, ImplItem, ImplItemFn, ItemFn, ItemImpl, ItemStruct,
-    LitStr, Pat, PatType, ReturnType, Token, Type, TypePath, parse_macro_input,
+    ItemTrait, LitStr, Pat, PatType, ReturnType, Token, Type, TypePath, parse_macro_input,
     spanned::Spanned,
 };
+
+#[proc_macro_attribute]
+pub fn api_service(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemTrait);
+    match expand_api_service(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
 
 #[proc_macro_derive(PersistModel, attributes(persist_model, sql))]
 pub fn derive_persist_model(input: TokenStream) -> TokenStream {
@@ -34,16 +46,10 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let marker_value = marker
-        .name
-        .as_ref()
-        .map(|name| format!("__rustmemodb_command:{name}"))
-        .unwrap_or_else(|| "__rustmemodb_command".to_string());
+    let marker_value = build_command_doc_marker(&marker);
 
     if let Ok(mut method) = syn::parse::<ImplItemFn>(item.clone()) {
-        method
-            .attrs
-            .push(syn::parse_quote!(#[doc = #marker_value]));
+        method.attrs.push(syn::parse_quote!(#[doc = #marker_value]));
         return quote!(#method).into();
     }
 
@@ -55,6 +61,60 @@ pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
     syn::Error::new(
         proc_macro2::Span::call_site(),
         "#[command] can only be applied to functions or impl methods",
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn view(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let marker = match parse_view_attr_tokens(attr.into()) {
+        Ok(marker) => marker,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let marker_value = build_view_like_doc_marker("__rustmemodb_view", &marker);
+
+    if let Ok(mut method) = syn::parse::<ImplItemFn>(item.clone()) {
+        method.attrs.push(syn::parse_quote!(#[doc = #marker_value]));
+        return quote!(#method).into();
+    }
+
+    if let Ok(mut func) = syn::parse::<ItemFn>(item.clone()) {
+        func.attrs.push(syn::parse_quote!(#[doc = #marker_value]));
+        return quote!(#func).into();
+    }
+
+    syn::Error::new(
+        proc_macro2::Span::call_site(),
+        "#[view] can only be applied to functions or impl methods",
+    )
+    .to_compile_error()
+    .into()
+}
+
+#[proc_macro_attribute]
+pub fn query(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let marker = match parse_query_attr_tokens(attr.into()) {
+        Ok(marker) => marker,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let marker_value = build_view_like_doc_marker("__rustmemodb_query", &marker);
+
+    if let Ok(mut method) = syn::parse::<ImplItemFn>(item.clone()) {
+        method.attrs.push(syn::parse_quote!(#[doc = #marker_value]));
+        return quote!(#method).into();
+    }
+
+    if let Ok(mut func) = syn::parse::<ItemFn>(item.clone()) {
+        func.attrs.push(syn::parse_quote!(#[doc = #marker_value]));
+        return quote!(#func).into();
+    }
+
+    syn::Error::new(
+        proc_macro2::Span::call_site(),
+        "#[query] can only be applied to functions or impl methods",
     )
     .to_compile_error()
     .into()
@@ -78,7 +138,82 @@ pub fn persistent_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_persistent_attr(attr: TokenStream2, item_struct: ItemStruct) -> syn::Result<TokenStream2> {
+#[proc_macro_attribute]
+pub fn autonomous_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[autonomous_impl] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let input = parse_macro_input!(item as ItemImpl);
+    match expand_autonomous_impl_attr(input, false) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn expose_rest(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[expose_rest] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let input = parse_macro_input!(item as ItemImpl);
+    match expand_autonomous_impl_attr(input, true) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(PersistAutonomousIntent, attributes(persist_intent, persist_case))]
+pub fn derive_persist_autonomous_intent(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_persist_autonomous_intent(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(Autonomous, attributes(persist_model, sql))]
+pub fn derive_autonomous(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_autonomous(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(PersistJsonValue)]
+pub fn derive_persist_json_value(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_persist_json_value(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(ApiError, attributes(api_error))]
+pub fn derive_api_error(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_api_error(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn expand_persistent_attr(
+    attr: TokenStream2,
+    item_struct: ItemStruct,
+) -> syn::Result<TokenStream2> {
     let options = parse_persistent_attr_options(attr)?;
     let has_derive = has_derive_trait(&item_struct.attrs, "PersistModel");
     let has_persist_model_attr = item_struct
@@ -86,7 +221,8 @@ fn expand_persistent_attr(attr: TokenStream2, item_struct: ItemStruct) -> syn::R
         .iter()
         .any(|attr| attr.path().is_ident("persist_model"));
 
-    if has_persist_model_attr && (options.table_name.is_some() || options.schema_version.is_some()) {
+    if has_persist_model_attr && (options.table_name.is_some() || options.schema_version.is_some())
+    {
         return Err(syn::Error::new(
             item_struct.span(),
             "#[persistent(...)] options conflict with existing #[persist_model(...)] attribute",
@@ -100,12 +236,13 @@ fn expand_persistent_attr(attr: TokenStream2, item_struct: ItemStruct) -> syn::R
 
     if !has_persist_model_attr && (options.table_name.is_some() || options.schema_version.is_some())
     {
-        let table_part = options.table_name.as_ref().map(|table| {
-            quote!(table = #table)
-        });
-        let schema_part = options.schema_version.map(|version| {
-            quote!(schema_version = #version)
-        });
+        let table_part = options
+            .table_name
+            .as_ref()
+            .map(|table| quote!(table = #table));
+        let schema_part = options
+            .schema_version
+            .map(|version| quote!(schema_version = #version));
 
         let persist_model_attr = match (table_part, schema_part) {
             (Some(table), Some(schema)) => quote!(#[persist_model(#table, #schema)]),
@@ -239,7 +376,11 @@ fn expand_persistent_impl_attr(mut item_impl: ItemImpl) -> syn::Result<TokenStre
     let command_match_arms = commands.iter().map(|cmd| {
         let variant = &cmd.variant_ident;
         let method_ident = &cmd.method_ident;
-        let args = cmd.args.iter().map(|arg| arg.ident.clone()).collect::<Vec<_>>();
+        let args = cmd
+            .args
+            .iter()
+            .map(|arg| arg.ident.clone())
+            .collect::<Vec<_>>();
         let pattern = if args.is_empty() {
             quote!(#command_enum_ident::#variant)
         } else {
@@ -447,6 +588,880 @@ fn expand_persistent_impl_attr(mut item_impl: ItemImpl) -> syn::Result<TokenStre
     })
 }
 
+fn expand_autonomous_impl_attr(
+    mut item_impl: ItemImpl,
+    expose_rest: bool,
+) -> syn::Result<TokenStream2> {
+    if item_impl.trait_.is_some() {
+        return Err(syn::Error::new(
+            item_impl.span(),
+            "#[autonomous_impl] can only be used on inherent impl blocks",
+        ));
+    }
+
+    let model_ident = extract_impl_self_type_ident(&item_impl.self_ty)?;
+    let trait_ident = format_ident!("{}AutonomousOps", model_ident);
+    let rest_ext_trait_ident = format_ident!("{}AutonomousRestExt", model_ident);
+
+    let mut methods = Vec::<AutonomousExposedMethod>::new();
+    let mut views = Vec::<AutonomousViewMethod>::new();
+    let mut constructor_args: Option<Vec<PersistentCommandArg>> = None;
+    for item in &mut item_impl.items {
+        let ImplItem::Fn(method) = item else {
+            continue;
+        };
+
+        if constructor_args.is_none() {
+            constructor_args = parse_autonomous_constructor_args(method, &model_ident)?;
+        }
+
+        let command_marker = extract_command_marker(&mut method.attrs)?;
+        let view_marker = extract_view_marker(&mut method.attrs)?;
+
+        if command_marker.is_some() && view_marker.is_some() {
+            return Err(syn::Error::new(
+                method.sig.span(),
+                "Method cannot be both #[command] and #[view]/#[query]",
+            ));
+        }
+
+        if let Some(marker) = command_marker {
+            methods.push(AutonomousExposedMethod::from_impl_method(method, marker)?);
+            continue;
+        }
+
+        if let Some(marker) = view_marker {
+            if !expose_rest {
+                return Err(syn::Error::new(
+                    method.sig.span(),
+                    "#[view] requires #[expose_rest] on the impl block",
+                ));
+            }
+            views.push(AutonomousViewMethod::from_impl_method(method, marker)?);
+        }
+    }
+
+    if methods.is_empty() && views.is_empty() {
+        return Ok(quote!(#item_impl));
+    }
+
+    let command_trait_tokens = if methods.is_empty() {
+        quote! {}
+    } else {
+        let trait_methods = methods.iter().map(|method| method.trait_method_tokens());
+        let impl_methods = methods
+            .iter()
+            .map(|method| method.impl_method_tokens(&model_ident));
+        quote! {
+            pub trait #trait_ident {
+                #(#trait_methods)*
+            }
+
+            impl #trait_ident for ::rustmemodb::PersistAutonomousModelHandle<#model_ident> {
+                #(#impl_methods)*
+            }
+        }
+    };
+
+    let rest_tokens = if expose_rest {
+        generate_autonomous_rest_tokens(
+            &model_ident,
+            &rest_ext_trait_ident,
+            &methods,
+            &views,
+            constructor_args.as_deref(),
+        )?
+    } else {
+        quote! {}
+    };
+
+    Ok(quote! {
+        #item_impl
+
+        #command_trait_tokens
+        #rest_tokens
+    })
+}
+
+fn generate_autonomous_rest_tokens(
+    model_ident: &Ident,
+    rest_ext_trait_ident: &Ident,
+    methods: &[AutonomousExposedMethod],
+    views: &[AutonomousViewMethod],
+    constructor_args: Option<&[PersistentCommandArg]>,
+) -> syn::Result<TokenStream2> {
+    use std::collections::HashSet;
+
+    let mut routes = HashSet::<String>::new();
+    for method in methods {
+        let route = method.route_literal();
+        if !routes.insert(route.clone()) {
+            return Err(syn::Error::new(
+                method.method_ident.span(),
+                format!("Duplicate REST route segment generated: {route}"),
+            ));
+        }
+    }
+    for view in views {
+        let route = view.route_literal();
+        if !routes.insert(route.clone()) {
+            return Err(syn::Error::new(
+                view.method_ident.span(),
+                format!("Duplicate REST route segment generated: {route}"),
+            ));
+        }
+    }
+
+    let server_ident = format_ident!("{}AutonomousRestServer", model_ident);
+    let command_request_structs = methods
+        .iter()
+        .filter_map(|method| method.request_struct_tokens(model_ident));
+    let view_request_structs = views
+        .iter()
+        .filter_map(|view| view.request_struct_tokens(model_ident));
+    let create_request_ident = format_ident!("{}CreateRequest", model_ident);
+    let create_request_type_name = if constructor_args.is_some() {
+        create_request_ident.to_string()
+    } else {
+        model_ident.to_string()
+    };
+    let create_request_struct = constructor_args.map(|args| {
+        let fields = args.iter().map(|arg| {
+            let ident = &arg.ident;
+            let ty = &arg.ty;
+            quote!(pub #ident: #ty)
+        });
+        quote! {
+            #[derive(::serde::Deserialize, ::serde::Serialize, ::core::fmt::Debug, ::core::clone::Clone)]
+            pub struct #create_request_ident {
+                #( #fields, )*
+            }
+        }
+    });
+    let command_routes = methods.iter().map(|method| {
+        let route = method.route_literal();
+        let handler_ident = format_ident!("handle_command_{}", method.method_ident);
+        quote! {
+            .route(concat!("/:id/", #route), axum::routing::post(Self::#handler_ident))
+        }
+    });
+    let command_handlers = methods
+        .iter()
+        .map(|method| method.command_handler_tokens(model_ident));
+    let view_routes = views.iter().map(|view| {
+        let route = view.route_literal();
+        let handler_ident = format_ident!("handle_view_{}", view.method_ident);
+        let routing_method = match view.input_mode {
+            ViewInputMode::Query => quote!(get),
+            ViewInputMode::Body => quote!(post),
+        };
+        quote! {
+            .route(concat!("/:id/", #route), axum::routing::#routing_method(Self::#handler_ident))
+        }
+    });
+    let view_handlers = views
+        .iter()
+        .map(|view| view.view_handler_tokens(model_ident));
+    let model_name = model_ident.to_string();
+    let record_type_name = format!("PersistAutonomousRecord<{}>", model_name);
+    let list_record_type_name = format!("Vec<{}>", record_type_name);
+    let command_openapi_ops = methods.iter().map(|method| {
+        let path = format!("/{{id}}/{}", method.route_literal());
+        let operation_id = format!("{}_{}", to_snake_case(&model_name), method.method_ident);
+        let summary = format!("{} command", method.method_ident);
+        let request_type = method.openapi_request_rust_type_literal(model_ident);
+        let request_type_tokens = if let Some(request_type) = request_type {
+            quote!(Some(#request_type))
+        } else {
+            quote!(None)
+        };
+        let response_type = method.openapi_response_rust_type_literal();
+        let response_type_tokens = if let Some(response_type) = response_type {
+            quote!(Some(#response_type))
+        } else {
+            quote!(None)
+        };
+        let success_status = method.openapi_success_status_code();
+        let idempotent = method.idempotent;
+        quote! {
+            ::rustmemodb::persist::web::PersistOpenApiOperation {
+                method: "post",
+                path: #path,
+                operation_id: #operation_id,
+                summary: #summary,
+                request_rust_type: #request_type_tokens,
+                request_location: Some(::rustmemodb::persist::web::PersistOpenApiInputLocation::Body),
+                response_rust_type: #response_type_tokens,
+                success_status: #success_status,
+                idempotent: #idempotent,
+            }
+        }
+    });
+    let view_openapi_ops = views.iter().map(|view| {
+        let path = format!("/{{id}}/{}", view.route_literal());
+        let operation_id = format!("{}_{}", to_snake_case(&model_name), view.method_ident);
+        let summary = format!("{} query", view.method_ident);
+        let method_lit = match view.input_mode {
+            ViewInputMode::Query => "get",
+            ViewInputMode::Body => "post",
+        };
+        let request_type = view.openapi_request_rust_type_literal(model_ident);
+        let request_type_tokens = if let Some(request_type) = request_type {
+            quote!(Some(#request_type))
+        } else {
+            quote!(None)
+        };
+        let request_location_tokens = if view.args.is_empty() {
+            quote!(None)
+        } else {
+            match view.input_mode {
+                ViewInputMode::Query => {
+                    quote!(Some(
+                        ::rustmemodb::persist::web::PersistOpenApiInputLocation::Query
+                    ))
+                }
+                ViewInputMode::Body => {
+                    quote!(Some(
+                        ::rustmemodb::persist::web::PersistOpenApiInputLocation::Body
+                    ))
+                }
+            }
+        };
+        let response_type = view.openapi_response_rust_type_literal();
+        let response_type_tokens = if let Some(response_type) = response_type {
+            quote!(Some(#response_type))
+        } else {
+            quote!(None)
+        };
+        let success_status = view.openapi_success_status_code();
+        quote! {
+            ::rustmemodb::persist::web::PersistOpenApiOperation {
+                method: #method_lit,
+                path: #path,
+                operation_id: #operation_id,
+                summary: #summary,
+                request_rust_type: #request_type_tokens,
+                request_location: #request_location_tokens,
+                response_rust_type: #response_type_tokens,
+                success_status: #success_status,
+                idempotent: false,
+            }
+        }
+    });
+    let openapi_ops = vec![
+        quote! {
+            ::rustmemodb::persist::web::PersistOpenApiOperation {
+                method: "get",
+                path: "/",
+                operation_id: "list",
+                summary: "List entities",
+                request_rust_type: None,
+                request_location: None,
+                response_rust_type: Some(#list_record_type_name),
+                success_status: 200,
+                idempotent: false,
+            }
+        },
+        quote! {
+            ::rustmemodb::persist::web::PersistOpenApiOperation {
+                method: "post",
+                path: "/",
+                operation_id: "create",
+                summary: "Create entity",
+                request_rust_type: Some(#create_request_type_name),
+                request_location: Some(::rustmemodb::persist::web::PersistOpenApiInputLocation::Body),
+                response_rust_type: Some(#record_type_name),
+                success_status: 201,
+                idempotent: false,
+            }
+        },
+        quote! {
+            ::rustmemodb::persist::web::PersistOpenApiOperation {
+                method: "get",
+                path: "/{id}",
+                operation_id: "get",
+                summary: "Get entity by id",
+                request_rust_type: None,
+                request_location: None,
+                response_rust_type: Some(#record_type_name),
+                success_status: 200,
+                idempotent: false,
+            }
+        },
+        quote! {
+            ::rustmemodb::persist::web::PersistOpenApiOperation {
+                method: "delete",
+                path: "/{id}",
+                operation_id: "delete",
+                summary: "Delete entity by id",
+                request_rust_type: None,
+                request_location: None,
+                response_rust_type: None,
+                success_status: 204,
+                idempotent: false,
+            }
+        },
+        quote! {
+            ::rustmemodb::persist::web::PersistOpenApiOperation {
+                method: "get",
+                path: "/{id}/_audits",
+                operation_id: "audits",
+                summary: "List audit trail for entity",
+                request_rust_type: None,
+                request_location: None,
+                response_rust_type: Some("Vec<PersistGeneratedAuditLine>"),
+                success_status: 200,
+                idempotent: false,
+            }
+        },
+    ];
+    let create_handler = if let Some(args) = constructor_args {
+        let ctor_fields = args.iter().map(|arg| &arg.ident);
+        let ctor_args = args.iter().map(|arg| {
+            let ident = &arg.ident;
+            quote!(request.#ident)
+        });
+        quote! {
+            async fn handle_create(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Json(request): axum::extract::Json<#create_request_ident>,
+            ) -> axum::response::Response
+            where
+                #model_ident: ::serde::Serialize,
+            {
+                let _ = (#(&request.#ctor_fields),*);
+                let model = #model_ident::new(#(#ctor_args),*);
+                match handle.create_one(model).await {
+                    Ok(record) => axum::response::IntoResponse::into_response((
+                        axum::http::StatusCode::CREATED,
+                        axum::Json(record),
+                    )),
+                    Err(err) => {
+                        let web_err: ::rustmemodb::web::WebError = err.into();
+                        axum::response::IntoResponse::into_response(web_err)
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {
+            async fn handle_create(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Json(model): axum::extract::Json<#model_ident>,
+            ) -> axum::response::Response
+            where
+                #model_ident: ::serde::Serialize,
+            {
+                match handle.create_one(model).await {
+                    Ok(record) => axum::response::IntoResponse::into_response((
+                        axum::http::StatusCode::CREATED,
+                        axum::Json(record),
+                    )),
+                    Err(err) => {
+                        let web_err: ::rustmemodb::web::WebError = err.into();
+                        axum::response::IntoResponse::into_response(web_err)
+                    }
+                }
+            }
+        }
+    };
+
+    Ok(quote! {
+        #create_request_struct
+        #(#command_request_structs)*
+        #(#view_request_structs)*
+
+        pub struct #server_ident {
+            handle: ::rustmemodb::PersistAutonomousModelHandle<#model_ident>,
+        }
+
+        impl #server_ident {
+            pub fn new(handle: ::rustmemodb::PersistAutonomousModelHandle<#model_ident>) -> Self {
+                Self { handle }
+            }
+
+            pub fn router(self) -> axum::Router {
+                axum::Router::new()
+                    .route("/", axum::routing::get(Self::handle_list).post(Self::handle_create))
+                    .route("/:id", axum::routing::get(Self::handle_get).delete(Self::handle_delete))
+                    .route("/:id/_audits", axum::routing::get(Self::handle_audits))
+                    .route("/_openapi.json", axum::routing::get(Self::handle_openapi))
+                    #(#command_routes)*
+                    #(#view_routes)*
+                    .with_state(self.handle)
+            }
+
+            #create_handler
+
+            async fn handle_list(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+            ) -> axum::response::Response
+            where
+                #model_ident: ::serde::Serialize,
+            {
+                let records = handle.list().await;
+                axum::response::IntoResponse::into_response((
+                    axum::http::StatusCode::OK,
+                    axum::Json(records),
+                ))
+            }
+
+            async fn handle_get(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Path(id): axum::extract::Path<String>,
+            ) -> axum::response::Response
+            where
+                #model_ident: ::serde::Serialize,
+            {
+                match handle.get_one(id.as_str()).await {
+                    Some(record) => axum::response::IntoResponse::into_response((
+                        axum::http::StatusCode::OK,
+                        axum::Json(record),
+                    )),
+                    None => axum::response::IntoResponse::into_response(::rustmemodb::web::WebError::NotFound(format!("entity not found: {}", id))),
+                }
+            }
+
+            async fn handle_delete(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Path(id): axum::extract::Path<String>,
+            ) -> axum::response::Response {
+                match handle.remove_one(id.as_str()).await {
+                    Ok(()) => axum::response::IntoResponse::into_response(axum::http::StatusCode::NO_CONTENT),
+                    Err(err) => {
+                        let web_err: ::rustmemodb::web::WebError = err.into();
+                        axum::response::IntoResponse::into_response(web_err)
+                    }
+                }
+            }
+
+            async fn handle_audits(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Path(id): axum::extract::Path<String>,
+            ) -> axum::response::Response {
+                #[derive(::serde::Serialize)]
+                struct PersistGeneratedAuditLine {
+                    aggregate_persist_id: String,
+                    event_type: String,
+                    message: String,
+                    resulting_version: i64,
+                }
+
+                if handle.get_one(id.as_str()).await.is_none() {
+                    return axum::response::IntoResponse::into_response(
+                        ::rustmemodb::web::WebError::NotFound(format!("entity not found: {}", id)),
+                    );
+                }
+                let audits = handle.domain_handle().list_audits_for(id.as_str()).await;
+                let lines = audits
+                    .into_iter()
+                    .map(|event| PersistGeneratedAuditLine {
+                        aggregate_persist_id: event.aggregate_persist_id().to_string(),
+                        event_type: event.event_type().to_string(),
+                        message: event.message().to_string(),
+                        resulting_version: *event.resulting_version(),
+                    })
+                    .collect::<Vec<_>>();
+                axum::response::IntoResponse::into_response((
+                    axum::http::StatusCode::OK,
+                    axum::Json(lines),
+                ))
+            }
+
+            async fn handle_openapi() -> axum::response::Response {
+                let operations = vec![
+                    #(#openapi_ops),*,
+                    #(#command_openapi_ops),*,
+                    #(#view_openapi_ops),*
+                ];
+                let title = format!("{} Autonomous REST API", stringify!(#model_ident));
+                let doc = ::rustmemodb::persist::web::build_autonomous_openapi_document(
+                    &title,
+                    &operations,
+                );
+                axum::response::IntoResponse::into_response((
+                    axum::http::StatusCode::OK,
+                    axum::Json(doc),
+                ))
+            }
+
+            #(#command_handlers)*
+            #(#view_handlers)*
+        }
+
+        pub trait #rest_ext_trait_ident {
+            fn rest_router(self) -> axum::Router;
+        }
+
+        impl #rest_ext_trait_ident for ::rustmemodb::PersistAutonomousModelHandle<#model_ident> {
+            fn rest_router(self) -> axum::Router {
+                #server_ident::new(self).router()
+            }
+        }
+
+        impl ::rustmemodb::PersistAutonomousRestModel for #model_ident {
+            fn mount_router(handle: ::rustmemodb::PersistAutonomousModelHandle<Self>) -> axum::Router {
+                <::rustmemodb::PersistAutonomousModelHandle<#model_ident> as #rest_ext_trait_ident>::rest_router(handle)
+            }
+        }
+    })
+}
+
+fn expand_persist_autonomous_intent(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let enum_ident = input.ident;
+    let enum_data = match input.data {
+        Data::Enum(data) => data,
+        _ => {
+            return Err(syn::Error::new(
+                enum_ident.span(),
+                "#[derive(PersistAutonomousIntent)] can only be used with enums",
+            ));
+        }
+    };
+
+    let options = parse_persist_intent_options(&input.attrs)?;
+    let model_ty = options.model.ok_or_else(|| {
+        syn::Error::new(
+            enum_ident.span(),
+            "Missing #[persist_intent(model = <Type>, ...)] option",
+        )
+    })?;
+    let command_ty = quote!(<#model_ty as ::rustmemodb::PersistCommandModel>::Command);
+
+    if let Some(to_command) = options.to_command {
+        let event_type_impl = options.event_type.map(|event_type| {
+            quote! {
+                fn audit_event_type(&self, _command: &#command_ty) -> String {
+                    self.clone().#event_type().to_string()
+                }
+            }
+        });
+        let event_message_impl = options.event_message.map(|event_message| {
+            quote! {
+                fn audit_message(&self, _command: &#command_ty) -> String {
+                    self.clone().#event_message().to_string()
+                }
+            }
+        });
+        let bulk_event_type_impl = options.bulk_event_type.map(|bulk_event_type| {
+            quote! {
+                fn bulk_audit_event_type(&self, _command: &#command_ty) -> String {
+                    self.clone().#bulk_event_type().to_string()
+                }
+            }
+        });
+        let bulk_event_message_impl = options.bulk_event_message.map(|bulk_event_message| {
+            quote! {
+                fn bulk_audit_message(&self, _command: &#command_ty) -> String {
+                    self.clone().#bulk_event_message().to_string()
+                }
+            }
+        });
+
+        return Ok(quote! {
+            impl ::rustmemodb::PersistAutonomousCommand<#model_ty> for #enum_ident {
+                fn to_persist_command(self) -> <#model_ty as ::rustmemodb::PersistCommandModel>::Command {
+                    self.#to_command()
+                }
+
+                #event_type_impl
+                #event_message_impl
+                #bulk_event_type_impl
+                #bulk_event_message_impl
+            }
+        });
+    }
+
+    let mut to_command_arms = Vec::new();
+    let mut event_type_arms = Vec::new();
+    let mut event_type_count = 0usize;
+    let mut event_message_arms = Vec::new();
+    let mut event_message_count = 0usize;
+    let mut bulk_event_type_arms = Vec::new();
+    let mut bulk_event_type_count = 0usize;
+    let mut bulk_event_message_arms = Vec::new();
+    let mut bulk_event_message_count = 0usize;
+    let total_variants = enum_data.variants.len();
+
+    for variant in &enum_data.variants {
+        let spec = parse_persist_case_options(&variant.attrs)?.ok_or_else(|| {
+            syn::Error::new(
+                variant.ident.span(),
+                "Missing #[persist_case(...)] for enum variant; alternatively specify #[persist_intent(to_command = ...)] and methods",
+            )
+        })?;
+
+        let command_expr = spec.command.ok_or_else(|| {
+            syn::Error::new(
+                variant.ident.span(),
+                "Missing persist_case option: command = <expr>",
+            )
+        })?;
+
+        if !matches!(variant.fields, Fields::Unit) {
+            return Err(syn::Error::new(
+                variant.ident.span(),
+                "persist_case mapping currently supports only unit enum variants; use #[persist_intent(to_command = ...)] for payload variants",
+            ));
+        }
+
+        let pattern = variant_match_pattern(&enum_ident, variant);
+        to_command_arms.push(quote! {
+            #pattern => { #command_expr }
+        });
+
+        if let Some(event_type_lit) = spec.event_type {
+            event_type_count += 1;
+            event_type_arms.push(quote! {
+                #pattern => #event_type_lit.to_string()
+            });
+        }
+        if let Some(event_message_lit) = spec.event_message {
+            event_message_count += 1;
+            event_message_arms.push(quote! {
+                #pattern => #event_message_lit.to_string()
+            });
+        }
+        if let Some(bulk_event_type_lit) = spec.bulk_event_type {
+            bulk_event_type_count += 1;
+            bulk_event_type_arms.push(quote! {
+                #pattern => #bulk_event_type_lit.to_string()
+            });
+        }
+        if let Some(bulk_event_message_lit) = spec.bulk_event_message {
+            bulk_event_message_count += 1;
+            bulk_event_message_arms.push(quote! {
+                #pattern => #bulk_event_message_lit.to_string()
+            });
+        }
+    }
+
+    if event_type_count != 0 && event_type_count != total_variants {
+        return Err(syn::Error::new(
+            enum_ident.span(),
+            "When using persist_case(event_type = \"...\"), define it for every enum variant or omit it entirely",
+        ));
+    }
+    if event_message_count != 0 && event_message_count != total_variants {
+        return Err(syn::Error::new(
+            enum_ident.span(),
+            "When using persist_case(event_message = \"...\"), define it for every enum variant or omit it entirely",
+        ));
+    }
+    if bulk_event_type_count != 0 && bulk_event_type_count != total_variants {
+        return Err(syn::Error::new(
+            enum_ident.span(),
+            "When using persist_case(bulk_event_type = \"...\"), define it for every enum variant or omit it entirely",
+        ));
+    }
+    if bulk_event_message_count != 0 && bulk_event_message_count != total_variants {
+        return Err(syn::Error::new(
+            enum_ident.span(),
+            "When using persist_case(bulk_event_message = \"...\"), define it for every enum variant or omit it entirely",
+        ));
+    }
+
+    let event_type_impl = if event_type_count == total_variants {
+        quote! {
+            fn audit_event_type(&self, _command: &#command_ty) -> String {
+                match self.clone() {
+                    #(#event_type_arms),*
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let event_message_impl = if event_message_count == total_variants {
+        quote! {
+            fn audit_message(&self, _command: &#command_ty) -> String {
+                match self.clone() {
+                    #(#event_message_arms),*
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let bulk_event_type_impl = if bulk_event_type_count == total_variants {
+        quote! {
+            fn bulk_audit_event_type(&self, _command: &#command_ty) -> String {
+                match self.clone() {
+                    #(#bulk_event_type_arms),*
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let bulk_event_message_impl = if bulk_event_message_count == total_variants {
+        quote! {
+            fn bulk_audit_message(&self, _command: &#command_ty) -> String {
+                match self.clone() {
+                    #(#bulk_event_message_arms),*
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    Ok(quote! {
+        impl ::rustmemodb::PersistAutonomousCommand<#model_ty> for #enum_ident {
+            fn to_persist_command(self) -> <#model_ty as ::rustmemodb::PersistCommandModel>::Command {
+                match self {
+                    #(#to_command_arms),*
+                }
+            }
+
+            #event_type_impl
+            #event_message_impl
+            #bulk_event_type_impl
+            #bulk_event_message_impl
+        }
+    })
+}
+
+fn expand_persist_json_value(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let ident = input.ident;
+
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new(
+            ident.span(),
+            "#[derive(PersistJsonValue)] does not support generic types",
+        ));
+    }
+
+    match input.data {
+        Data::Struct(_) | Data::Enum(_) => {}
+        Data::Union(_) => {
+            return Err(syn::Error::new(
+                ident.span(),
+                "#[derive(PersistJsonValue)] can only be used with structs or enums",
+            ));
+        }
+    }
+
+    Ok(quote! {
+        impl ::rustmemodb::PersistValue for #ident {
+            fn sql_type() -> &'static str {
+                "TEXT"
+            }
+
+            fn to_sql_literal(&self) -> String {
+                ::rustmemodb::persist::json_to_sql_literal(self)
+            }
+        }
+    })
+}
+
+fn expand_api_error(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let enum_ident = input.ident;
+    let enum_data = match input.data {
+        Data::Enum(data) => data,
+        _ => {
+            return Err(syn::Error::new(
+                enum_ident.span(),
+                "#[derive(ApiError)] can only be used with enums",
+            ));
+        }
+    };
+
+    let mut arms = Vec::<TokenStream2>::new();
+    for variant in &enum_data.variants {
+        let options = parse_api_error_options(&variant.attrs)?;
+        let status = options.status.unwrap_or(422u16);
+        let default_code = to_snake_case(&variant.ident.to_string());
+        let code = options.code.unwrap_or(default_code);
+        let pattern = variant_match_pattern(&enum_ident, variant);
+        let mapped = quote!(::rustmemodb::PersistServiceError::custom(#status, #code, message));
+        arms.push(quote! {
+            #pattern => #mapped
+        });
+    }
+
+    Ok(quote! {
+        impl ::core::convert::From<#enum_ident> for ::rustmemodb::PersistServiceError {
+            fn from(value: #enum_ident) -> Self {
+                let message = value.to_string();
+                match value {
+                    #(#arms),*
+                }
+            }
+        }
+    })
+}
+
+fn expand_autonomous(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let struct_name = input.ident.clone();
+    let vis = input.vis.clone();
+
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            input.generics,
+            "Autonomous does not support generic structs yet",
+        ));
+    }
+
+    let persisted_name = format_ident!("{}Persisted", struct_name);
+    let collection_name = format_ident!("{}AutonomousVec", struct_name);
+    let persist_model_tokens = expand_persist_model(input)?;
+
+    Ok(quote! {
+        #persist_model_tokens
+
+        ::rustmemodb::persist_vec!(#vis #collection_name, #persisted_name);
+
+        impl ::core::clone::Clone for #persisted_name {
+            fn clone(&self) -> Self {
+                Self {
+                    data: self.data.clone(),
+                    __persist_id: self.__persist_id.clone(),
+                    __table_name: self.__table_name.clone(),
+                    __metadata: self.__metadata.clone(),
+                    __dirty_fields: self.__dirty_fields.clone(),
+                    __table_ready: self.__table_ready,
+                    __bound_session: self.__bound_session.clone(),
+                    __auto_persist: self.__auto_persist,
+                    __functions: self.__functions.clone(),
+                }
+            }
+        }
+
+        impl ::rustmemodb::PersistBackedModel<#struct_name> for #persisted_name {
+            fn model(&self) -> &#struct_name {
+                self.data()
+            }
+
+            fn model_mut(&mut self) -> &mut #struct_name {
+                self.data_mut()
+            }
+        }
+
+        impl ::rustmemodb::PersistAutonomousModel for #struct_name {
+            type Persisted = #persisted_name;
+            type Collection = #collection_name;
+
+            fn into_persisted(self) -> Self::Persisted {
+                <Self as ::rustmemodb::persist::PersistModelExt>::into_persisted(self)
+            }
+
+            fn from_persisted(persisted: Self::Persisted) -> Self {
+                persisted.into_inner()
+            }
+        }
+    })
+}
+
+fn variant_match_pattern(enum_ident: &Ident, variant: &syn::Variant) -> TokenStream2 {
+    let variant_ident = &variant.ident;
+    match &variant.fields {
+        Fields::Unit => quote!(#enum_ident::#variant_ident),
+        Fields::Unnamed(_) => quote!(#enum_ident::#variant_ident(..)),
+        Fields::Named(_) => quote!(#enum_ident::#variant_ident { .. }),
+    }
+}
+
 fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = input.ident;
     let vis = input.vis;
@@ -485,9 +1500,10 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut field_sql_options = Vec::<Option<SqlFieldOptions>>::new();
 
     for field in named_fields.named {
-        let ident = field.ident.clone().ok_or_else(|| {
-            syn::Error::new(field.span(), "PersistModel requires named fields")
-        })?;
+        let ident = field
+            .ident
+            .clone()
+            .ok_or_else(|| syn::Error::new(field.span(), "PersistModel requires named fields"))?;
         let sql_options = parse_sql_field_options(&field.attrs)?;
         field_idents.push(ident);
         field_types.push(field.ty);
@@ -512,11 +1528,11 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let default_table_expr = match model_options.table_name {
         Some(table_name) => quote! { #table_name.to_string() },
-        None => quote! { ::rustmemodb::persist::default_table_name_stable(stringify!(#struct_name)) },
+        None => {
+            quote! { ::rustmemodb::persist::default_table_name_stable(stringify!(#struct_name)) }
+        }
     };
-    let schema_version_literal = model_options
-        .schema_version
-        .unwrap_or(1u32);
+    let schema_version_literal = model_options.schema_version.unwrap_or(1u32);
     let has_explicit_projection_attrs = field_sql_options.iter().any(|options| options.is_some());
 
     let mut projection_contract_fields = Vec::<TokenStream2>::new();
@@ -534,7 +1550,10 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             continue;
         }
 
-        let indexed = field_sql.as_ref().map(|options| options.indexed).unwrap_or(false);
+        let indexed = field_sql
+            .as_ref()
+            .map(|options| options.indexed)
+            .unwrap_or(false);
         let state_field_name = field_ident.to_string();
         let column_name = field_sql
             .as_ref()
@@ -658,15 +1677,18 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     });
 
-    let sql_columns = field_idents.iter().zip(field_types.iter()).map(|(field, ty)| {
-        quote! {
-            columns.push(format!(
-                "{} {}",
-                stringify!(#field),
-                <#ty as ::rustmemodb::PersistValue>::sql_type()
-            ));
-        }
-    });
+    let sql_columns = field_idents
+        .iter()
+        .zip(field_types.iter())
+        .map(|(field, ty)| {
+            quote! {
+                columns.push(format!(
+                    "{} {}",
+                    stringify!(#field),
+                    <#ty as ::rustmemodb::PersistValue>::sql_type()
+                ));
+            }
+        });
 
     let insert_columns = field_idents.iter().map(|field| {
         quote! {
@@ -674,25 +1696,31 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     });
 
-    let insert_values = field_idents.iter().zip(field_types.iter()).map(|(field, ty)| {
-        quote! {
-            values.push(
-                <#ty as ::rustmemodb::PersistValue>::to_sql_literal(&self.data.#field)
-            );
-        }
-    });
-
-    let update_assignments = field_idents.iter().zip(field_types.iter()).map(|(field, ty)| {
-        quote! {
-            if self.__dirty_fields.contains(stringify!(#field)) {
-                set_clauses.push(format!(
-                    "{} = {}",
-                    stringify!(#field),
+    let insert_values = field_idents
+        .iter()
+        .zip(field_types.iter())
+        .map(|(field, ty)| {
+            quote! {
+                values.push(
                     <#ty as ::rustmemodb::PersistValue>::to_sql_literal(&self.data.#field)
-                ));
+                );
             }
-        }
-    });
+        });
+
+    let update_assignments = field_idents
+        .iter()
+        .zip(field_types.iter())
+        .map(|(field, ty)| {
+            quote! {
+                if self.__dirty_fields.contains(stringify!(#field)) {
+                    set_clauses.push(format!(
+                        "{} = {}",
+                        stringify!(#field),
+                        <#ty as ::rustmemodb::PersistValue>::to_sql_literal(&self.data.#field)
+                    ));
+                }
+            }
+        });
 
     let state_json_fields = field_idents.iter().map(|field| {
         quote! {
@@ -700,24 +1728,27 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     });
 
-    let from_state_fields = field_idents.iter().zip(field_types.iter()).map(|(field, ty)| {
-        quote! {
-            let #field: #ty = serde_json::from_value(
-                fields
-                    .get(stringify!(#field))
-                    .cloned()
-                    .ok_or_else(|| ::rustmemodb::DbError::ExecutionError(
-                        format!("Field '{}' missing in persisted state", stringify!(#field))
-                    ))?
-            )
-            .map_err(|err| {
-                ::rustmemodb::persist::serde_to_db_error(
-                    &format!("deserialize field '{}'", stringify!(#field)),
-                    err,
+    let from_state_fields = field_idents
+        .iter()
+        .zip(field_types.iter())
+        .map(|(field, ty)| {
+            quote! {
+                let #field: #ty = serde_json::from_value(
+                    fields
+                        .get(stringify!(#field))
+                        .cloned()
+                        .ok_or_else(|| ::rustmemodb::DbError::ExecutionError(
+                            format!("Field '{}' missing in persisted state", stringify!(#field))
+                        ))?
                 )
-            })?;
-        }
-    });
+                .map_err(|err| {
+                    ::rustmemodb::persist::serde_to_db_error(
+                        &format!("deserialize field '{}'", stringify!(#field)),
+                        err,
+                    )
+                })?;
+            }
+        });
 
     let from_parts_args = field_idents
         .iter()
@@ -742,21 +1773,22 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     });
 
-    let command_apply_arms = command_variant_idents
-        .iter()
-        .zip(field_idents.iter())
-        .map(|(variant, field)| {
-            quote! {
-                #command_name::#variant(value) => {
-                    let changed = self.data.#field != value;
-                    if changed {
-                        self.data.#field = value;
-                        self.__mark_dirty(stringify!(#field));
+    let command_apply_arms =
+        command_variant_idents
+            .iter()
+            .zip(field_idents.iter())
+            .map(|(variant, field)| {
+                quote! {
+                    #command_name::#variant(value) => {
+                        let changed = self.data.#field != value;
+                        if changed {
+                            self.data.#field = value;
+                            self.__mark_dirty(stringify!(#field));
+                        }
+                        Ok(changed)
                     }
-                    Ok(changed)
                 }
-            }
-        });
+            });
 
     Ok(quote! {
         #vis struct #draft_name {
@@ -809,6 +1841,12 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                     #( Self::#command_variant_idents(_) => stringify!(#command_variant_idents), )*
                     Self::Touch => "Touch",
                 }
+            }
+        }
+
+        impl ::rustmemodb::persist::PersistCommandName for #command_name {
+            fn command_name(&self) -> &'static str {
+                self.name()
             }
         }
 
@@ -1595,6 +2633,64 @@ struct PersistentAttrOptions {
 #[derive(Clone)]
 struct CommandAttrOptions {
     name: Option<String>,
+    idempotent: bool,
+    input: Option<Type>,
+    output: Option<Type>,
+}
+
+impl Default for CommandAttrOptions {
+    fn default() -> Self {
+        Self {
+            name: None,
+            idempotent: true,
+            input: None,
+            output: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewInputMode {
+    Query,
+    Body,
+}
+
+impl Default for ViewInputMode {
+    fn default() -> Self {
+        Self::Query
+    }
+}
+
+#[derive(Clone, Default)]
+struct ViewAttrOptions {
+    name: Option<String>,
+    input: ViewInputMode,
+    input_ty: Option<Type>,
+    output: Option<Type>,
+}
+
+struct ApiErrorAttrOptions {
+    status: Option<u16>,
+    code: Option<String>,
+}
+
+#[derive(Default)]
+struct PersistIntentOptions {
+    model: Option<Type>,
+    to_command: Option<Ident>,
+    event_type: Option<Ident>,
+    event_message: Option<Ident>,
+    bulk_event_type: Option<Ident>,
+    bulk_event_message: Option<Ident>,
+}
+
+#[derive(Default)]
+struct PersistCaseOptions {
+    command: Option<syn::Expr>,
+    event_type: Option<LitStr>,
+    event_message: Option<LitStr>,
+    bulk_event_type: Option<LitStr>,
+    bulk_event_message: Option<LitStr>,
 }
 
 struct PersistentCommandArg {
@@ -1678,7 +2774,8 @@ impl PersistentCommandMethod {
         })?;
 
         match receiver {
-            FnArg::Receiver(receiver) if receiver.reference.is_some() && receiver.mutability.is_some() => {}
+            FnArg::Receiver(receiver)
+                if receiver.reference.is_some() && receiver.mutability.is_some() => {}
             _ => {
                 return Err(syn::Error::new(
                     receiver.span(),
@@ -1723,6 +2820,778 @@ impl PersistentCommandMethod {
     }
 }
 
+enum AutonomousMethodReturnKind {
+    Unit,
+    Plain(Type),
+    RustResult { ok: Type, err: Type },
+}
+
+impl AutonomousMethodReturnKind {
+    fn from_signature(signature: &syn::Signature) -> Self {
+        match &signature.output {
+            ReturnType::Default => Self::Unit,
+            ReturnType::Type(_, ty) => {
+                if let Some((ok, err)) = extract_result_types(ty) {
+                    return Self::RustResult { ok, err };
+                }
+                Self::Plain((**ty).clone())
+            }
+        }
+    }
+
+    fn output_ty_tokens(&self) -> TokenStream2 {
+        match self {
+            Self::Unit => quote!(()),
+            Self::Plain(ty) => quote!(#ty),
+            Self::RustResult { ok, .. } => quote!(#ok),
+        }
+    }
+
+    fn error_ty_tokens(&self) -> TokenStream2 {
+        match self {
+            Self::Unit | Self::Plain(_) => quote!(::core::convert::Infallible),
+            Self::RustResult { err, .. } => quote!(#err),
+        }
+    }
+
+    fn mutation_closure_body(&self, method_call: TokenStream2) -> TokenStream2 {
+        match self {
+            Self::Unit => quote! {
+                #method_call;
+                Ok::<(), ::core::convert::Infallible>(())
+            },
+            Self::Plain(ty) => quote! {
+                let output: #ty = #method_call;
+                Ok::<#ty, ::core::convert::Infallible>(output)
+            },
+            Self::RustResult { .. } => quote! {
+                #method_call
+            },
+        }
+    }
+
+    fn success_is_no_content(&self) -> bool {
+        match self {
+            Self::Unit => true,
+            Self::Plain(_) => false,
+            Self::RustResult { ok, .. } => is_unit_type(ok),
+        }
+    }
+}
+
+struct AutonomousExposedMethod {
+    method_ident: Ident,
+    args: Vec<PersistentCommandArg>,
+    return_kind: AutonomousMethodReturnKind,
+    route_name: String,
+    idempotent: bool,
+    input_ty: Option<Type>,
+    output_ty: Option<Type>,
+}
+
+impl AutonomousExposedMethod {
+    fn from_impl_method(method: &ImplItemFn, marker: CommandAttrOptions) -> syn::Result<Self> {
+        if method.sig.asyncness.is_some() {
+            return Err(syn::Error::new(
+                method.sig.span(),
+                "#[command] methods in #[autonomous_impl] must be synchronous",
+            ));
+        }
+        if !method.sig.generics.params.is_empty() {
+            return Err(syn::Error::new(
+                method.sig.generics.span(),
+                "#[command] methods in #[autonomous_impl] cannot have generic parameters",
+            ));
+        }
+
+        let mut inputs_iter = method.sig.inputs.iter();
+        let receiver = inputs_iter.next().ok_or_else(|| {
+            syn::Error::new(
+                method.sig.span(),
+                "#[command] method must have &mut self receiver",
+            )
+        })?;
+
+        match receiver {
+            FnArg::Receiver(receiver)
+                if receiver.reference.is_some() && receiver.mutability.is_some() => {}
+            _ => {
+                return Err(syn::Error::new(
+                    receiver.span(),
+                    "#[command] method receiver must be `&mut self`",
+                ));
+            }
+        }
+
+        let mut args = Vec::new();
+        for input in inputs_iter {
+            let FnArg::Typed(PatType { pat, ty, .. }) = input else {
+                return Err(syn::Error::new(
+                    input.span(),
+                    "Unsupported #[command] argument pattern",
+                ));
+            };
+
+            let Pat::Ident(pat_ident) = pat.as_ref() else {
+                return Err(syn::Error::new(
+                    pat.span(),
+                    "#[command] arguments must be simple identifiers",
+                ));
+            };
+
+            args.push(PersistentCommandArg {
+                ident: pat_ident.ident.clone(),
+                ty: (**ty).clone(),
+            });
+        }
+
+        if marker.input.is_some() && args.len() != 1 {
+            return Err(syn::Error::new(
+                method.sig.span(),
+                "#[command(input = <Type>)] requires exactly one method argument (besides &mut self)",
+            ));
+        }
+
+        let route_name = marker
+            .name
+            .clone()
+            .unwrap_or_else(|| method.sig.ident.to_string());
+
+        Ok(Self {
+            method_ident: method.sig.ident.clone(),
+            args,
+            return_kind: AutonomousMethodReturnKind::from_signature(&method.sig),
+            route_name,
+            idempotent: marker.idempotent,
+            input_ty: marker.input,
+            output_ty: marker.output,
+        })
+    }
+
+    fn trait_method_tokens(&self) -> TokenStream2 {
+        let method_ident = &self.method_ident;
+        let args = self.args.iter().map(|arg| {
+            let ident = &arg.ident;
+            let ty = &arg.ty;
+            quote!(#ident: #ty)
+        });
+        let output_ty = self.return_kind.output_ty_tokens();
+        let error_ty = self.return_kind.error_ty_tokens();
+
+        quote! {
+            async fn #method_ident(
+                &self,
+                persist_id: &str
+                #(, #args)*
+            ) -> ::std::result::Result<#output_ty, ::rustmemodb::PersistDomainMutationError<#error_ty>>;
+        }
+    }
+
+    fn impl_method_tokens(&self, model_ident: &Ident) -> TokenStream2 {
+        let method_ident = &self.method_ident;
+        let args = self.args.iter().map(|arg| {
+            let ident = &arg.ident;
+            let ty = &arg.ty;
+            quote!(#ident: #ty)
+        });
+        let arg_idents = self.args.iter().map(|arg| &arg.ident);
+        let output_ty = self.return_kind.output_ty_tokens();
+        let error_ty = self.return_kind.error_ty_tokens();
+        let method_call = quote!(model.#method_ident(#(#arg_idents),*));
+        let mutation_body = self.return_kind.mutation_closure_body(method_call);
+
+        quote! {
+            async fn #method_ident(
+                &self,
+                persist_id: &str
+                #(, #args)*
+            ) -> ::std::result::Result<#output_ty, ::rustmemodb::PersistDomainMutationError<#error_ty>> {
+                let (_, output) = self
+                    .mutate_one_with_result_named(
+                        persist_id,
+                        stringify!(#method_ident),
+                        move |model: &mut #model_ident| {
+                            #mutation_body
+                        },
+                    )
+                    .await?;
+                Ok(output)
+            }
+        }
+    }
+
+    fn route_literal(&self) -> String {
+        self.route_name.clone()
+    }
+
+    fn inferred_input_ty(&self) -> Option<&Type> {
+        self.input_ty
+            .as_ref()
+            .or_else(|| self.auto_infer_single_payload_input_ty())
+    }
+
+    fn auto_infer_single_payload_input_ty(&self) -> Option<&Type> {
+        if self.args.len() != 1 || self.input_ty.is_some() {
+            return None;
+        }
+        let ty = &self.args[0].ty;
+        if supports_direct_payload_input(ty) {
+            Some(ty)
+        } else {
+            None
+        }
+    }
+
+    fn request_ident(&self, model_ident: &Ident) -> Ident {
+        format_ident!(
+            "{}{}Request",
+            model_ident,
+            to_pascal_case(&self.method_ident.to_string())
+        )
+    }
+
+    fn request_struct_tokens(&self, model_ident: &Ident) -> Option<TokenStream2> {
+        if self.inferred_input_ty().is_some() {
+            return None;
+        }
+        let request_ident = self.request_ident(model_ident);
+        let fields = self.args.iter().map(|arg| {
+            let ident = &arg.ident;
+            let ty = &arg.ty;
+            quote!(pub #ident: #ty)
+        });
+        Some(quote! {
+            #[derive(::serde::Deserialize, ::serde::Serialize, ::core::fmt::Debug, ::core::clone::Clone)]
+            pub struct #request_ident {
+                #( #fields, )*
+            }
+        })
+    }
+
+    fn request_ty_tokens(&self, model_ident: &Ident) -> TokenStream2 {
+        if let Some(input_ty) = self.inferred_input_ty() {
+            quote!(#input_ty)
+        } else {
+            let request_ident = self.request_ident(model_ident);
+            quote!(#request_ident)
+        }
+    }
+
+    fn openapi_request_rust_type_literal(&self, model_ident: &Ident) -> Option<String> {
+        if let Some(input_ty) = self.inferred_input_ty() {
+            Some(type_to_marker_string(input_ty))
+        } else {
+            Some(self.request_ident(model_ident).to_string())
+        }
+    }
+
+    fn openapi_response_rust_type_literal(&self) -> Option<String> {
+        if self.return_kind.success_is_no_content() {
+            return None;
+        }
+        if let Some(output_ty) = self.output_ty.as_ref() {
+            return Some(type_to_marker_string(output_ty));
+        }
+        match &self.return_kind {
+            AutonomousMethodReturnKind::Unit => None,
+            AutonomousMethodReturnKind::Plain(ty) => Some(type_to_marker_string(ty)),
+            AutonomousMethodReturnKind::RustResult { ok, .. } => Some(type_to_marker_string(ok)),
+        }
+    }
+
+    fn openapi_success_status_code(&self) -> u16 {
+        if self.return_kind.success_is_no_content() {
+            204
+        } else {
+            200
+        }
+    }
+
+    fn command_handler_tokens(&self, model_ident: &Ident) -> TokenStream2 {
+        let method_ident = &self.method_ident;
+        let handler_ident = format_ident!("handle_command_{}", method_ident);
+        let request_ty = self.request_ty_tokens(model_ident);
+        let response_ok = self.return_kind.output_ty_tokens();
+        let response_err = self.return_kind.error_ty_tokens();
+        let command_call = if self.inferred_input_ty().is_some() {
+            let arg_ty = &self
+                .args
+                .first()
+                .expect("validated single arg for command payload input")
+                .ty;
+            quote!(model.#method_ident(::core::convert::Into::<#arg_ty>::into(request)))
+        } else {
+            let call_args = self
+                .args
+                .iter()
+                .map(|arg| {
+                    let ident = &arg.ident;
+                    quote!(request.#ident)
+                })
+                .collect::<Vec<_>>();
+            quote!(model.#method_ident(#(#call_args),*))
+        };
+        let mutation_body = self.return_kind.mutation_closure_body(command_call);
+        let success_status_code = self.openapi_success_status_code();
+        let success_is_no_content = self.return_kind.success_is_no_content();
+        let success_body = if success_is_no_content {
+            quote! {
+                axum::response::IntoResponse::into_response(axum::http::StatusCode::NO_CONTENT)
+            }
+        } else {
+            quote! {
+                axum::response::IntoResponse::into_response((
+                    axum::http::StatusCode::OK,
+                    axum::Json(output),
+                ))
+            }
+        };
+        let replay_body = if success_is_no_content {
+            quote! {
+                if status_code == axum::http::StatusCode::NO_CONTENT.as_u16() {
+                    axum::response::IntoResponse::into_response(axum::http::StatusCode::NO_CONTENT)
+                } else {
+                    let status = axum::http::StatusCode::from_u16(status_code)
+                        .unwrap_or(axum::http::StatusCode::OK);
+                    axum::response::IntoResponse::into_response((
+                        status,
+                        axum::Json(body),
+                    ))
+                }
+            }
+        } else {
+            quote! {
+                let status = axum::http::StatusCode::from_u16(status_code)
+                    .unwrap_or(axum::http::StatusCode::OK);
+                axum::response::IntoResponse::into_response((
+                    status,
+                    axum::Json(body),
+                ))
+            }
+        };
+        let response_bound = if success_is_no_content {
+            quote! {}
+        } else {
+            quote!(#response_ok: ::serde::Serialize,)
+        };
+        let applied_binding = if success_is_no_content {
+            quote!(_output)
+        } else {
+            quote!(output)
+        };
+        let request_validation = if self.inferred_input_ty().is_some() {
+            quote! {}
+        } else {
+            let request_fields = self.args.iter().map(|arg| &arg.ident);
+            quote! {
+                let _ = (#(&request.#request_fields),*);
+            }
+        };
+        let idempotency_extract = if self.idempotent {
+            let invalid_key_response = quote! {
+                let web_err = ::rustmemodb::web::WebError::Input(
+                    ::rustmemodb::IDEMPOTENCY_KEY_INVALID_MESSAGE.to_string(),
+                );
+                return axum::response::IntoResponse::into_response(web_err);
+            };
+            quote! {
+                let raw_idempotency_key = match headers.get("Idempotency-Key") {
+                    Some(raw) => {
+                        match raw.to_str() {
+                            Ok(value) => Some(value),
+                            Err(_) => {
+                                #invalid_key_response
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let idempotency_key = match ::rustmemodb::normalize_idempotency_key(raw_idempotency_key) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let web_err = ::rustmemodb::web::WebError::Input(err.message().to_string());
+                        return axum::response::IntoResponse::into_response(web_err);
+                    }
+                };
+            }
+        } else {
+            quote! {
+                let idempotency_key = None;
+            }
+        };
+
+        quote! {
+            async fn #handler_ident(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Path(id): axum::extract::Path<String>,
+                headers: axum::http::HeaderMap,
+                axum::extract::Json(request): axum::extract::Json<#request_ty>,
+            ) -> axum::response::Response
+            where
+                #response_bound
+                #response_err: ::core::convert::Into<::rustmemodb::PersistServiceError>,
+            {
+                #request_validation
+                #idempotency_extract
+
+                match handle
+                    .execute_rest_command_with_idempotency(
+                        id.as_str(),
+                        stringify!(#method_ident),
+                        idempotency_key,
+                        #success_status_code,
+                        move |model: &mut #model_ident| {
+                            #mutation_body
+                        },
+                    )
+                    .await
+                {
+                    Ok(::rustmemodb::PersistIdempotentCommandResult::Applied(#applied_binding)) => {
+                        #success_body
+                    }
+                    Ok(::rustmemodb::PersistIdempotentCommandResult::Replayed { status_code, body }) => {
+                        #replay_body
+                    }
+                    Err(err) => {
+                        let web_err: ::rustmemodb::web::WebError = err.into();
+                        axum::response::IntoResponse::into_response(web_err)
+                    }
+                }
+            }
+        }
+    }
+}
+
+enum AutonomousViewReturnKind {
+    Unit,
+    Plain(Type),
+    RustResult { ok: Type, err: Type },
+}
+
+impl AutonomousViewReturnKind {
+    fn from_signature(signature: &syn::Signature) -> Self {
+        match &signature.output {
+            ReturnType::Default => Self::Unit,
+            ReturnType::Type(_, ty) => {
+                if let Some((ok, err)) = extract_result_types(ty) {
+                    return Self::RustResult { ok, err };
+                }
+                Self::Plain((**ty).clone())
+            }
+        }
+    }
+
+    fn success_is_no_content(&self) -> bool {
+        match self {
+            Self::Unit => true,
+            Self::Plain(_) => false,
+            Self::RustResult { ok, .. } => is_unit_type(ok),
+        }
+    }
+}
+
+struct AutonomousViewMethod {
+    method_ident: Ident,
+    route_name: String,
+    args: Vec<PersistentCommandArg>,
+    input_mode: ViewInputMode,
+    input_ty: Option<Type>,
+    output_ty: Option<Type>,
+    return_kind: AutonomousViewReturnKind,
+}
+
+impl AutonomousViewMethod {
+    fn from_impl_method(method: &ImplItemFn, marker: ViewAttrOptions) -> syn::Result<Self> {
+        if method.sig.asyncness.is_some() {
+            return Err(syn::Error::new(
+                method.sig.span(),
+                "#[view]/#[query] methods in #[expose_rest] must be synchronous",
+            ));
+        }
+        if !method.sig.generics.params.is_empty() {
+            return Err(syn::Error::new(
+                method.sig.generics.span(),
+                "#[view]/#[query] methods in #[expose_rest] cannot have generic parameters",
+            ));
+        }
+
+        let mut inputs_iter = method.sig.inputs.iter();
+        let receiver = inputs_iter.next().ok_or_else(|| {
+            syn::Error::new(
+                method.sig.span(),
+                "#[view]/#[query] method must have &self receiver",
+            )
+        })?;
+
+        match receiver {
+            FnArg::Receiver(receiver)
+                if receiver.reference.is_some() && receiver.mutability.is_none() => {}
+            _ => {
+                return Err(syn::Error::new(
+                    receiver.span(),
+                    "#[view]/#[query] method receiver must be `&self`",
+                ));
+            }
+        }
+
+        let mut args = Vec::new();
+        for input in inputs_iter {
+            let FnArg::Typed(PatType { pat, ty, .. }) = input else {
+                return Err(syn::Error::new(
+                    input.span(),
+                    "Unsupported #[view]/#[query] argument pattern",
+                ));
+            };
+            let Pat::Ident(pat_ident) = pat.as_ref() else {
+                return Err(syn::Error::new(
+                    pat.span(),
+                    "#[view]/#[query] arguments must be simple identifiers",
+                ));
+            };
+            args.push(PersistentCommandArg {
+                ident: pat_ident.ident.clone(),
+                ty: (**ty).clone(),
+            });
+        }
+
+        if marker.input_ty.is_some() && args.len() != 1 {
+            return Err(syn::Error::new(
+                method.sig.span(),
+                "#[query(input = <Type>)] / #[view(input = <Type>)] requires exactly one method argument (besides &self)",
+            ));
+        }
+
+        Ok(Self {
+            method_ident: method.sig.ident.clone(),
+            route_name: marker.name.unwrap_or_else(|| method.sig.ident.to_string()),
+            args,
+            input_mode: marker.input,
+            input_ty: marker.input_ty,
+            output_ty: marker.output,
+            return_kind: AutonomousViewReturnKind::from_signature(&method.sig),
+        })
+    }
+
+    fn route_literal(&self) -> String {
+        self.route_name.clone()
+    }
+
+    fn inferred_input_ty(&self) -> Option<&Type> {
+        self.input_ty
+            .as_ref()
+            .or_else(|| self.auto_infer_single_payload_input_ty())
+    }
+
+    fn auto_infer_single_payload_input_ty(&self) -> Option<&Type> {
+        if self.args.len() != 1 || self.input_ty.is_some() {
+            return None;
+        }
+        let ty = &self.args[0].ty;
+        if supports_direct_payload_input(ty) {
+            Some(ty)
+        } else {
+            None
+        }
+    }
+
+    fn request_ident(&self, model_ident: &Ident) -> Ident {
+        format_ident!(
+            "{}{}ViewRequest",
+            model_ident,
+            to_pascal_case(&self.method_ident.to_string())
+        )
+    }
+
+    fn request_struct_tokens(&self, model_ident: &Ident) -> Option<TokenStream2> {
+        if self.args.is_empty() || self.inferred_input_ty().is_some() {
+            return None;
+        }
+        let request_ident = self.request_ident(model_ident);
+        let fields = self.args.iter().map(|arg| {
+            let ident = &arg.ident;
+            let ty = &arg.ty;
+            quote!(pub #ident: #ty)
+        });
+        Some(quote! {
+            #[derive(::serde::Deserialize, ::serde::Serialize, ::core::fmt::Debug, ::core::clone::Clone)]
+            pub struct #request_ident {
+                #( #fields, )*
+            }
+        })
+    }
+
+    fn request_ty_tokens(&self, model_ident: &Ident) -> Option<TokenStream2> {
+        if self.args.is_empty() {
+            return None;
+        }
+        if let Some(input_ty) = self.inferred_input_ty() {
+            Some(quote!(#input_ty))
+        } else {
+            let request_ident = self.request_ident(model_ident);
+            Some(quote!(#request_ident))
+        }
+    }
+
+    fn openapi_request_rust_type_literal(&self, model_ident: &Ident) -> Option<String> {
+        if self.args.is_empty() {
+            return None;
+        }
+        if let Some(input_ty) = self.inferred_input_ty() {
+            Some(type_to_marker_string(input_ty))
+        } else {
+            Some(self.request_ident(model_ident).to_string())
+        }
+    }
+
+    fn openapi_response_rust_type_literal(&self) -> Option<String> {
+        if self.return_kind.success_is_no_content() {
+            return None;
+        }
+        if let Some(output_ty) = self.output_ty.as_ref() {
+            return Some(type_to_marker_string(output_ty));
+        }
+        match &self.return_kind {
+            AutonomousViewReturnKind::Unit => None,
+            AutonomousViewReturnKind::Plain(ok) => Some(type_to_marker_string(ok)),
+            AutonomousViewReturnKind::RustResult { ok, .. } => Some(type_to_marker_string(ok)),
+        }
+    }
+
+    fn openapi_success_status_code(&self) -> u16 {
+        if self.return_kind.success_is_no_content() {
+            204
+        } else {
+            200
+        }
+    }
+
+    fn view_handler_tokens(&self, model_ident: &Ident) -> TokenStream2 {
+        let method_ident = &self.method_ident;
+        let handler_ident = format_ident!("handle_view_{}", method_ident);
+        let request_ty = self.request_ty_tokens(model_ident);
+        let call_args = if self.inferred_input_ty().is_some() {
+            let arg_ty = &self
+                .args
+                .first()
+                .expect("validated single arg for view/query payload input")
+                .ty;
+            quote!(::core::convert::Into::<#arg_ty>::into(params))
+        } else {
+            let args = self.args.iter().map(|arg| {
+                let ident = &arg.ident;
+                quote!(params.#ident)
+            });
+            quote!(#(#args),*)
+        };
+        let query_extractor = if let Some(request_ty) = request_ty {
+            match self.input_mode {
+                ViewInputMode::Query => {
+                    quote! {
+                        axum::extract::Query(params): axum::extract::Query<#request_ty>,
+                    }
+                }
+                ViewInputMode::Body => {
+                    quote! {
+                        axum::extract::Json(params): axum::extract::Json<#request_ty>,
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+        match &self.return_kind {
+            AutonomousViewReturnKind::Unit => {
+                quote! {
+                    async fn #handler_ident(
+                        axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                        axum::extract::Path(id): axum::extract::Path<String>,
+                        #query_extractor
+                    ) -> axum::response::Response {
+                        let Some(record) = handle.get_one(id.as_str()).await else {
+                            return axum::response::IntoResponse::into_response(::rustmemodb::web::WebError::NotFound(format!("entity not found: {}", id)));
+                        };
+                        record.model.#method_ident(#call_args);
+                        axum::response::IntoResponse::into_response(axum::http::StatusCode::NO_CONTENT)
+                    }
+                }
+            }
+            AutonomousViewReturnKind::RustResult { ok, err } if is_unit_type(ok) => {
+                quote! {
+                    async fn #handler_ident(
+                        axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                        axum::extract::Path(id): axum::extract::Path<String>,
+                        #query_extractor
+                    ) -> axum::response::Response
+                    where
+                        #err: ::core::convert::Into<::rustmemodb::PersistServiceError>,
+                    {
+                        let Some(record) = handle.get_one(id.as_str()).await else {
+                            return axum::response::IntoResponse::into_response(::rustmemodb::web::WebError::NotFound(format!("entity not found: {}", id)));
+                        };
+                        match record.model.#method_ident(#call_args) {
+                            Ok(()) => axum::response::IntoResponse::into_response(axum::http::StatusCode::NO_CONTENT),
+                            Err(err) => {
+                                let service_error: ::rustmemodb::PersistServiceError = err.into();
+                                let web_err: ::rustmemodb::web::WebError = service_error.into();
+                                axum::response::IntoResponse::into_response(web_err)
+                            }
+                        }
+                    }
+                }
+            }
+            AutonomousViewReturnKind::Plain(ok_ty) => {
+                quote! {
+                    async fn #handler_ident(
+                        axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                        axum::extract::Path(id): axum::extract::Path<String>,
+                        #query_extractor
+                    ) -> axum::response::Response
+                    where
+                        #ok_ty: ::serde::Serialize,
+                    {
+                        let Some(record) = handle.get_one(id.as_str()).await else {
+                            return axum::response::IntoResponse::into_response(::rustmemodb::web::WebError::NotFound(format!("entity not found: {}", id)));
+                        };
+                        let output = record.model.#method_ident(#call_args);
+                        axum::response::IntoResponse::into_response((
+                            axum::http::StatusCode::OK,
+                            axum::Json(output),
+                        ))
+                    }
+                }
+            }
+            AutonomousViewReturnKind::RustResult { ok, err } => {
+                quote! {
+                    async fn #handler_ident(
+                        axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                        axum::extract::Path(id): axum::extract::Path<String>,
+                        #query_extractor
+                    ) -> axum::response::Response
+                    where
+                        #ok: ::serde::Serialize,
+                        #err: ::core::convert::Into<::rustmemodb::PersistServiceError>,
+                    {
+                        let Some(record) = handle.get_one(id.as_str()).await else {
+                            return axum::response::IntoResponse::into_response(::rustmemodb::web::WebError::NotFound(format!("entity not found: {}", id)));
+                        };
+                        match record.model.#method_ident(#call_args) {
+                            Ok(output) => axum::response::IntoResponse::into_response((
+                                axum::http::StatusCode::OK,
+                                axum::Json(output),
+                            )),
+                            Err(err) => {
+                                let service_error: ::rustmemodb::PersistServiceError = err.into();
+                                let web_err: ::rustmemodb::web::WebError = service_error.into();
+                                axum::response::IntoResponse::into_response(web_err)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn to_pascal_case(value: &str) -> String {
     let mut out = String::new();
     for chunk in value.split('_').filter(|part| !part.is_empty()) {
@@ -1739,18 +3608,95 @@ fn to_pascal_case(value: &str) -> String {
     }
 }
 
+fn to_snake_case(value: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.extend(ch.to_lowercase());
+        } else if ch == '-' || ch == ' ' {
+            if !out.ends_with('_') {
+                out.push('_');
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn is_unit_type(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty())
+}
+
+fn supports_direct_payload_input(ty: &Type) -> bool {
+    match ty {
+        Type::Path(path) => {
+            let Some(last) = path.path.segments.last() else {
+                return false;
+            };
+            if !matches!(last.arguments, syn::PathArguments::None) {
+                return false;
+            }
+            let ident = last.ident.to_string();
+            let scalar_like = matches!(
+                ident.as_str(),
+                "String"
+                    | "str"
+                    | "bool"
+                    | "char"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "f32"
+                    | "f64"
+                    | "Uuid"
+                    | "DateTime"
+                    | "NaiveDate"
+                    | "NaiveDateTime"
+                    | "Value"
+                    | "JsonValue"
+                    | "Bytes"
+            );
+            if scalar_like {
+                return false;
+            }
+            let container_like = matches!(
+                ident.as_str(),
+                "Option" | "Vec" | "HashMap" | "BTreeMap" | "HashSet" | "BTreeSet" | "Result"
+            );
+            !container_like
+        }
+        _ => false,
+    }
+}
+
 fn has_derive_trait(attrs: &[syn::Attribute], trait_name: &str) -> bool {
     for attr in attrs {
         if !attr.path().is_ident("derive") {
             continue;
         }
 
-        if let Ok(paths) = attr.parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
+        if let Ok(paths) =
+            attr.parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
         {
-            if paths
-                .iter()
-                .any(|path| path.segments.last().map(|segment| segment.ident == trait_name).unwrap_or(false))
-            {
+            if paths.iter().any(|path| {
+                path.segments
+                    .last()
+                    .map(|segment| segment.ident == trait_name)
+                    .unwrap_or(false)
+            }) {
                 return true;
             }
         }
@@ -1789,8 +3735,190 @@ fn parse_persistent_attr_options(attr: TokenStream2) -> syn::Result<PersistentAt
     Ok(options)
 }
 
+fn parse_persist_intent_options(attrs: &[syn::Attribute]) -> syn::Result<PersistIntentOptions> {
+    let mut options = PersistIntentOptions::default();
+
+    for attr in attrs {
+        if !path_ends_with_ident(attr.path(), "persist_intent") {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("model") {
+                if options.model.is_some() {
+                    return Err(meta.error("Duplicate persist_intent option: model"));
+                }
+                let value = meta.value()?;
+                options.model = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("to_command") {
+                if options.to_command.is_some() {
+                    return Err(meta.error("Duplicate persist_intent option: to_command"));
+                }
+                let value = meta.value()?;
+                options.to_command = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("event_type") {
+                if options.event_type.is_some() {
+                    return Err(meta.error("Duplicate persist_intent option: event_type"));
+                }
+                let value = meta.value()?;
+                options.event_type = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("event_message") {
+                if options.event_message.is_some() {
+                    return Err(meta.error("Duplicate persist_intent option: event_message"));
+                }
+                let value = meta.value()?;
+                options.event_message = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("bulk_event_type") {
+                if options.bulk_event_type.is_some() {
+                    return Err(meta.error("Duplicate persist_intent option: bulk_event_type"));
+                }
+                let value = meta.value()?;
+                options.bulk_event_type = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("bulk_event_message") {
+                if options.bulk_event_message.is_some() {
+                    return Err(meta.error("Duplicate persist_intent option: bulk_event_message"));
+                }
+                let value = meta.value()?;
+                options.bulk_event_message = Some(value.parse()?);
+                return Ok(());
+            }
+
+            Err(meta.error(
+                "Unsupported #[persist_intent(...)] option. Supported: model = <Type>, to_command = <method>, event_type = <method>, event_message = <method>, bulk_event_type = <method>, bulk_event_message = <method>",
+            ))
+        })?;
+    }
+
+    Ok(options)
+}
+
+fn parse_persist_case_options(attrs: &[syn::Attribute]) -> syn::Result<Option<PersistCaseOptions>> {
+    let mut result: Option<PersistCaseOptions> = None;
+
+    for attr in attrs {
+        if !path_ends_with_ident(attr.path(), "persist_case") {
+            continue;
+        }
+
+        if result.is_some() {
+            return Err(syn::Error::new(
+                attr.span(),
+                "Duplicate #[persist_case(...)] attribute",
+            ));
+        }
+
+        let mut options = PersistCaseOptions::default();
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("command") {
+                if options.command.is_some() {
+                    return Err(meta.error("Duplicate persist_case option: command"));
+                }
+                let value = meta.value()?;
+                options.command = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("event_type") {
+                if options.event_type.is_some() {
+                    return Err(meta.error("Duplicate persist_case option: event_type"));
+                }
+                let value = meta.value()?;
+                options.event_type = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("event_message") {
+                if options.event_message.is_some() {
+                    return Err(meta.error("Duplicate persist_case option: event_message"));
+                }
+                let value = meta.value()?;
+                options.event_message = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("bulk_event_type") {
+                if options.bulk_event_type.is_some() {
+                    return Err(meta.error("Duplicate persist_case option: bulk_event_type"));
+                }
+                let value = meta.value()?;
+                options.bulk_event_type = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("bulk_event_message") {
+                if options.bulk_event_message.is_some() {
+                    return Err(meta.error("Duplicate persist_case option: bulk_event_message"));
+                }
+                let value = meta.value()?;
+                options.bulk_event_message = Some(value.parse()?);
+                return Ok(());
+            }
+
+            Err(meta.error(
+                "Unsupported #[persist_case(...)] option. Supported: command = <expr>, event_type = \"...\", event_message = \"...\", bulk_event_type = \"...\", bulk_event_message = \"...\"",
+            ))
+        })?;
+
+        result = Some(options);
+    }
+
+    Ok(result)
+}
+
+fn parse_api_error_options(attrs: &[syn::Attribute]) -> syn::Result<ApiErrorAttrOptions> {
+    let mut options = ApiErrorAttrOptions {
+        status: None,
+        code: None,
+    };
+    for attr in attrs {
+        if !path_ends_with_ident(attr.path(), "api_error") {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("status") {
+                if options.status.is_some() {
+                    return Err(meta.error("Duplicate api_error option: status"));
+                }
+                let value = meta.value()?;
+                let lit: syn::LitInt = value.parse()?;
+                options.status = Some(lit.base10_parse::<u16>()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("code") {
+                if options.code.is_some() {
+                    return Err(meta.error("Duplicate api_error option: code"));
+                }
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                options.code = Some(lit.value());
+                return Ok(());
+            }
+            Err(meta.error(
+                "Unsupported #[api_error(...)] option. Supported: status = <u16>, code = \"...\"",
+            ))
+        })?;
+    }
+    Ok(options)
+}
+
 fn parse_command_attr_tokens(attr: TokenStream2) -> syn::Result<CommandAttrOptions> {
-    let mut options = CommandAttrOptions { name: None };
+    let mut options = CommandAttrOptions::default();
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
             let value = meta.value()?;
@@ -1798,30 +3926,294 @@ fn parse_command_attr_tokens(attr: TokenStream2) -> syn::Result<CommandAttrOptio
             options.name = Some(lit.value());
             return Ok(());
         }
-        Err(meta.error("Unsupported #[command(...)] option. Supported: name = \"...\""))
+        if meta.path.is_ident("idempotent") {
+            let value = meta.value()?;
+            let lit: syn::LitBool = value.parse()?;
+            options.idempotent = lit.value;
+            return Ok(());
+        }
+        if meta.path.is_ident("input") {
+            let value = meta.value()?;
+            options.input = Some(value.parse()?);
+            return Ok(());
+        }
+        if meta.path.is_ident("output") {
+            let value = meta.value()?;
+            options.output = Some(value.parse()?);
+            return Ok(());
+        }
+        Err(meta.error(
+            "Unsupported #[command(...)] option. Supported: name = \"...\", idempotent = <bool>, input = <Type>, output = <Type>",
+        ))
     });
 
     parser.parse2(attr)?;
     Ok(options)
 }
 
+fn parse_view_attr_tokens(attr: TokenStream2) -> syn::Result<ViewAttrOptions> {
+    let mut options = ViewAttrOptions::default();
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("name") {
+            let value = meta.value()?;
+            let lit: LitStr = value.parse()?;
+            options.name = Some(lit.value());
+            return Ok(());
+        }
+        if meta.path.is_ident("mode") {
+            let value = meta.value()?;
+            let lit: LitStr = value.parse()?;
+            let raw = lit.value().to_lowercase();
+            options.input = match raw.as_str() {
+                "query" => ViewInputMode::Query,
+                "body" => ViewInputMode::Body,
+                _ => {
+                    return Err(meta.error(
+                        "Unsupported #[view(...)] mode. Supported: mode = \"query\" | \"body\"",
+                    ));
+                }
+            };
+            return Ok(());
+        }
+        if meta.path.is_ident("input") {
+            let value = meta.value()?;
+            if value.peek(LitStr) {
+                let lit: LitStr = value.parse()?;
+                let raw = lit.value().to_lowercase();
+                options.input = match raw.as_str() {
+                    "query" => ViewInputMode::Query,
+                    "body" => ViewInputMode::Body,
+                    _ => {
+                        return Err(meta.error(
+                            "Unsupported #[view(...)] mode literal. Supported: input = \"query\" | \"body\" or input = <Type>",
+                        ))
+                    }
+                };
+                return Ok(());
+            }
+            options.input_ty = Some(value.parse()?);
+            return Ok(());
+        }
+        if meta.path.is_ident("input_type") {
+            let value = meta.value()?;
+            options.input_ty = Some(value.parse()?);
+            return Ok(());
+        }
+        if meta.path.is_ident("output") {
+            let value = meta.value()?;
+            options.output = Some(value.parse()?);
+            return Ok(());
+        }
+        Err(meta.error(
+            "Unsupported #[view(...)] option. Supported: name = \"...\", mode = \"query\" | \"body\", input = \"query\" | \"body\" | <Type>, input_type = <Type>, output = <Type>",
+        ))
+    });
+
+    parser.parse2(attr)?;
+    Ok(options)
+}
+
+fn parse_query_attr_tokens(attr: TokenStream2) -> syn::Result<ViewAttrOptions> {
+    let mut options = ViewAttrOptions::default();
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("name") {
+            let value = meta.value()?;
+            let lit: LitStr = value.parse()?;
+            options.name = Some(lit.value());
+            return Ok(());
+        }
+        if meta.path.is_ident("input") || meta.path.is_ident("input_type") {
+            let value = meta.value()?;
+            if value.peek(LitStr) {
+                let lit: LitStr = value.parse()?;
+                let raw = lit.value().to_lowercase();
+                if raw == "query" {
+                    return Ok(());
+                }
+                return Err(meta.error(
+                    "Unsupported #[query(...)] input mode. #[query] always uses GET + query parameters; use input = <Type> for typed query payload",
+                ));
+            }
+            options.input_ty = Some(value.parse()?);
+            return Ok(());
+        }
+        if meta.path.is_ident("mode") {
+            let value = meta.value()?;
+            let lit: LitStr = value.parse()?;
+            if lit.value().eq_ignore_ascii_case("query") {
+                return Ok(());
+            }
+            return Err(meta.error(
+                "Unsupported #[query(...)] mode. #[query] always uses GET + query parameters",
+            ));
+        }
+        if meta.path.is_ident("output") {
+            let value = meta.value()?;
+            options.output = Some(value.parse()?);
+            return Ok(());
+        }
+        Err(meta.error(
+            "Unsupported #[query(...)] option. Supported: name = \"...\", input = <Type>, output = <Type>",
+        ))
+    });
+
+    parser.parse2(attr)?;
+    options.input = ViewInputMode::Query;
+    Ok(options)
+}
+
 fn parse_command_doc_marker(value: &str) -> Option<CommandAttrOptions> {
     const MARKER: &str = "__rustmemodb_command";
     if value == MARKER {
-        return Some(CommandAttrOptions { name: None });
+        return Some(CommandAttrOptions::default());
     }
-    value
-        .strip_prefix("__rustmemodb_command:")
-        .map(|name| CommandAttrOptions {
-            name: if name.trim().is_empty() {
-                None
-            } else {
-                Some(name.to_string())
-            },
-        })
+    let raw = value.strip_prefix("__rustmemodb_command:")?;
+    if !raw.contains('=') {
+        let mut parsed = CommandAttrOptions::default();
+        if !raw.trim().is_empty() {
+            parsed.name = Some(raw.to_string());
+        }
+        return Some(parsed);
+    }
+
+    let mut parsed = CommandAttrOptions::default();
+    for part in raw.split(';') {
+        let mut kv = part.splitn(2, '=');
+        let key = kv.next().unwrap_or_default().trim();
+        let value = kv.next().unwrap_or_default().trim();
+        match key {
+            "name" => {
+                if !value.is_empty() {
+                    parsed.name = Some(value.to_string());
+                }
+            }
+            "idempotent" => {
+                parsed.idempotent = !value.eq_ignore_ascii_case("false");
+            }
+            "input" => {
+                if !value.is_empty() {
+                    parsed.input = syn::parse_str::<Type>(value).ok();
+                }
+            }
+            "output" => {
+                if !value.is_empty() {
+                    parsed.output = syn::parse_str::<Type>(value).ok();
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(parsed)
 }
 
-fn extract_command_marker(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Option<CommandAttrOptions>> {
+fn parse_view_doc_marker(value: &str) -> Option<ViewAttrOptions> {
+    const MARKER: &str = "__rustmemodb_view";
+    if value == MARKER {
+        return Some(ViewAttrOptions::default());
+    }
+    let raw = value.strip_prefix("__rustmemodb_view:")?;
+    if !raw.contains('=') {
+        return Some(ViewAttrOptions {
+            name: if raw.trim().is_empty() {
+                None
+            } else {
+                Some(raw.to_string())
+            },
+            input: ViewInputMode::Query,
+            input_ty: None,
+            output: None,
+        });
+    }
+
+    let mut parsed = ViewAttrOptions::default();
+    for part in raw.split(';') {
+        let mut kv = part.splitn(2, '=');
+        let key = kv.next().unwrap_or_default().trim();
+        let value = kv.next().unwrap_or_default().trim();
+        match key {
+            "name" => {
+                if !value.is_empty() {
+                    parsed.name = Some(value.to_string());
+                }
+            }
+            "input" => {
+                if value.eq_ignore_ascii_case("body") || value.eq_ignore_ascii_case("query") {
+                    parsed.input = if value.eq_ignore_ascii_case("body") {
+                        ViewInputMode::Body
+                    } else {
+                        ViewInputMode::Query
+                    };
+                } else {
+                    parsed.input_ty = syn::parse_str::<Type>(value).ok();
+                }
+            }
+            "mode" => {
+                parsed.input = if value.eq_ignore_ascii_case("body") {
+                    ViewInputMode::Body
+                } else {
+                    ViewInputMode::Query
+                };
+            }
+            "input_type" => {
+                parsed.input_ty = syn::parse_str::<Type>(value).ok();
+            }
+            "output" => {
+                parsed.output = syn::parse_str::<Type>(value).ok();
+            }
+            _ => {}
+        }
+    }
+    Some(parsed)
+}
+
+fn parse_query_doc_marker(value: &str) -> Option<ViewAttrOptions> {
+    const MARKER: &str = "__rustmemodb_query";
+    if value == MARKER {
+        return Some(ViewAttrOptions::default());
+    }
+    let raw = value.strip_prefix("__rustmemodb_query:")?;
+    if !raw.contains('=') {
+        return Some(ViewAttrOptions {
+            name: if raw.trim().is_empty() {
+                None
+            } else {
+                Some(raw.to_string())
+            },
+            input: ViewInputMode::Query,
+            input_ty: None,
+            output: None,
+        });
+    }
+
+    let mut parsed = ViewAttrOptions::default();
+    for part in raw.split(';') {
+        let mut kv = part.splitn(2, '=');
+        let key = kv.next().unwrap_or_default().trim();
+        let value = kv.next().unwrap_or_default().trim();
+        match key {
+            "name" => {
+                if !value.is_empty() {
+                    parsed.name = Some(value.to_string());
+                }
+            }
+            "input" | "input_type" => {
+                if !value.eq_ignore_ascii_case("query") {
+                    parsed.input_ty = syn::parse_str::<Type>(value).ok();
+                }
+            }
+            "output" => {
+                parsed.output = syn::parse_str::<Type>(value).ok();
+            }
+            _ => {}
+        }
+    }
+    parsed.input = ViewInputMode::Query;
+    Some(parsed)
+}
+
+fn extract_command_marker(
+    attrs: &mut Vec<syn::Attribute>,
+) -> syn::Result<Option<CommandAttrOptions>> {
     let mut found: Option<CommandAttrOptions> = None;
     let mut kept = Vec::with_capacity(attrs.len());
 
@@ -1865,6 +4257,119 @@ fn extract_command_marker(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Option
     Ok(found)
 }
 
+fn extract_view_marker(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Option<ViewAttrOptions>> {
+    let mut found: Option<ViewAttrOptions> = None;
+    let mut kept = Vec::with_capacity(attrs.len());
+
+    for attr in attrs.drain(..) {
+        if path_ends_with_ident(attr.path(), "view") {
+            let parsed = parse_view_attr_tokens(
+                attr.meta
+                    .require_list()
+                    .map(|list| list.tokens.clone())
+                    .unwrap_or_default(),
+            )?;
+            if found.is_some() {
+                return Err(syn::Error::new(
+                    attr.span(),
+                    "Duplicate #[view] marker on method",
+                ));
+            }
+            found = Some(parsed);
+            continue;
+        }
+
+        if path_ends_with_ident(attr.path(), "query") {
+            let parsed = parse_query_attr_tokens(
+                attr.meta
+                    .require_list()
+                    .map(|list| list.tokens.clone())
+                    .unwrap_or_default(),
+            )?;
+            if found.is_some() {
+                return Err(syn::Error::new(
+                    attr.span(),
+                    "Duplicate #[view]/#[query] marker on method",
+                ));
+            }
+            found = Some(parsed);
+            continue;
+        }
+
+        if attr.path().is_ident("doc") {
+            if let Ok(marker) = attr.parse_args::<LitStr>() {
+                let parsed = parse_view_doc_marker(&marker.value())
+                    .or_else(|| parse_query_doc_marker(&marker.value()));
+                if let Some(parsed) = parsed {
+                    if found.is_some() {
+                        return Err(syn::Error::new(
+                            attr.span(),
+                            "Duplicate view/query marker on method",
+                        ));
+                    }
+                    found = Some(parsed);
+                    continue;
+                }
+            }
+        }
+
+        kept.push(attr);
+    }
+
+    *attrs = kept;
+    Ok(found)
+}
+
+fn build_view_like_doc_marker(prefix: &str, marker: &ViewAttrOptions) -> String {
+    let mut parts = Vec::<String>::new();
+    if let Some(name) = marker.name.as_ref() {
+        parts.push(format!("name={name}"));
+    }
+    parts.push(format!(
+        "input={}",
+        match marker.input {
+            ViewInputMode::Query => "query",
+            ViewInputMode::Body => "body",
+        }
+    ));
+    if let Some(input_ty) = marker.input_ty.as_ref() {
+        parts.push(format!("input_type={}", type_to_marker_string(input_ty)));
+    }
+    if let Some(output) = marker.output.as_ref() {
+        parts.push(format!("output={}", type_to_marker_string(output)));
+    }
+    if parts.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}:{}", parts.join(";"))
+    }
+}
+
+fn build_command_doc_marker(marker: &CommandAttrOptions) -> String {
+    let mut parts = Vec::<String>::new();
+    if let Some(name) = marker.name.as_ref() {
+        parts.push(format!("name={name}"));
+    }
+    if !marker.idempotent {
+        parts.push("idempotent=false".to_string());
+    }
+    if let Some(input) = marker.input.as_ref() {
+        parts.push(format!("input={}", type_to_marker_string(input)));
+    }
+    if let Some(output) = marker.output.as_ref() {
+        parts.push(format!("output={}", type_to_marker_string(output)));
+    }
+    if parts.is_empty() {
+        "__rustmemodb_command".to_string()
+    } else {
+        format!("__rustmemodb_command:{}", parts.join(";"))
+    }
+}
+
+fn type_to_marker_string(ty: &Type) -> String {
+    quote!(#ty).to_string()
+}
+
 fn extract_impl_self_type_ident(self_ty: &Type) -> syn::Result<Ident> {
     let Type::Path(TypePath { qself: None, path }) = self_ty else {
         return Err(syn::Error::new(
@@ -1881,6 +4386,75 @@ fn extract_impl_self_type_ident(self_ty: &Type) -> syn::Result<Ident> {
     };
 
     Ok(segment.ident.clone())
+}
+
+fn parse_autonomous_constructor_args(
+    method: &ImplItemFn,
+    model_ident: &Ident,
+) -> syn::Result<Option<Vec<PersistentCommandArg>>> {
+    if method.sig.ident != "new" {
+        return Ok(None);
+    }
+
+    if method.sig.asyncness.is_some() {
+        return Err(syn::Error::new(
+            method.sig.span(),
+            "constructor `new` in #[expose_rest] impl must be synchronous",
+        ));
+    }
+    if !method.sig.generics.params.is_empty() {
+        return Err(syn::Error::new(
+            method.sig.generics.span(),
+            "constructor `new` in #[expose_rest] impl cannot have generic parameters",
+        ));
+    }
+
+    if method
+        .sig
+        .inputs
+        .iter()
+        .any(|input| matches!(input, FnArg::Receiver(_)))
+    {
+        return Ok(None);
+    }
+
+    if !returns_model_or_self(&method.sig.output, model_ident) {
+        return Ok(None);
+    }
+
+    let mut args = Vec::new();
+    for input in &method.sig.inputs {
+        let FnArg::Typed(PatType { pat, ty, .. }) = input else {
+            return Err(syn::Error::new(
+                input.span(),
+                "Unsupported constructor argument pattern",
+            ));
+        };
+        let Pat::Ident(pat_ident) = pat.as_ref() else {
+            return Err(syn::Error::new(
+                pat.span(),
+                "constructor arguments must be simple identifiers",
+            ));
+        };
+        args.push(PersistentCommandArg {
+            ident: pat_ident.ident.clone(),
+            ty: (**ty).clone(),
+        });
+    }
+    Ok(Some(args))
+}
+
+fn returns_model_or_self(output: &ReturnType, model_ident: &Ident) -> bool {
+    let ReturnType::Type(_, ty) = output else {
+        return false;
+    };
+    let Type::Path(type_path) = ty.as_ref() else {
+        return false;
+    };
+    let Some(segment) = type_path.path.segments.last() else {
+        return false;
+    };
+    segment.ident == "Self" || segment.ident == *model_ident
 }
 
 fn path_ends_with_ident(path: &syn::Path, ident: &str) -> bool {
@@ -1952,6 +4526,10 @@ fn first_generic_type(segment: &syn::PathSegment) -> Option<Type> {
 }
 
 fn extract_result_ok_type(ty: &Type) -> Option<Type> {
+    extract_result_types(ty).map(|(ok, _)| ok)
+}
+
+fn extract_result_types(ty: &Type) -> Option<(Type, Type)> {
     let Type::Path(type_path) = ty else {
         return None;
     };
@@ -1962,12 +4540,16 @@ fn extract_result_ok_type(ty: &Type) -> Option<Type> {
     let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return None;
     };
-    for arg in &arguments.args {
-        if let syn::GenericArgument::Type(ok_ty) = arg {
-            return Some(ok_ty.clone());
+    let mut types = arguments.args.iter().filter_map(|arg| {
+        if let syn::GenericArgument::Type(ty) = arg {
+            Some(ty.clone())
+        } else {
+            None
         }
-    }
-    None
+    });
+    let ok_ty = types.next()?;
+    let err_ty = types.next()?;
+    Some((ok_ty, err_ty))
 }
 
 fn parse_sql_field_options(attrs: &[syn::Attribute]) -> syn::Result<Option<SqlFieldOptions>> {

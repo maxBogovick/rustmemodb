@@ -1,0 +1,55 @@
+{
+  "format_version": 1,
+  "created_at_unix_ms": 1771166556766,
+  "mode": "WithData",
+  "vec_name": "tasks",
+  "object_type": "Task",
+  "table_name": "persist_task_46_1",
+  "schema_version": 1,
+  "states": [
+    {
+      "persist_id": "8837a0c7-f943-4442-bfac-51ac1139fd73",
+      "type_name": "Task",
+      "table_name": "persist_task_46_1",
+      "metadata": {
+        "version": 2,
+        "schema_version": 1,
+        "created_at": "2026-02-15T14:37:17.546119Z",
+        "updated_at": "2026-02-15T14:42:36.764732Z",
+        "last_touch_at": "2026-02-15T14:42:36.764732Z",
+        "touch_count": 2,
+        "persisted": true
+      },
+      "fields": {
+        "command": {
+          "Log": "Hello from curl"
+        },
+        "name": "test_task",
+        "schedule_time": 0,
+        "status": "Completed"
+      }
+    },
+    {
+      "persist_id": "2761f32e-a0ce-48b7-8c62-a640b8bae449",
+      "type_name": "Task",
+      "table_name": "persist_task_46_1",
+      "metadata": {
+        "version": 2,
+        "schema_version": 1,
+        "created_at": "2026-02-15T14:42:31.663746Z",
+        "updated_at": "2026-02-15T14:42:36.766255Z",
+        "last_touch_at": "2026-02-15T14:42:36.766255Z",
+        "touch_count": 2,
+        "persisted": true
+      },
+      "fields": {
+        "command": {
+          "Log": "hello world!"
+        },
+        "name": "test1",
+        "schedule_time": 1771166556,
+        "status": "Completed"
+      }
+    }
+  ]
+}
