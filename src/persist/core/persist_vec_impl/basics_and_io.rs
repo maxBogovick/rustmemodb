@@ -4,6 +4,8 @@ impl<T: PersistEntityFactory> PersistVec<T> {
         Self {
             name: name.into(),
             items: Vec::new(),
+            persist_id_index: HashMap::new(),
+            persist_id_index_dirty: true,
         }
     }
 
@@ -29,12 +31,14 @@ impl<T: PersistEntityFactory> PersistVec<T> {
 
     /// Returns a mutable slice of the items in the collection.
     pub fn items_mut(&mut self) -> &mut [T] {
+        self.mark_persist_id_index_dirty();
         &mut self.items
     }
 
     /// Adds a single item to the collection.
     pub fn add_one(&mut self, item: T) {
         self.items.push(item);
+        self.mark_persist_id_index_dirty();
     }
 
     /// Adds multiple items to the collection.
@@ -43,15 +47,22 @@ impl<T: PersistEntityFactory> PersistVec<T> {
         I: IntoIterator<Item = T>,
     {
         self.items.extend(items);
+        self.mark_persist_id_index_dirty();
+    }
+
+    /// Removes an item by in-memory index, returning it if index is valid.
+    pub fn remove_by_index(&mut self, index: usize) -> Option<T> {
+        if index >= self.items.len() {
+            return None;
+        }
+        self.mark_persist_id_index_dirty();
+        Some(self.items.remove(index))
     }
 
     /// Removes an item by its persistence ID, returning it if found.
     pub fn remove_by_persist_id(&mut self, persist_id: &str) -> Option<T> {
-        let position = self
-            .items
-            .iter()
-            .position(|item| item.persist_id() == persist_id)?;
-        Some(self.items.remove(position))
+        let position = self.persisted_item_index(persist_id)?;
+        self.remove_by_index(position)
     }
 
     /// Captures the current state of all items in the collection.
@@ -89,5 +100,38 @@ impl<T: PersistEntityFactory> PersistVec<T> {
             item.save(session).await?;
         }
         Ok(())
+    }
+
+    fn mark_persist_id_index_dirty(&mut self) {
+        self.persist_id_index_dirty = true;
+    }
+
+    fn persisted_item_index(&mut self, persist_id: &str) -> Option<usize> {
+        self.ensure_persist_id_index();
+        let candidate = *self.persist_id_index.get(persist_id)?;
+        if self
+            .items
+            .get(candidate)
+            .is_some_and(|item| item.persist_id() == persist_id)
+        {
+            return Some(candidate);
+        }
+
+        self.mark_persist_id_index_dirty();
+        self.ensure_persist_id_index();
+        self.persist_id_index.get(persist_id).copied()
+    }
+
+    fn ensure_persist_id_index(&mut self) {
+        if !self.persist_id_index_dirty {
+            return;
+        }
+
+        self.persist_id_index.clear();
+        for (index, item) in self.items.iter().enumerate() {
+            self.persist_id_index
+                .insert(item.persist_id().to_string(), index);
+        }
+        self.persist_id_index_dirty = false;
     }
 }

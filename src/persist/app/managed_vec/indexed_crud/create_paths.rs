@@ -9,6 +9,7 @@ where
     pub async fn create(&mut self, item: V::Item) -> Result<()> {
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
         self.collection.add_one(item);
+        self.mark_persisted_index_dirty();
         let operation_result = self.save_all_checked(&tx_session).await;
         self.finalize_atomic_scope(
             "create",
@@ -29,6 +30,7 @@ where
         item: V::Item,
     ) -> Result<()> {
         self.collection.add_one(item);
+        self.mark_persisted_index_dirty();
         self.save_all_checked(session).await
     }
 
@@ -51,6 +53,7 @@ where
 
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
         self.collection.add_many(items);
+        self.mark_persisted_index_dirty();
         let operation_result = self.save_all_checked(&tx_session).await;
         self.finalize_atomic_scope(
             "create_many",
@@ -74,6 +77,7 @@ where
             return Ok(0);
         }
         self.collection.add_many(items);
+        self.mark_persisted_index_dirty();
         self.save_all_checked(session).await?;
         Ok(count)
     }

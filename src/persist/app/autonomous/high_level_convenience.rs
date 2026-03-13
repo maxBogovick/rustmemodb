@@ -1,7 +1,7 @@
 impl<V> PersistAutonomousAggregate<V>
 where
     V: PersistIndexedCollection,
-    V::Item: PersistCommandModel + Clone,
+    V::Item: PersistCommandModel + Clone + PersistEntityFactory,
     <V::Item as PersistCommandModel>::Command: PersistCommandName,
 {
     /// High-level API for executing a command with automatic retry on conflict.
@@ -17,10 +17,7 @@ where
         let persist_id = persist_id.to_string();
         let mut attempt = 1usize;
         loop {
-            let Some(expected_version) = self
-                .get(&persist_id)
-                .map(|current| current.metadata().version)
-            else {
+            let Some(expected_version) = self.get_version_db(&persist_id).await? else {
                 return Ok(None);
             };
 
@@ -88,10 +85,7 @@ where
         persist_id: &str,
         patch: <V::Item as PersistCommandModel>::Patch,
     ) -> Result<Option<V::Item>> {
-        let Some(expected_version) = self
-            .get(persist_id)
-            .map(|current| current.metadata().version)
-        else {
+        let Some(expected_version) = self.get_version_db(persist_id).await? else {
             return Ok(None);
         };
 
@@ -116,10 +110,7 @@ where
         let persist_id = persist_id.to_string();
         let mut attempt = 1usize;
         loop {
-            let Some(expected_version) = self
-                .get(&persist_id)
-                .map(|current| current.metadata().version)
-            else {
+            let Some(expected_version) = self.get_version_db(&persist_id).await? else {
                 return Ok(false);
             };
 
@@ -176,7 +167,7 @@ where
         mutator: F,
     ) -> std::result::Result<V::Item, PersistDomainMutationError<E>>
     where
-        V::Item: Clone,
+        V::Item: Clone + PersistEntityFactory,
         F: FnOnce(&mut V::Item) -> std::result::Result<(), E>,
     {
         let updated = self
@@ -195,13 +186,17 @@ where
             return Err(PersistDomainMutationError::Domain(PersistDomainError::NotFound));
         }
 
-        self.get(persist_id).cloned().ok_or_else(|| {
-            PersistDomainMutationError::Domain(PersistDomainError::Internal(format!(
-                "entity '{}' missing after successful mutate in '{}'",
-                persist_id,
-                self.name()
-            )))
-        })
+        self.get_one_db(persist_id)
+            .await
+            .map_err(PersistDomainError::from)
+            .map_err(PersistDomainMutationError::Domain)?
+            .ok_or_else(|| {
+                PersistDomainMutationError::Domain(PersistDomainError::Internal(format!(
+                    "entity '{}' missing after successful mutate in '{}'",
+                    persist_id,
+                    self.name()
+                )))
+            })
     }
 
     /// Applies an in-place closure mutation to multiple aggregates.
@@ -214,6 +209,7 @@ where
         mutator: F,
     ) -> std::result::Result<u64, PersistDomainMutationError<E>>
     where
+        V::Item: PersistEntityFactory,
         F: Fn(&mut V::Item) -> std::result::Result<(), E>,
     {
         let updated = self
@@ -241,7 +237,7 @@ where
         mutator: F,
     ) -> std::result::Result<V::Item, PersistDomainError>
     where
-        V::Item: Clone,
+        V::Item: Clone + PersistEntityFactory,
         F: FnOnce(&mut V::Item) -> Result<()>,
     {
         self.mutate_one_with(persist_id, mutator)
@@ -262,6 +258,7 @@ where
         mutator: F,
     ) -> std::result::Result<u64, PersistDomainError>
     where
+        V::Item: PersistEntityFactory,
         F: Fn(&mut V::Item) -> Result<()>,
     {
         self.mutate_many_with(persist_ids, mutator)

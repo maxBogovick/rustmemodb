@@ -588,6 +588,12 @@ macro_rules! persist_struct {
                 &mut self.__metadata
             }
 
+            fn mark_all_dirty(&mut self) {
+                $(
+                    self.__dirty_fields.insert(stringify!($field));
+                )+
+            }
+
             fn unique_fields(&self) -> Vec<&'static str> {
                 let mut fields = Vec::new();
                 $(
@@ -1640,6 +1646,12 @@ macro_rules! persist_struct {
 
             fn metadata_mut(&mut self) -> &mut $crate::persist::PersistMetadata {
                 &mut self.__metadata
+            }
+
+            fn mark_all_dirty(&mut self) {
+                for field in &self.__schema.fields {
+                    self.__dirty_fields.insert(field.name.clone());
+                }
             }
 
             fn descriptor(&self) -> $crate::persist::ObjectDescriptor {

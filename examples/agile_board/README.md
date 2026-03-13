@@ -2,17 +2,25 @@
 
 `agile_board` is a modern REST example that demonstrates a no-DB workflow with generated API, generated DTOs, and domain-only business logic.
 
+Related reading:
+
+- [`docs/src/quickstart.md`](../../docs/src/quickstart.md)
+- [`docs/src/guides/query_dsl_and_nested_graph_ops.md`](../../docs/src/guides/query_dsl_and_nested_graph_ops.md)
+- [`docs/src/briefings/the_10_minute_demo_that_sells.md`](../../docs/src/briefings/the_10_minute_demo_that_sells.md)
+
 ## What This Example Shows
 
 - Full CRUD for boards, columns, and tasks.
-- Generated REST router via `PersistApp::serve_autonomous_model::<Board>(...)`.
+- Generated REST router via `serve_domain!(app, Board, "boards")`.
 - Stable high-level imports via `rustmemodb::prelude::dx::*`.
 - Generated DTOs/endpoints from `#[expose_rest]` + `#[command]`.
-- Automatic domain-error -> HTTP mapping via `#[derive(ApiError)]`.
+- Automatic domain-error -> HTTP mapping via `#[derive(DomainError)]`.
 - Command idempotency via `Idempotency-Key` works by default (no manual handler logic).
 - Nested data persistence via `PersistJson<Vec<...>>` (no local JSON wrapper boilerplate).
 - Durable restart behavior (data survives process restart).
-- Source model persistence via `#[derive(Autonomous)]`.
+- Source model persistence via `#[domain(...)]`.
+- Generated list endpoint query DSL (`page`, `per_page`, `sort`, `field`, `field__op`).
+- High-level nested mutation API (`nested_push/patch/move/remove`) for aggregate graph updates without manual traversal.
 
 Core implementation files:
 
@@ -77,6 +85,32 @@ curl -sX POST "$BASE/api/boards/$BOARD_ID/update_task" \
 
 curl -s "$BASE/api/boards/$BOARD_ID" | jq
 ```
+
+## List Query DSL (Generated)
+
+```bash
+BASE=http://127.0.0.1:3002
+
+# sort + pagination
+curl -s "$BASE/api/boards?sort=name&page=1&per_page=2" | jq
+
+# filter by field operator
+curl -s "$BASE/api/boards?name__contains=alpha" | jq
+```
+
+`agile_board` integration tests validate this runtime behavior in
+`tests/http_api.rs` (`generated_router_supports_list_query_params`).
+
+## Nested Mutation API (High-Level)
+
+The project also demonstrates high-level nested graph operations via autonomous handle APIs:
+- `nested_push`
+- `nested_patch_where_eq`
+- `nested_move_where_eq`
+- `nested_remove_where_eq`
+
+These are validated in
+`tests/http_api.rs` (`high_level_nested_mutation_api_updates_board_without_manual_traversal`).
 
 ## Tests
 

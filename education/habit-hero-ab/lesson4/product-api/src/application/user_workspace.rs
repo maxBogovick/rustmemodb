@@ -68,9 +68,13 @@ impl UserWorkspace {
     }
 
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<User>, DomainError> {
-        let state = self.state.lock().await;
+        let mut state = self.state.lock().await;
         let needle = id.to_string();
-        Ok(state.users.get(&needle).cloned())
+        state
+            .users
+            .get_one_db(&needle)
+            .await
+            .map_err(map_low_level_error)
     }
 
     pub async fn list(&self, query: UserListQuery) -> Result<PaginatedUsers, DomainError> {
@@ -126,13 +130,24 @@ impl UserWorkspace {
         patch: UpdateUserPatch,
     ) -> Result<User, DomainError> {
         let mut state = self.state.lock().await;
+        let persist_id = id.to_string();
+
+        if state
+            .users
+            .get_one_db(&persist_id)
+            .await
+            .map_err(map_low_level_error)?
+            .is_none()
+        {
+            return Err(DomainError::not_found("user not found"));
+        }
 
         // Part B DX rule: app code calls business-level patch API.
         // Persist resolves current version/conflict handling internally.
         state
             .users
             .patch_one(
-                &id.to_string(),
+                &persist_id,
                 UserPatch {
                     display_name: patch.display_name,
                     active: patch.active,
@@ -145,10 +160,22 @@ impl UserWorkspace {
 
     pub async fn delete(&self, id: Uuid) -> Result<(), DomainError> {
         let mut state = self.state.lock().await;
+        let persist_id = id.to_string();
+
+        if state
+            .users
+            .get_one_db(&persist_id)
+            .await
+            .map_err(map_low_level_error)?
+            .is_none()
+        {
+            return Err(DomainError::not_found("user not found"));
+        }
+
         // Part B DX rule: remove without explicit optimistic-lock plumbing in app layer.
         state
             .users
-            .remove_one(&id.to_string())
+            .remove_one(&persist_id)
             .await
             .map_err(map_persist_domain_error)
     }
@@ -162,10 +189,21 @@ impl UserWorkspace {
         let UserWorkspaceState { users, failpoints } = &mut *state;
         let persist_id = id.to_string();
 
+        if users
+            .get_one_db(&persist_id)
+            .await
+            .map_err(map_low_level_error)?
+            .is_none()
+        {
+            return Err(DomainError::not_found("user not found"));
+        }
+
         #[cfg(test)]
         if failpoints.lifecycle_after_user_mutation {
             let Some(expected_version) = users
-                .get(&persist_id)
+                .get_one_db(&persist_id)
+                .await
+                .map_err(map_low_level_error)?
                 .map(|existing| existing.metadata().version)
             else {
                 return Err(DomainError::not_found("user not found"));
@@ -259,12 +297,23 @@ fn map_persist_domain_error(error: PersistDomainError) -> DomainError {
         }
         PersistDomainError::ConflictUnique(_) => DomainError::conflict("email already exists"),
         PersistDomainError::Validation(message) => DomainError::validation(message),
-        PersistDomainError::Internal(message) => DomainError::Storage(message),
+        PersistDomainError::Internal(message) => {
+            if is_table_not_found_error(&message) {
+                DomainError::not_found("user not found")
+            } else {
+                DomainError::Storage(message)
+            }
+        }
     }
 }
 
 fn map_low_level_error(error: impl Into<PersistDomainError>) -> DomainError {
     map_persist_domain_error(error.into())
+}
+
+fn is_table_not_found_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("table") && lower.contains("not found")
 }
 
 #[cfg(test)]

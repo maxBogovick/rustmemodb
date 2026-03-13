@@ -153,7 +153,11 @@ mod tests {
 
         let missing_id = Uuid::new_v4();
         let result = service.delete_user(missing_id).await;
-        assert!(matches!(result, Err(DomainError::NotFound(_))));
+        assert!(
+            matches!(result, Err(DomainError::NotFound(_))),
+            "unexpected result: {:?}",
+            result
+        );
     }
 
     #[tokio::test]
@@ -198,7 +202,11 @@ mod tests {
                 },
             )
             .await;
-        assert!(matches!(result, Err(DomainError::NotFound(_))));
+        assert!(
+            matches!(result, Err(DomainError::NotFound(_))),
+            "unexpected result: {:?}",
+            result
+        );
     }
 
     #[tokio::test]
@@ -245,7 +253,11 @@ mod tests {
                 },
             )
             .await;
-        assert!(matches!(result, Err(DomainError::NotFound(_))));
+        assert!(
+            matches!(result, Err(DomainError::NotFound(_))),
+            "unexpected result: {:?}",
+            result
+        );
     }
 
     #[tokio::test]

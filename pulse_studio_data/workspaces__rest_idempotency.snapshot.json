@@ -1,0 +1,55 @@
+{
+  "format_version": 1,
+  "created_at_unix_ms": 1771774115881,
+  "mode": "WithData",
+  "vec_name": "workspaces__rest_idempotency",
+  "object_type": "PersistRestIdempotencyRecord",
+  "table_name": "persist_persistrestidempotencyrecord_187_1",
+  "schema_version": 1,
+  "states": [
+    {
+      "persist_id": "41fc3d35-ff8b-4e14-bde5-01348768b263",
+      "type_name": "PersistRestIdempotencyRecord",
+      "table_name": "persist_persistrestidempotencyrecord_187_1",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-22T15:26:36.775800Z",
+        "updated_at": "2026-02-22T15:26:36.776343Z",
+        "last_touch_at": "2026-02-22T15:26:36.776343Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "aggregate_persist_id": "e902f97f-b9c5-4115-a6c2-55b9a20c6aae",
+        "idempotency_key": "1A028F80-9A3F-4E2D-A2D9-01D8E2641E3D",
+        "operation_name": "add_channel",
+        "response_body_json": "{\"id\":\"d6f507d9-cef0-4e29-8785-c868fc756bd6\",\"platform\":\"Google Ads\",\"handle\":\"@google-ads\",\"active\":true,\"created_at\":\"2026-02-22T15:26:36.775784Z\"}",
+        "scope_key": "e902f97f-b9c5-4115-a6c2-55b9a20c6aae:add_channel:1A028F80-9A3F-4E2D-A2D9-01D8E2641E3D",
+        "status_code": 200
+      }
+    },
+    {
+      "persist_id": "31ca1db3-4b14-4c7f-b4d1-6e604a7eb781",
+      "type_name": "PersistRestIdempotencyRecord",
+      "table_name": "persist_persistrestidempotencyrecord_187_1",
+      "metadata": {
+        "version": 1,
+        "schema_version": 1,
+        "created_at": "2026-02-22T15:28:35.880379Z",
+        "updated_at": "2026-02-22T15:28:35.880739Z",
+        "last_touch_at": "2026-02-22T15:28:35.880739Z",
+        "touch_count": 1,
+        "persisted": true
+      },
+      "fields": {
+        "aggregate_persist_id": "e902f97f-b9c5-4115-a6c2-55b9a20c6aae",
+        "idempotency_key": "D5066670-3AE7-48BE-8E59-39AE71924534",
+        "operation_name": "launch_campaign",
+        "response_body_json": "{\"id\":\"9414e257-3a79-4dc5-b98a-dbb48b34f87c\",\"channel_id\":\"d6f507d9-cef0-4e29-8785-c868fc756bd6\",\"title\":\"New Year Sale\",\"budget_minor\":1500000,\"spent_minor\":0,\"status\":\"running\",\"created_at\":\"2026-02-22T15:28:35.880362Z\"}",
+        "scope_key": "e902f97f-b9c5-4115-a6c2-55b9a20c6aae:launch_campaign:D5066670-3AE7-48BE-8E59-39AE71924534",
+        "status_code": 200
+      }
+    }
+  ]
+}

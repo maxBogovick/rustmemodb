@@ -8,6 +8,7 @@ static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 extern crate self as rustmemodb;
 
+pub mod ai_memory;
 pub mod connection;
 pub mod core;
 mod evaluator;
@@ -30,8 +31,21 @@ pub mod web;
 pub use paste;
 
 // Re-export main types for convenience
-pub use core::{DataType, DbError, Result, Row, Value};
+pub use ai_memory::{
+    AgentCommandOptions, AgentIncidentForensicsReport, AgentReplayRunOptions, AgentReplayRunReport,
+    AgentReplayStepReport, AgentSessionMemory, AgentSessionRuntime, AgentSessionRuntimeConfig,
+    AgentSessionTimelineRecord, AgentTimelineQuery, AgentWorkflowExecutor, AgentWorkflowStep,
+};
+pub use async_trait;
+pub use connection::auth::{AuthManager, Permission};
+pub use connection::config::ConnectionConfig;
+pub use connection::pool::ConnectionPool;
+pub use core::{
+    DataType, DbError, Result, Row, Value,
+    omni_entity::{FieldMeta, OmniEntityPatch, OmniSchema, OmniValue, SqlEntity},
+};
 pub use facade::InMemoryDB;
+pub use facade::client::Client;
 pub use interface::{DatabaseClient, DatabaseFactory};
 pub use model_lang::{
     FieldDecl, FieldType, ModelProgram, StructDecl, parse_and_materialize_models,
@@ -44,7 +58,9 @@ pub use persist::app::{
     PersistAutonomousRecord, PersistAutonomousRestModel, PersistBackedModel, PersistCollection,
     PersistConflictRetryPolicy, PersistDomainError, PersistDomainHandle,
     PersistDomainMutationError, PersistDomainStore, PersistIdempotentCommandResult,
-    PersistIndexedCollection, PersistReplicationMode, PersistReplicationPolicy, PersistTx,
+    PersistIndexedCollection, PersistQueryBuilder, PersistQueryFilter, PersistQueryOp,
+    PersistQuerySort, PersistQuerySortDirection, PersistQuerySpec, PersistReplicationMode,
+    PersistReplicationPolicy, PersistTx, PersistView, PersistViewHandle,
     PersistWorkflowCommandModel, classify_managed_conflict,
 };
 pub use persist::cluster::{
@@ -72,8 +88,8 @@ pub use persist::runtime::{
 pub use persist::web::{
     IDEMPOTENCY_KEY_INVALID_MESSAGE, IDEMPOTENCY_KEY_MAX_LEN, IDEMPOTENCY_KEY_TOO_LONG_MESSAGE,
     IF_MATCH_INVALID_ASCII_MESSAGE, IF_MATCH_INVALID_VERSION_MESSAGE, IF_MATCH_REQUIRED_MESSAGE,
-    PersistServiceError, PersistWebInputError, PersistWebProblem, map_conflict_problem,
-    normalize_idempotency_key, normalize_request_id, parse_if_match_header,
+    PersistInputValidate, PersistServiceError, PersistWebInputError, PersistWebProblem,
+    map_conflict_problem, normalize_idempotency_key, normalize_request_id, parse_if_match_header,
 };
 pub use persist::{
     FunctionDescriptor, HeteroPersistVec, HeteroPersistVecSnapshot, HeteroTypeSnapshot,
@@ -88,9 +104,30 @@ pub use persist::{
 };
 pub use result::QueryResult;
 pub use rustmemodb_derive::{
-    ApiError, Autonomous, PersistAutonomousIntent, PersistJsonValue, PersistModel, autonomous_impl,
-    command, expose_rest, persistent, persistent_impl, query, view,
+    ApiError, Autonomous, DomainError, PersistAutonomousIntent, PersistJsonValue, PersistModel,
+    PersistView, Validate, api, autonomous_impl, command, domain, expose_rest, persistent,
+    persistent_impl, query, view,
 };
+pub use storage::DurabilityMode;
+
+/// Mounts generated autonomous REST router for a model in one line.
+///
+/// This is the default high-level bootstrap path for application code.
+#[macro_export]
+macro_rules! serve_domain {
+    ($app:expr, $model:ty, $path:expr) => {
+        $app.serve_autonomous_model::<$model>($path).await
+    };
+}
+
+/// Mounts generated autonomous REST router for a model and one registered view.
+#[macro_export]
+macro_rules! serve_domain_with_view {
+    ($app:expr, $model:ty, $view:ty, $path:expr) => {
+        $app.serve_autonomous_model_with_view::<$model, $view>($path)
+            .await
+    };
+}
 
 #[cfg(feature = "unistructgen")]
 pub use unistructgen_macro::{

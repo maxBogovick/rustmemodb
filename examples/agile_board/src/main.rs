@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
     let port = port_from_env()?;
 
     let app = PersistApp::open_auto(data_dir).await?;
-    let boards_router = app.serve_autonomous_model::<Board>("boards").await?;
+    let boards_router = rustmemodb::serve_domain!(app, Board, "boards")?;
     let app = Router::new().nest("/api/boards", boards_router);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

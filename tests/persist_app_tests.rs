@@ -1328,6 +1328,48 @@ async fn persist_domain_handle_hides_locking_and_supports_outcome_api() {
     assert_eq!(missing_remove, PersistDomainError::NotFound);
 }
 
+#[tokio::test]
+async fn persist_domain_handle_exposes_db_first_id_reads() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path().join("persist_app_domain_handle_db_first_reads");
+
+    let app = PersistApp::open_auto(root).await.expect("open app");
+    let users = app
+        .open_domain_handle::<AppUserVec>("users_domain_handle_db_first")
+        .await
+        .expect("open domain users handle");
+
+    let created = users
+        .create_one(AppUser::new(
+            "db-first@example.com".to_string(),
+            "Initial".to_string(),
+        ))
+        .await
+        .expect("create_one should succeed");
+    let user_id = created.persist_id().to_string();
+
+    let cached = users
+        .get_one_cached(&user_id)
+        .await
+        .expect("cache lookup should see created entity");
+    assert_eq!(cached.display_name(), "Initial");
+
+    let db_first = users
+        .get_one_db(&user_id)
+        .await
+        .expect("db-first lookup should succeed")
+        .expect("db-first lookup should find entity");
+    assert_eq!(db_first.display_name(), "Initial");
+    assert_eq!(db_first.persist_id(), user_id);
+
+    let version = users
+        .get_version_db(&user_id)
+        .await
+        .expect("version lookup should succeed")
+        .expect("version lookup should find entity");
+    assert_eq!(version, db_first.metadata().version);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UserMutatorError {
     EmptyDisplayName,

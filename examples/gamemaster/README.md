@@ -1,6 +1,6 @@
 # 🎮 GameMaster: High-Performance Matchmaking Server
 
-A production-ready example of a multiplayer game backend built with `RustMemDB`.
+A production-ready example of a multiplayer game backend built with `RustMemoDB`.
 
 **The goal:** Show how to build a modern game backend without repository/ORM boilerplate and without infrastructure code in app logic.
 
@@ -13,7 +13,7 @@ A production-ready example of a multiplayer game backend built with `RustMemDB`.
 
 ## 🆚 Comparison
 
-| Feature | Standard Way (SQL + Redis) | RustMemDB Way |
+| Feature | Standard Way (SQL + Redis) | RustMemoDB Way |
 | :--- | :--- | :--- |
 | **Setup** | Install Postgres, Redis, Run Migrations | Add crate to `Cargo.toml` |
 | **Matchmaking** | Complex SQL query or Redis sorted sets | Native Rust `Vec` iteration/filtering |

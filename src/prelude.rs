@@ -11,8 +11,14 @@ pub mod dx {
     //! - `PersistApp` bootstrap,
     //! - `PersistJson<T>` for nested persisted JSON data.
     pub use crate::{
-        ApiError, Autonomous, PersistApp, PersistJson, PersistJsonValue, command, expose_rest,
-        query, view,
+        AgentCommandOptions, AgentIncidentForensicsReport, AgentReplayRunOptions,
+        AgentReplayRunReport, AgentReplayStepReport, AgentSessionMemory, AgentSessionRuntime,
+        AgentSessionRuntimeConfig, AgentTimelineQuery, AgentWorkflowExecutor, AgentWorkflowStep,
+        ApiError, Autonomous, DomainError, PersistApp, PersistInputValidate, PersistJson,
+        PersistJsonValue, PersistQueryBuilder, PersistQueryFilter, PersistQueryOp,
+        PersistQuerySort, PersistQuerySortDirection, PersistQuerySpec, PersistView,
+        PersistViewHandle, Validate, api, command, domain, expose_rest, query, serve_domain,
+        serve_domain_with_view, view,
     };
 
     #[cfg(feature = "unistructgen")]

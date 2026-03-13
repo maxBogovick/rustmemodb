@@ -56,6 +56,8 @@ impl PersistApp {
             replication: self.policy.replication.clone(),
             replication_failures: 0,
             last_snapshot_at,
+            persisted_index: RwLock::new(HashMap::new()),
+            persisted_index_dirty: AtomicBool::new(true),
         })
     }
 
@@ -129,6 +131,7 @@ impl PersistApp {
     ) -> Result<PersistAutonomousModelHandle<M>>
     where
         M: PersistAutonomousModel,
+        M::Persisted: PersistEntityFactory,
     {
         let handle = self.open_domain_handle::<M::Collection>(name).await?;
         Ok(PersistAutonomousModelHandle::new(handle))
@@ -144,9 +147,43 @@ impl PersistApp {
     ) -> Result<axum::Router>
     where
         M: PersistAutonomousRestModel,
+        M::Persisted: PersistEntityFactory,
     {
         let handle = self.open_autonomous_model::<M>(name).await?;
         Ok(M::mount_router(handle))
+    }
+
+    /// Registers a typed high-level view for an already opened model handle.
+    ///
+    /// This keeps reads/writes on one in-memory handle and avoids stale reads
+    /// that can happen when opening independent handles for the same collection.
+    pub fn register_view<M, V>(
+        &self,
+        model: &PersistAutonomousModelHandle<M>,
+    ) -> PersistViewHandle<M, V>
+    where
+        M: PersistAutonomousModel,
+        M::Persisted: PersistEntityFactory,
+        V: PersistView<M>,
+        M::Persisted: Clone,
+    {
+        model.view::<V>()
+    }
+
+    /// Opens a generated autonomous model router and mounts one registered view route.
+    pub async fn serve_autonomous_model_with_view<M, V>(
+        &self,
+        name: impl Into<String>,
+    ) -> Result<axum::Router>
+    where
+        M: PersistAutonomousRestModel,
+        M::Persisted: PersistEntityFactory,
+        V: PersistView<M>,
+        M::Persisted: Clone,
+    {
+        let handle = self.open_autonomous_model::<M>(name).await?;
+        let router = M::mount_router(handle.clone());
+        Ok(self.register_view::<M, V>(&handle).mount_into_router(router))
     }
 
     /// Opens a compatibility adapter for legacy vector-style API usage.

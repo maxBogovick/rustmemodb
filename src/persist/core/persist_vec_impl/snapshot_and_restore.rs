@@ -80,6 +80,7 @@ impl<T: PersistEntityFactory> PersistVec<T> {
 
         self.name = snapshot.vec_name;
         self.items.clear();
+        self.mark_persist_id_index_dirty();
 
         if snapshot.mode == SnapshotMode::WithData {
             for mut state in snapshot.states {
@@ -116,6 +117,8 @@ impl<T: PersistEntityFactory> PersistVec<T> {
                 self.items.push(entity);
             }
         }
+
+        self.mark_persist_id_index_dirty();
 
         Ok(())
     }

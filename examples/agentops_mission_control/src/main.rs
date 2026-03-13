@@ -1,0 +1,42 @@
+use agentops_mission_control::model::AgentOpsWorkspace;
+use anyhow::Context;
+use axum::Router;
+use rustmemodb::prelude::dx::PersistApp;
+use std::{env, net::SocketAddr, path::PathBuf};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
+    let data_dir = data_dir_from_env()?;
+    let port = port_from_env()?;
+
+    let app = PersistApp::open_auto(data_dir).await?;
+    let mission_control_router = rustmemodb::serve_domain!(app, AgentOpsWorkspace, "workspaces")?;
+    let app = Router::new().nest("/api/workspaces", mission_control_router);
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    println!("AgentOps Mission Control listening on http://{addr}");
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+fn data_dir_from_env() -> anyhow::Result<PathBuf> {
+    match env::var("AGENTOPS_DATA_DIR") {
+        Ok(path) => Ok(PathBuf::from(path)),
+        Err(_) => Ok(env::current_dir()
+            .context("resolve current directory for default data dir")?
+            .join("agentops_data")),
+    }
+}
+
+fn port_from_env() -> anyhow::Result<u16> {
+    let raw = env::var("AGENTOPS_PORT").unwrap_or_else(|_| "3030".to_string());
+    raw.parse::<u16>()
+        .with_context(|| format!("invalid AGENTOPS_PORT='{raw}'"))
+}

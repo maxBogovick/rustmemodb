@@ -4,6 +4,9 @@ Status: `ACCEPTED`
 Date: `2026-02-11`  
 Scope: `persist_struct!`, `persist_vec!`, `PersistApp`
 
+Related RFCs:
+- `docs/persist/RFC_PERSIST_VIEW_MVP.md` (proposed automatic materialized views to remove manual projection caches from app code)
+
 ## 1. Problem
 
 Current persistence usage still leaks infrastructure concerns into application code:
@@ -81,6 +84,15 @@ Generated collection API must support:
 - `create/get/list/patch/delete`,
 - `create_many/apply_many/delete_many`,
 - aggregate query helpers for app-facing filtering/pagination (`find_first(...)`, `query_page_filtered_sorted(...)`),
+- id-based access/mutation internals must use indexed lookup (no per-call linear `iter().find/position` scan by `persist_id` in managed path),
+- id-based mutation paths should be DB-aware on cache miss (targeted primary-key SQL hydration before mutating in-memory state),
+- id-based read paths must expose DB-first contracts:
+  - `get_one_db(...) -> Result<Option<Item>>`,
+  - `get_version_db(...) -> Result<Option<i64>>`,
+  - cache-only access must be explicit (`get_cached(...)`), with `get(...)` treated as compatibility alias only,
+- mutation paths that accept explicit transaction/session context must hydrate/read through that same context:
+  - `with_session`/`with_tx` APIs must not fallback to out-of-context cache reads,
+  - session-aware DB-first helpers are mandatory for these paths,
 - `atomic_with(...)` for cross-collection atomic orchestration without app-level snapshot/session plumbing,
 - `execute_command_if_match(...)` for optimistic command execution without manual version pre-checks,
 - `execute_patch_if_match(...)` for optimistic patch execution without manual read/version branching,
@@ -105,6 +117,7 @@ Generated collection API must support:
   - typed closure-mutation convenience methods:
     - `mutate_one_with(...)`,
     - `mutate_many_with(...)`,
+  - closure-mutation paths must force dirty tracking under the hood so user closure changes are guaranteed to persist to storage, not just in-memory cache,
   - audit reads via `list_audits_for(...)` when product code needs history projection,
 - `execute_workflow_if_match_with_create(...)` for trait-mapped domain workflows without inline closure plumbing,
 - `execute_workflow_for_many_with_create_many(...)` for bulk workflow + related-record append without manual tx loops,
@@ -184,6 +197,7 @@ Intent-command API must expose:
   - `#[persist_intent(model = <Entity>, to_command = <method>)]` (method-based mapping)
   - `#[persist_intent(model = <Entity>)]` + variant-level `#[persist_case(...)]` (no helper methods / no impl block)
 - derive-based source-model bridge to autonomous persistence without manual collection wiring:
+  - `#[domain(table = "...", schema_version = N)]` as high-level alias for source-model autonomous setup (injects `Autonomous` + persist model options),
   - `#[derive(Autonomous)]` + `#[persist_model(table = \"...\", schema_version = N)]`
   - generated `<Model>Persisted` + `<Model>AutonomousVec`
   - generated contracts implementing `PersistBackedModel<Model>` and `PersistAutonomousModel`
@@ -191,9 +205,14 @@ Intent-command API must expose:
   - low-level escape hatch path is explicit: `rustmemodb::prelude::advanced::*` / `rustmemodb::persist::*`
   - `#[autonomous_impl]` + `#[rustmemodb::command]` on model impl generates `<Model>AutonomousOps` trait for high-level domain methods on `PersistAutonomousModelHandle<Model>`
   - generated `<Model>AutonomousOps` methods append system audit events by default (no manual app-layer audit wiring)
+  - `#[api]` as high-level alias for `#[expose_rest]` that auto-marks public `&mut self` methods as commands and public `&self` methods as queries
+  - `#[api(views(ViewA, ViewB))]` auto-mounts typed `PersistView` projections on generated router
   - `#[expose_rest]` on model impl generates axum router + command DTOs + handlers from `#[rustmemodb::command]`/`#[rustmemodb::query]`/`#[rustmemodb::view]`
+  - `#[expose_rest(views(ViewA, ViewB))]` auto-mounts typed `PersistView` projections in explicit-marker mode
   - `PersistApp::serve_autonomous_model::<Model>(...)` mounts generated REST router directly
+  - `serve_domain!(app, Model, "name")` provides one-line generated-router mount shorthand in async bootstrap code
 - derive-based API error mapping for domain errors:
+  - `#[derive(DomainError)]` as high-level alias for `ApiError`
   - `#[derive(ApiError)]`
   - variant-level `#[api_error(status = <u16>, code = "...")]`
   - generated `From<DomainError> for PersistServiceError` (no manual app-layer error mapping impl)
@@ -206,18 +225,30 @@ Intent-command API must expose:
   - `#[rustmemodb::view]` remains available for explicit view routes,
   - `#[rustmemodb::view(input = "body")]` supports typed body DTOs (`POST /:id/<view>`),
   - `#[rustmemodb::view(input_type = <Type>, output = <Type>)]` binds explicit view contracts,
+  - `#[derive(PersistView)]` + `PersistAutonomousModelHandle::view::<View>()` enables typed in-process view reads, and `#[api(views(...))]` / `#[expose_rest(views(...))]` auto-publishes REST endpoints `GET /:id/views/<name>`,
+  - `#[derive(PersistView)]` supports field-level `#[view_metric(...)]` (`copy`, `count`, `sum`, `group_by`) so common dashboard projections require no manual `compute` function,
+  - `PersistAutonomousModelHandle::query()` provides declarative list/filter/sort/page DSL (`where_*`, `sort_*`, `page`, `per_page`, `fetch`) to avoid app-layer manual scans,
+  - generated list route `GET /` maps query params to `PersistQuerySpec` automatically (`page`, `per_page`, `sort`, `field`, `field__op`), so app code does not hand-parse filter/sort/pagination input,
+  - `PersistAutonomousModelHandle::nested_push/nested_patch_where_eq/nested_remove_where_eq/nested_move_where_eq` provide generic nested graph mutations without handwritten traversal/repository code,
   - generated command/query/view handlers return `204 No Content` when method success type is `()` / `Result<(), E>`,
   - generated create endpoint (`POST /`) uses constructor-derived DTO when `new(...) -> Self` is detected,
   - fallback create behavior accepts full source-model payload when constructor is not detected,
   - generated router includes built-in aggregate audit projection endpoint (`GET /:id/_audits`),
   - generated command endpoints enable `Idempotency-Key` replay by default (duplicate key returns same status/body and does not re-apply mutation),
+  - idempotency replay lookup contract is DB-first by `scope_key` (no in-memory scan as source of truth),
   - `#[command(idempotent = false)]` is available as an explicit opt-out,
+  - `#[derive(Validate)]` + `#[validate(...)]` enables DTO-level normalization/validation contracts for generated handlers,
+  - `#[command(validate = true)]` wires generated payload validation before mutation and maps failures to `422`,
   - generated autonomous router exposes `GET /_openapi.json` built from command/query/view registry,
   - schema-first runtime path `PersistApp::serve_json_schema_dir(...)` builds generic CRUD router directly from `schemas/*.json` without app-layer handler code.
   - schema-first router exposes `GET /_openapi.json` (mounted path aware, e.g. `/api/_openapi.json`).
   - schema-first router hot-reloads schema files and reconciles new fields to storage automatically.
 - derive-based JSON field persistence for domain value types without wrapper boilerplate:
   - `#[derive(PersistJsonValue)]` on local struct/enum types used in `persist_struct!` fields
+- storage-backed query execution for high-level DSL:
+  - `PersistAutonomousModelHandle::query().where_*(...).fetch().await` builds SQL internally in `persist`,
+  - generated REST list endpoint uses the same storage-backed path by default,
+  - unsupported filter/field shapes safely fallback to in-memory query path to keep behavior compatible.
 - generic JSON wrapper for nested data:
   - `PersistJson<T>` built into core (no local wrapper struct + no manual `PersistValue` impl),
   - intended for fields like `PersistJson<Vec<Child>>` in autonomous/domain models.
@@ -348,3 +379,6 @@ The following examples are maintained as living DX references for this RFC:
 - `examples/ledger_core`:
   - personal finance ledger (double-entry, multi-currency transfer, balance reports).
   - focus: atomic business mutations and in-memory reporting without SQL orchestration in handlers/services.
+- `examples/agentops_mission_control`:
+  - AI-operations control plane (mission run lifecycle, handoff, incidents, reliability dashboards).
+  - focus: modern state-machine workflows with generated REST, idempotency replay, query DSL list filtering, typed views, and audit trail.

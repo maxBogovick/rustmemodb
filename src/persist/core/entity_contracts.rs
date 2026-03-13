@@ -13,6 +13,12 @@ pub trait PersistEntity: Send + Sync {
     fn metadata(&self) -> &PersistMetadata;
     /// Returns a mutable reference to the persistence metadata.
     fn metadata_mut(&mut self) -> &mut PersistMetadata;
+    /// Marks all logical data fields as dirty for persistence.
+    ///
+    /// Default implementation is a no-op for custom entities that do not use
+    /// dirty-field tracking. Macro-generated entities override this to force a
+    /// full-field update on closure-based mutations.
+    fn mark_all_dirty(&mut self) {}
     /// Returns a list of field names that must be unique.
     fn unique_fields(&self) -> Vec<&'static str> {
         Vec::new()

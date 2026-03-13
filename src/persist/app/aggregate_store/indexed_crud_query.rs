@@ -9,11 +9,32 @@ where
         self.managed.list()
     }
 
-    /// Retrieves an item by its persistence ID.
-    ///
-    /// Returns `None` if the item does not exist or has not been loaded.
+    /// Retrieves one item from in-memory cache by id.
+    pub fn get_cached(&self, persist_id: &str) -> Option<&V::Item> {
+        self.managed.get_cached(persist_id)
+    }
+
+    /// Legacy alias for cache-only lookup.
     pub fn get(&self, persist_id: &str) -> Option<&V::Item> {
-        self.managed.get(persist_id)
+        self.get_cached(persist_id)
+    }
+
+    /// Retrieves one item from storage using DB-first lookup.
+    ///
+    /// Cache is refreshed on hit and stale cache entries are evicted on miss.
+    pub async fn get_one_db(&mut self, persist_id: &str) -> Result<Option<V::Item>>
+    where
+        V::Item: Clone + PersistEntityFactory,
+    {
+        self.managed.get_one_db(persist_id).await
+    }
+
+    /// Retrieves current persisted version from storage.
+    pub async fn get_version_db(&mut self, persist_id: &str) -> Result<Option<i64>>
+    where
+        V::Item: PersistEntityFactory,
+    {
+        self.managed.get_version_db(persist_id).await
     }
 
     /// Returns a page of items from the collection.
@@ -122,6 +143,7 @@ where
     pub async fn update<F>(&mut self, persist_id: &str, mutator: F) -> Result<bool>
     where
         F: FnOnce(&mut V::Item) -> Result<()>,
+        V::Item: PersistEntityFactory,
     {
         self.managed.update(persist_id, mutator).await
     }
@@ -134,6 +156,7 @@ where
     ) -> Result<std::result::Result<bool, E>>
     where
         F: FnOnce(&mut V::Item) -> std::result::Result<(), E>,
+        V::Item: PersistEntityFactory,
     {
         self.managed.update_with(persist_id, mutator).await
     }
@@ -142,6 +165,7 @@ where
     pub async fn apply_many<F>(&mut self, persist_ids: &[String], mutator: F) -> Result<usize>
     where
         F: Fn(&mut V::Item) -> Result<()>,
+        V::Item: PersistEntityFactory,
     {
         self.managed.apply_many(persist_ids, mutator).await
     }
@@ -154,17 +178,24 @@ where
     ) -> Result<std::result::Result<usize, E>>
     where
         F: Fn(&mut V::Item) -> std::result::Result<(), E>,
+        V::Item: PersistEntityFactory,
     {
         self.managed.apply_many_with(persist_ids, mutator).await
     }
 
     /// Deletes an item by its persistence ID.
-    pub async fn delete(&mut self, persist_id: &str) -> Result<bool> {
+    pub async fn delete(&mut self, persist_id: &str) -> Result<bool>
+    where
+        V::Item: PersistEntityFactory,
+    {
         self.managed.delete(persist_id).await
     }
 
     /// Deletes multiple items by their persistence IDs.
-    pub async fn delete_many(&mut self, persist_ids: &[String]) -> Result<usize> {
+    pub async fn delete_many(&mut self, persist_ids: &[String]) -> Result<usize>
+    where
+        V::Item: PersistEntityFactory,
+    {
         self.managed.delete_many(persist_ids).await
     }
 }

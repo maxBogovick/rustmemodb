@@ -1,4 +1,5 @@
 pub mod error;
+pub mod omni_entity;
 pub mod types;
 pub mod value;
 

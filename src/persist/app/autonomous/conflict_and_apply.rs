@@ -1,7 +1,7 @@
 impl<V> PersistAutonomousAggregate<V>
 where
     V: PersistIndexedCollection,
-    V::Item: PersistCommandModel + Clone,
+    V::Item: PersistCommandModel + Clone + PersistEntityFactory,
     <V::Item as PersistCommandModel>::Command: PersistCommandName,
 {
     fn should_retry_convenience_conflict(&self, attempt: usize, err: &DbError) -> bool {

@@ -38,8 +38,8 @@ impl Column {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Autonomous)]
-#[persist_model(table = "boards", schema_version = 1)]
+#[domain(table = "boards", schema_version = 1)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Board {
     name: String,
     columns: PersistJson<Vec<Column>>,
@@ -200,7 +200,7 @@ impl Board {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, ApiError)]
+#[derive(Clone, Debug, PartialEq, Eq, DomainError)]
 pub enum BoardDomainError {
     #[api_error(status = 422, code = "validation_error")]
     Validation(String),

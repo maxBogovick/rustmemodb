@@ -2,6 +2,11 @@
 
 Schema-first REST example with zero handwritten handlers.
 
+Related reading:
+
+- [`docs/src/playbooks/schema_first_speedrun.md`](../../docs/src/playbooks/schema_first_speedrun.md)
+- [`docs/src/adoption/a_7_day_pilot_plan.md`](../../docs/src/adoption/a_7_day_pilot_plan.md)
+
 `unistructgen` usage in this example:
 
 - HTTP test payload DTOs are generated at compile time with `rustmemodb::generate_struct_from_json!`,

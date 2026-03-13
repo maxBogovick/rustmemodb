@@ -1,7 +1,7 @@
 # Goal Execution Playbook: Path to Autonomous Structures
 
 Status: ACTIVE
-Last Updated: 2026-02-21
+Last Updated: 2026-02-23
 Depends On: `/Users/maxim/RustroverProjects/rustmemodb/llm/GOAL_ALIGNMENT_CHARTER.md`
 Guardrails: `/Users/maxim/RustroverProjects/rustmemodb/llm/AUTONOMY_DX_CONTRACT.md`
 Active DX Simplification Plan: `/Users/maxim/RustroverProjects/rustmemodb/llm/PERSIST_DX_SIMPLIFICATION_EXECUTION.md`
@@ -70,6 +70,173 @@ Closed in this execution wave:
 14. Smart DTO inference for generated REST handlers:
     - for single DTO-like method arguments in `#[command]`/`#[query]`/`#[view]`, generated handlers infer direct payload binding automatically,
     - showcase `ledger_core` now works without explicit `input = <Type>` overrides for those methods.
+
+## 2.2 Execution Delta (2026-02-22)
+
+Closed in this execution wave:
+
+1. DX alias macros added to reduce boilerplate in product-facing code:
+   - `#[domain(...)]` for source-model autonomous setup,
+   - `#[api]` for auto-marking and exposing public domain methods,
+   - `#[derive(DomainError)]` alias for API error mapping.
+2. DTO normalization/validation pipeline added to generated command handlers:
+   - `PersistInputValidate` contract in web adapter,
+   - `#[derive(Validate)]` + `#[validate(...)]` field rules,
+   - `#[command(validate = true)]` -> HTTP `422` on invalid payload.
+3. One-line router mount helper added:
+   - `serve_domain!(app, Model, \"name\")`.
+4. `persist_tool` DSL track progressed with executable commands:
+   - `dsl check`, `dsl build`, `dsl fmt`,
+   - generated scaffold now defaults to `#[domain] + #[api]`.
+5. Showcase examples migrated to latest high-level DX aliases:
+   - `agile_board` and `ledger_core` now use `#[domain]`, `#[derive(DomainError)]`,
+   - runtime bootstrap uses `serve_domain!(...)`.
+6. Test coverage expanded for new DX contract:
+   - `tests/persist_dx_api_macros_tests.rs` validates `domain/api/Validate` and REST `422` behavior,
+   - `persist_tool` DSL unit tests added in `src/bin/persist_tool.rs`.
+7. Added a new modern end-to-end showcase `examples/pulse_studio`:
+   - single-model/single-main runtime shape,
+   - generated REST + OpenAPI + idempotency,
+   - validated DTO path (`Validate`) and `unistructgen`-generated request types.
+
+## 2.3 Execution Delta (2026-02-22, DX Correction)
+
+Closed in this correction wave:
+
+1. Identified and documented DX anti-pattern: manual projection cache fields in app model (`stats`, `recompute_*`) are treated as goal drift.
+2. Added RFC draft for runtime-managed automatic views:
+   - `docs/persist/RFC_PERSIST_VIEW_MVP.md`.
+3. Simplified `examples/pulse_studio` model to remove manual projection cache plumbing:
+   - removed cache fields and recompute helper from `src/model.rs`,
+   - model now keeps only business state + invariants.
+4. Moved model unit tests to `tests/domain_model.rs` to keep domain file compact and review-friendly.
+
+## 2.4 Execution Delta (2026-02-23, Typed View Auto-Mount)
+
+Closed in this execution wave:
+
+1. Added typed view auto-mount options to generated REST macros:
+   - `#[api(views(ViewA, ViewB))]`
+   - `#[expose_rest(views(ViewA, ViewB))]`
+2. Generated autonomous router now publishes typed view endpoints automatically:
+   - `GET /:id/views/<view_name>`
+   - no manual `register_view` required for HTTP exposure.
+3. Generated OpenAPI now includes auto-mounted typed view operations and response schemas.
+4. `PersistOpenApiOperation` switched to owned-string metadata to support dynamic generated paths.
+5. `pulse_studio` migrated to demonstrate the new path:
+   - `PulseDashboard` derives `PersistView`,
+   - `PulseInsightsView` derives `PersistView` with `#[view_metric(...)]`,
+   - `PulseWorkspace` uses `#[api(views(PulseDashboard, PulseInsightsView))]`,
+   - tests cover `/views/dashboard`, `/views/insights`, and OpenAPI route presence.
+6. DX contract guardrails tightened:
+   - examples are blocked from manual `register_view` / `serve_autonomous_model_with_view` in runtime path.
+
+## 2.5 Execution Delta (2026-02-23, PersistView Metric Derive Stabilization)
+
+Closed in this execution wave:
+
+1. `PersistView` derive stabilized for metric-first projections:
+   - added field-level `#[view_metric(...)]` handling (`copy`, `count`, `sum`, `group_by`),
+   - enforced mutual exclusivity between `#[persist_view(compute = ...)]` and field metrics.
+2. Added executable metric coverage:
+   - `tests/persist_view_mvp_tests.rs` now validates metric-only view computation without manual projection code.
+3. Router/OpenAPI path remains generated-first:
+   - metric-derived views are auto-mounted by `#[api(views(...))]` and surfaced in generated OpenAPI.
+
+## 2.6 Execution Delta (2026-02-23, Query DSL + Nested Mutation Autopilot + DX Compile Contract)
+
+Closed in this execution wave:
+
+1. Added high-level declarative list/filter/sort/page API:
+   - `PersistAutonomousModelHandle::query()` + chainable spec builder (`where_*`, `sort_*`, `page`, `per_page`, `fetch`),
+   - removes manual app-layer list scanning for common read scenarios.
+2. Added generic nested graph mutation autopilot on autonomous handle:
+   - `nested_push`, `nested_patch_where_eq`, `nested_remove_where_eq`, `nested_move_where_eq`,
+   - avoids handwritten nested traversal/repository code in app layer.
+3. Added compile-time DX contract gate:
+   - `tests/dx_contract_compile_tests.rs` locks macro/derive/API compatibility at compile stage.
+4. Added executable coverage:
+   - `tests/persist_query_nested_dsl_tests.rs` validates nested mutation and query DSL behavior.
+5. Connected generated REST list endpoint to query DSL parser:
+   - generated `GET /` now auto-maps `page`, `per_page`, `sort`, `field`, `field__op` into `PersistQuerySpec`,
+   - invalid query params are rejected by generated handlers through shared validation path.
+
+## 2.7 Execution Delta (2026-02-23, AgentOps Mission Control Flagship Showcase)
+
+Closed in this execution wave:
+
+1. Added new modern flagship example:
+   - `examples/agentops_mission_control`.
+2. Implemented domain-first AI-operations control plane:
+   - agents, missions, run state-machine, handoff flow, incidents, run timeline.
+3. Kept runtime path generated-first:
+   - `serve_domain!(app, AgentOpsWorkspace, "workspaces")`,
+   - no manual `api/store/repository` adapter layers.
+4. Added typed operational projections:
+   - `OpsDashboardView` and `ReliabilityView` auto-mounted with `#[api(views(...))]`.
+5. Added executable integration contract:
+   - end-to-end workflow,
+   - idempotent command replay (`Idempotency-Key`),
+   - audit endpoint and OpenAPI checks,
+   - generated list query DSL (`page/per_page/sort/field__op`),
+   - restart durability.
+6. Added practical showcase README:
+   - runbook, API map, and demo script emphasizing "business logic first, persistence internals hidden."
+
+## 2.8 Execution Delta (2026-02-23, Storage-Backed Query Execution + AgentOps Cleanup)
+
+Closed in this execution wave:
+
+1. Moved autonomous query DSL execution to storage-backed path:
+   - `PersistAutonomousModelHandle::query_with_spec(...)` now translates query spec to SQL and executes via `PersistSession`.
+2. Generated REST list handler now uses the same storage-backed path automatically:
+   - `GET /` from generated routers executes SQL-backed filtering/sorting/pagination by default.
+3. Added compatibility fallback:
+   - unsupported/unsafe filter shapes automatically fallback to in-memory evaluator to preserve behavior.
+4. Refactored `examples/agentops_mission_control` command API:
+   - all commands moved to typed DTO inputs,
+   - DTOs derive `Validate`,
+   - command methods use `#[command(validate = true)]`,
+   - `PersistSetOps` usage removed from model code.
+5. Updated verification coverage:
+   - `tests/persist_dx_api_macros_tests.rs`,
+   - `tests/persist_query_nested_dsl_tests.rs`,
+   - `examples/agentops_mission_control` unit + HTTP integration tests.
+
+## 2.9 Execution Delta (2026-02-23, Managed id lookup without linear scans)
+
+Closed in this execution wave:
+
+1. Replaced `ManagedPersistVec::get(...)` linear id scan with internal id index:
+   - `persist_id -> item_index` cache in `ManagedPersistVec`.
+2. Moved managed id-based mutation paths to index lookup:
+   - update/patch/command operations no longer perform per-call `position/find` scans by `persist_id`.
+3. Added dirty/self-heal lifecycle for index:
+   - mutation and rewind paths invalidate index,
+   - read path performs lazy rebuild and one self-heal pass after low-level direct collection mutations.
+4. Preserved transaction rollback guarantees with index consistency:
+   - rollback/rewind code now invalidates index to prevent stale references.
+5. Added hard regression contract:
+   - `tests/persist_id_lookup_contract_tests.rs` blocks reintroduction of linear `.find/.position` id scans in managed/core id paths.
+6. Moved id-mutation path toward DB-first behavior:
+   - managed update/patch/command/delete now perform targeted SQL hydration on cache miss,
+   - persistence logic now uses DB primary-key lookup as source of truth before in-memory mutation.
+
+## 2.10 Execution Delta (2026-02-24, DB-first session-context consistency)
+
+Closed in this execution wave:
+
+1. Added session-aware DB-first hydration path for transaction-scoped operations:
+   - managed layer now exposes session-bound id hydration/read helpers for internal orchestration.
+2. Removed cache-context drift in `with_session` / `with_tx` flows:
+   - command/update/delete/apply-many transaction paths now load entities via the same session context.
+3. Removed cache-only optimistic version checks in critical flows:
+   - workflow/command/patch/delete optimistic prechecks now use `get_version_db(...)`.
+4. Hardened idempotent REST execution path:
+   - replay lookup now uses SQL by `scope_key` + DB-first entity load,
+   - resulting version after command commit is read from DB.
+5. Fixed cold-cache behavior in storage-backed query path:
+   - storage query bootstrap no longer depends on in-memory first-item probe.
 
 ## 3. Delivery Strategy
 

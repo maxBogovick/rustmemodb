@@ -45,6 +45,7 @@ impl<V: PersistCollection> PersistDomainHandle<V> {
 impl<V> PersistDomainHandle<V>
 where
     V: PersistIndexedCollection,
+    V::Item: PersistEntityFactory,
 {
     /// Returns a cloned list of all entities.
     pub async fn list(&self) -> Vec<V::Item>
@@ -55,14 +56,51 @@ where
         store.list().to_vec()
     }
 
-    /// Returns one entity by id as an owned value.
-    pub async fn get_one(&self, persist_id: impl AsRef<str>) -> Option<V::Item>
+    /// Returns one entity by id from in-memory cache.
+    pub async fn get_one_cached(&self, persist_id: impl AsRef<str>) -> Option<V::Item>
     where
         V::Item: Clone,
     {
         let persist_id = persist_id.as_ref();
         let store = self.inner.lock().await;
-        store.get(persist_id).cloned()
+        store.get_cached(persist_id).cloned()
+    }
+
+    /// Returns one entity by id using storage as source of truth.
+    pub async fn get_one_db(&self, persist_id: impl AsRef<str>) -> Result<Option<V::Item>>
+    where
+        V::Item: Clone,
+    {
+        let persist_id = persist_id.as_ref();
+        let mut store = self.inner.lock().await;
+        store.get_one_db(persist_id).await
+    }
+
+    /// Returns current persisted version by id from storage.
+    pub async fn get_version_db(&self, persist_id: impl AsRef<str>) -> Result<Option<i64>> {
+        let persist_id = persist_id.as_ref();
+        let mut store = self.inner.lock().await;
+        store.get_version_db(persist_id).await
+    }
+
+    /// Returns one entity by id.
+    ///
+    /// Uses DB-first path and falls back to cache only if storage read fails.
+    pub async fn get_one(&self, persist_id: impl AsRef<str>) -> Option<V::Item>
+    where
+        V::Item: Clone,
+    {
+        let persist_id = persist_id.as_ref();
+        match self.get_one_db(persist_id).await {
+            Ok(item) => item,
+            Err(err) => {
+                warn!(
+                    "PersistDomainHandle.get_one DB read failed for '{}'; fallback to cache: {}",
+                    persist_id, err
+                );
+                self.get_one_cached(persist_id).await
+            }
+        }
     }
 
     /// Finds the first entity matching the predicate.
@@ -190,7 +228,7 @@ where
 impl<V> PersistDomainHandle<V>
 where
     V: PersistIndexedCollection,
-    V::Item: PersistCommandModel + Clone,
+    V::Item: PersistCommandModel + Clone + PersistEntityFactory,
     <V::Item as PersistCommandModel>::Command: PersistCommandName,
 {
     /// Executes one intent and returns domain-level outcome.

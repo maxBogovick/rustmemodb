@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
     let port = port_from_env()?;
 
     let app = PersistApp::open_auto(data_dir).await?;
-    let ledgers_router = app.serve_autonomous_model::<LedgerBook>("ledgers").await?;
+    let ledgers_router = rustmemodb::serve_domain!(app, LedgerBook, "ledgers")?;
     let app = Router::new().nest("/api/ledgers", ledgers_router);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

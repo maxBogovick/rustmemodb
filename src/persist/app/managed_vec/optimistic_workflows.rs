@@ -1,7 +1,7 @@
 impl<V> ManagedPersistVec<V>
 where
     V: PersistIndexedCollection,
-    V::Item: PersistCommandModel + Clone,
+    V::Item: PersistCommandModel + Clone + PersistEntityFactory,
 {
     /// Applies a patch if the item's current version matches the expected version.
     ///
@@ -18,11 +18,9 @@ where
         patch: <V::Item as PersistCommandModel>::Patch,
     ) -> Result<Option<V::Item>> {
         let persist_id = persist_id.to_string();
-        let Some(existing) = self.get(&persist_id).cloned() else {
+        let Some(actual_version) = self.get_version_db(&persist_id).await? else {
             return Ok(None);
         };
-
-        let actual_version = existing.metadata().version;
         if actual_version != expected_version {
             return Err(map_managed_conflict_error(
                 "execute_patch_if_match",
@@ -38,7 +36,7 @@ where
             return Ok(None);
         }
 
-        Ok(self.get(&persist_id).cloned())
+        self.get_one_db(&persist_id).await
     }
 
     /// Executes a workflow command that updates one item and optionally creates another in a different collection.
@@ -114,12 +112,16 @@ where
                         continue;
                     }
 
-                    let updated = left.get(persist_id).cloned().ok_or_else(|| {
-                        DbError::ExecutionError(format!(
-                            "command applied but entity '{}' is missing in '{}'",
-                            persist_id, left.name
-                        ))
-                    })?;
+                    let tx_session = tx.session();
+                    let updated = left
+                        .get_one_db_with_session(&tx_session, persist_id)
+                        .await?
+                        .ok_or_else(|| {
+                            DbError::ExecutionError(format!(
+                                "command applied but entity '{}' is missing in '{}'",
+                                persist_id, left.name
+                            ))
+                        })?;
                     updated_items.push(updated);
                 }
 
@@ -154,11 +156,9 @@ where
         command: <V::Item as PersistCommandModel>::Command,
     ) -> Result<Option<V::Item>> {
         let persist_id = persist_id.to_string();
-        let Some(existing) = self.get(&persist_id).cloned() else {
+        let Some(actual_version) = self.get_version_db(&persist_id).await? else {
             return Ok(None);
         };
-
-        let actual_version = existing.metadata().version;
         if actual_version != expected_version {
             return Err(map_managed_conflict_error(
                 "execute_command_if_match",
@@ -174,7 +174,7 @@ where
             return Ok(None);
         }
 
-        Ok(self.get(&persist_id).cloned())
+        self.get_one_db(&persist_id).await
     }
 
     /// Applies a command if match, and atomically creates a related item in another collection.
@@ -193,11 +193,9 @@ where
         F: FnOnce(&V::Item) -> Result<U::Item> + Send + 'static,
     {
         let persist_id = persist_id.to_string();
-        let Some(existing) = self.get(&persist_id).cloned() else {
+        let Some(actual_version) = self.get_version_db(&persist_id).await? else {
             return Ok(None);
         };
-
-        let actual_version = existing.metadata().version;
         if actual_version != expected_version {
             return Err(map_managed_conflict_error(
                 "execute_command_if_match_with_create",
@@ -217,12 +215,16 @@ where
                     return Ok(None);
                 }
 
-                let updated = left.get(&persist_id).cloned().ok_or_else(|| {
-                    DbError::ExecutionError(format!(
-                        "command applied but entity '{}' is missing in '{}'",
-                        persist_id, left.name
-                    ))
-                })?;
+                let tx_session = tx.session();
+                let updated = left
+                    .get_one_db_with_session(&tx_session, &persist_id)
+                    .await?
+                    .ok_or_else(|| {
+                        DbError::ExecutionError(format!(
+                            "command applied but entity '{}' is missing in '{}'",
+                            persist_id, left.name
+                        ))
+                    })?;
 
                 let related = build_related_item(&updated)?;
                 right.create_with_tx(&tx, related).await?;

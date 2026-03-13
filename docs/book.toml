@@ -1,0 +1,5 @@
+[book]
+authors = ["Maxim"]
+language = "en"
+src = "src"
+title = "RustMemoDB Documentation"

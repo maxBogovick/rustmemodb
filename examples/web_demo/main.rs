@@ -13,6 +13,7 @@ pub struct User {
 }
 
 #[rustmemodb::web::api_service]
+#[async_trait::async_trait]
 pub trait UserApi {
     async fn create_user(&self, cmd: CreateUser) -> Result<User, WebError>;
     async fn get_user(&self, id: String) -> Result<User, WebError>;
@@ -21,6 +22,7 @@ pub trait UserApi {
 #[derive(Clone)]
 struct UserStore;
 
+#[async_trait::async_trait]
 impl UserApi for UserStore {
     async fn create_user(&self, cmd: CreateUser) -> Result<User, WebError> {
         Ok(User {

@@ -5,9 +5,12 @@
 
 use crate::core::DbError;
 use crate::persist::app::{
-    ManagedConflictKind, PersistDomainError, PersistDomainMutationError, classify_managed_conflict,
+    ManagedConflictKind, PersistDomainError, PersistDomainMutationError, PersistQueryFilter,
+    PersistQueryOp, PersistQuerySort, PersistQuerySortDirection, PersistQuerySpec,
+    classify_managed_conflict,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// Validation message returned when `If-Match` header is missing.
@@ -21,9 +24,29 @@ pub const IF_MATCH_INVALID_VERSION_MESSAGE: &str =
 pub const IDEMPOTENCY_KEY_INVALID_MESSAGE: &str = "Idempotency-Key must be valid ASCII";
 /// Validation message returned when idempotency key is too long.
 pub const IDEMPOTENCY_KEY_TOO_LONG_MESSAGE: &str = "Idempotency-Key must not exceed 128 characters";
+/// Validation message returned when `page` query parameter is invalid.
+pub const QUERY_PAGE_INVALID_MESSAGE: &str = "query parameter 'page' must be a positive integer";
+/// Validation message returned when `per_page` query parameter is invalid.
+pub const QUERY_PER_PAGE_INVALID_MESSAGE: &str =
+    "query parameter 'per_page' must be a positive integer";
+/// Validation message returned when `sort` query parameter is invalid.
+pub const QUERY_SORT_INVALID_MESSAGE: &str =
+    "query parameter 'sort' must be '<field>', '-<field>', or '<field>:asc|desc'";
+/// Validation message returned when filter operator suffix is invalid.
+pub const QUERY_FILTER_OP_INVALID_MESSAGE: &str =
+    "unsupported filter operator; allowed: eq, ne, gt, gte, lt, lte, contains";
 
 /// Upper bound for normalized idempotency keys.
 pub const IDEMPOTENCY_KEY_MAX_LEN: usize = 128;
+
+/// Optional normalization/validation hook for generated REST payload DTOs.
+///
+/// High-level `#[command(validate = true)]` handlers call this before domain
+/// mutation execution and map validation failures to HTTP `422`.
+pub trait PersistInputValidate {
+    /// Normalize mutable fields (for example trim) and validate constraints.
+    fn normalize_and_validate(&mut self) -> std::result::Result<(), String>;
+}
 
 /// Input-validation error for web adapter helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,19 +213,19 @@ pub enum PersistOpenApiInputLocation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistOpenApiOperation {
     /// Lowercase HTTP method (`get`, `post`, ...).
-    pub method: &'static str,
+    pub method: String,
     /// Route path mounted by generated router (for example `/{id}/transfer`).
-    pub path: &'static str,
+    pub path: String,
     /// Stable operation identifier.
-    pub operation_id: &'static str,
+    pub operation_id: String,
     /// Human-readable summary.
-    pub summary: &'static str,
+    pub summary: String,
     /// Optional request rust type name.
-    pub request_rust_type: Option<&'static str>,
+    pub request_rust_type: Option<String>,
     /// Optional request payload location.
     pub request_location: Option<PersistOpenApiInputLocation>,
     /// Optional successful response rust type name.
-    pub response_rust_type: Option<&'static str>,
+    pub response_rust_type: Option<String>,
     /// Successful status code.
     pub success_status: u16,
     /// Whether operation supports `Idempotency-Key` header.
@@ -249,9 +272,10 @@ pub fn build_autonomous_openapi_document(
             }));
         }
 
-        if let (Some(request_rust_type), Some(location)) =
-            (operation.request_rust_type, operation.request_location)
-        {
+        if let (Some(request_rust_type), Some(location)) = (
+            operation.request_rust_type.as_deref(),
+            operation.request_location,
+        ) {
             let component_name = register_openapi_component(&mut schemas, request_rust_type);
             let schema_ref = json!({
                 "$ref": format!("#/components/schemas/{component_name}")
@@ -286,8 +310,10 @@ pub fn build_autonomous_openapi_document(
         }
 
         let mut responses = JsonMap::<String, JsonValue>::new();
-        if let Some(response_rust_type) =
-            operation.response_rust_type.filter(|ty| !is_unit_type(ty))
+        if let Some(response_rust_type) = operation
+            .response_rust_type
+            .as_deref()
+            .filter(|ty| !is_unit_type(ty))
         {
             let component_name = register_openapi_component(&mut schemas, response_rust_type);
             responses.insert(
@@ -527,6 +553,158 @@ pub fn normalize_request_id(raw_request_id: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Builds `PersistQuerySpec` from HTTP query params for generated REST list handlers.
+///
+/// Supported reserved params:
+/// - `page` (u32, >= 1)
+/// - `per_page` (u32, >= 1)
+/// - `sort` (`field`, `-field`, or `field:asc|desc`)
+///
+/// Any other query key is interpreted as a domain filter:
+/// - `field=value` => `eq`
+/// - `field__op=value` where `op` in `{eq,ne,gt,gte,lt,lte,contains}`.
+pub fn build_query_spec_from_http_query(
+    params: &BTreeMap<String, String>,
+) -> Result<PersistQuerySpec, PersistWebInputError> {
+    let mut spec = PersistQuerySpec::default();
+
+    if let Some(raw_page) = params.get("page").map(String::as_str) {
+        let page = parse_positive_u32(raw_page)
+            .ok_or_else(|| PersistWebInputError::new(QUERY_PAGE_INVALID_MESSAGE))?;
+        spec.page = page;
+    }
+
+    if let Some(raw_per_page) = params.get("per_page").map(String::as_str) {
+        let per_page = parse_positive_u32(raw_per_page)
+            .ok_or_else(|| PersistWebInputError::new(QUERY_PER_PAGE_INVALID_MESSAGE))?;
+        spec.per_page = per_page;
+    }
+
+    if let Some(raw_sort) = params.get("sort").map(String::as_str) {
+        spec.sort = Some(parse_sort_query_value(raw_sort)?);
+    }
+
+    for (key, raw_value) in params {
+        if is_reserved_query_param(key) {
+            continue;
+        }
+
+        let (field, op) = parse_filter_key(key)?;
+        let value = parse_scalar_query_value(raw_value);
+        spec.filters.push(PersistQueryFilter { field, op, value });
+    }
+
+    Ok(spec)
+}
+
+fn is_reserved_query_param(key: &str) -> bool {
+    matches!(key, "page" | "per_page" | "sort")
+}
+
+fn parse_positive_u32(raw: &str) -> Option<u32> {
+    let value = raw.trim().parse::<u32>().ok()?;
+    if value == 0 { None } else { Some(value) }
+}
+
+fn parse_sort_query_value(raw_sort: &str) -> Result<PersistQuerySort, PersistWebInputError> {
+    let value = raw_sort.trim();
+    if value.is_empty() {
+        return Err(PersistWebInputError::new(QUERY_SORT_INVALID_MESSAGE));
+    }
+
+    if let Some(field) = value.strip_prefix('+').map(str::trim) {
+        if field.is_empty() {
+            return Err(PersistWebInputError::new(QUERY_SORT_INVALID_MESSAGE));
+        }
+        return Ok(PersistQuerySort {
+            field: field.to_string(),
+            direction: PersistQuerySortDirection::Asc,
+        });
+    }
+
+    if let Some(field) = value.strip_prefix('-').map(str::trim) {
+        if field.is_empty() {
+            return Err(PersistWebInputError::new(QUERY_SORT_INVALID_MESSAGE));
+        }
+        return Ok(PersistQuerySort {
+            field: field.to_string(),
+            direction: PersistQuerySortDirection::Desc,
+        });
+    }
+
+    if let Some((field, raw_direction)) = value.split_once(':') {
+        let field = field.trim();
+        if field.is_empty() {
+            return Err(PersistWebInputError::new(QUERY_SORT_INVALID_MESSAGE));
+        }
+        let direction = match raw_direction.trim().to_ascii_lowercase().as_str() {
+            "asc" => PersistQuerySortDirection::Asc,
+            "desc" => PersistQuerySortDirection::Desc,
+            _ => return Err(PersistWebInputError::new(QUERY_SORT_INVALID_MESSAGE)),
+        };
+        return Ok(PersistQuerySort {
+            field: field.to_string(),
+            direction,
+        });
+    }
+
+    Ok(PersistQuerySort {
+        field: value.to_string(),
+        direction: PersistQuerySortDirection::Asc,
+    })
+}
+
+fn parse_filter_key(key: &str) -> Result<(String, PersistQueryOp), PersistWebInputError> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err(PersistWebInputError::new(QUERY_FILTER_OP_INVALID_MESSAGE));
+    }
+
+    if let Some((field, op_raw)) = trimmed.rsplit_once("__") {
+        let field = field.trim();
+        if field.is_empty() {
+            return Err(PersistWebInputError::new(QUERY_FILTER_OP_INVALID_MESSAGE));
+        }
+        let op = parse_filter_op(op_raw)?;
+        return Ok((field.to_string(), op));
+    }
+
+    Ok((trimmed.to_string(), PersistQueryOp::Eq))
+}
+
+fn parse_filter_op(raw: &str) -> Result<PersistQueryOp, PersistWebInputError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "eq" => Ok(PersistQueryOp::Eq),
+        "ne" => Ok(PersistQueryOp::Ne),
+        "gt" => Ok(PersistQueryOp::Gt),
+        "gte" => Ok(PersistQueryOp::Gte),
+        "lt" => Ok(PersistQueryOp::Lt),
+        "lte" => Ok(PersistQueryOp::Lte),
+        "contains" => Ok(PersistQueryOp::Contains),
+        _ => Err(PersistWebInputError::new(QUERY_FILTER_OP_INVALID_MESSAGE)),
+    }
+}
+
+fn parse_scalar_query_value(raw: &str) -> JsonValue {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("null") {
+        return JsonValue::Null;
+    }
+    if trimmed.eq_ignore_ascii_case("true") {
+        return JsonValue::Bool(true);
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return JsonValue::Bool(false);
+    }
+    if let Ok(integer) = trimmed.parse::<i64>() {
+        return json!(integer);
+    }
+    if let Ok(float) = trimmed.parse::<f64>() {
+        return json!(float);
+    }
+    JsonValue::String(trimmed.to_string())
+}
+
 /// Maps persistence conflict errors to framework-agnostic problem metadata.
 pub fn map_conflict_problem(err: &DbError) -> Option<PersistWebProblem> {
     let kind = classify_managed_conflict(err)?;
@@ -553,10 +731,12 @@ pub fn map_conflict_problem(err: &DbError) -> Option<PersistWebProblem> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PersistOpenApiInputLocation, PersistOpenApiOperation, PersistServiceError,
-        build_autonomous_openapi_document, parse_if_match_header,
+        PersistOpenApiInputLocation, PersistOpenApiOperation, PersistQueryOp, PersistServiceError,
+        build_autonomous_openapi_document, build_query_spec_from_http_query, parse_if_match_header,
     };
     use crate::persist::app::{PersistDomainError, PersistDomainMutationError};
+    use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn parse_if_match_accepts_positive_version() {
@@ -590,13 +770,13 @@ mod tests {
         let doc = build_autonomous_openapi_document(
             "Test",
             &[PersistOpenApiOperation {
-                method: "post",
-                path: "/{id}/transfer",
-                operation_id: "transfer",
-                summary: "transfer",
-                request_rust_type: Some("CreateTransferInput"),
+                method: "post".to_string(),
+                path: "/{id}/transfer".to_string(),
+                operation_id: "transfer".to_string(),
+                summary: "transfer".to_string(),
+                request_rust_type: Some("CreateTransferInput".to_string()),
                 request_location: Some(PersistOpenApiInputLocation::Body),
-                response_rust_type: Some("TransferOutput"),
+                response_rust_type: Some("TransferOutput".to_string()),
                 success_status: 200,
                 idempotent: true,
             }],
@@ -607,5 +787,60 @@ mod tests {
             .and_then(serde_json::Value::as_object)
             .expect("paths");
         assert!(paths.contains_key("/{id}/transfer"));
+    }
+
+    #[test]
+    fn build_query_spec_maps_reserved_and_domain_filter_params() {
+        let mut params = BTreeMap::<String, String>::new();
+        params.insert("page".to_string(), "2".to_string());
+        params.insert("per_page".to_string(), "5".to_string());
+        params.insert("sort".to_string(), "+score".to_string());
+        params.insert("tier".to_string(), "pro".to_string());
+        params.insert("active".to_string(), "true".to_string());
+        params.insert("score__gte".to_string(), "60".to_string());
+
+        let spec = build_query_spec_from_http_query(&params).expect("query spec");
+        assert_eq!(spec.page, 2);
+        assert_eq!(spec.per_page, 5);
+        let sort = spec.sort.expect("sort");
+        assert_eq!(sort.field, "score");
+        assert_eq!(
+            sort.direction,
+            crate::persist::app::PersistQuerySortDirection::Asc
+        );
+        assert_eq!(spec.filters.len(), 3);
+        assert_eq!(spec.filters[0].field, "active");
+        assert_eq!(spec.filters[0].op, PersistQueryOp::Eq);
+        assert_eq!(spec.filters[0].value, json!(true));
+        assert_eq!(spec.filters[1].field, "score");
+        assert_eq!(spec.filters[1].op, PersistQueryOp::Gte);
+        assert_eq!(spec.filters[1].value, json!(60));
+        assert_eq!(spec.filters[2].field, "tier");
+        assert_eq!(spec.filters[2].op, PersistQueryOp::Eq);
+        assert_eq!(spec.filters[2].value, json!("pro"));
+    }
+
+    #[test]
+    fn build_query_spec_rejects_invalid_reserved_and_filter_params() {
+        let mut invalid_page = BTreeMap::<String, String>::new();
+        invalid_page.insert("page".to_string(), "0".to_string());
+        assert!(
+            build_query_spec_from_http_query(&invalid_page).is_err(),
+            "page=0 must be rejected"
+        );
+
+        let mut invalid_sort = BTreeMap::<String, String>::new();
+        invalid_sort.insert("sort".to_string(), ":desc".to_string());
+        assert!(
+            build_query_spec_from_http_query(&invalid_sort).is_err(),
+            "empty sort field must be rejected"
+        );
+
+        let mut invalid_op = BTreeMap::<String, String>::new();
+        invalid_op.insert("score__between".to_string(), "10".to_string());
+        assert!(
+            build_query_spec_from_http_query(&invalid_op).is_err(),
+            "unknown filter op must be rejected"
+        );
     }
 }

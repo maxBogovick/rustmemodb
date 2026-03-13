@@ -53,6 +53,12 @@ pub struct ManagedPersistVec<V: PersistCollection> {
     pub(crate) replication: PersistReplicationPolicy,
     pub(crate) replication_failures: u64,
     pub(crate) last_snapshot_at: Option<String>,
+    // Fast lookup: persist_id -> in-memory index.
+    // Kept behind a lock so read paths can use &self without forcing API users
+    // to hold &mut access just to resolve one entity by id.
+    pub(crate) persisted_index: RwLock<HashMap<String, usize>>,
+    // True when collection mutations may have invalidated persisted_index.
+    pub(crate) persisted_index_dirty: AtomicBool,
 }
 
 /// A wrapper that adds aggregate-level query capabilities to a managed collection.
@@ -139,6 +145,33 @@ impl<M: PersistAutonomousModel> Clone for PersistAutonomousModelHandle<M> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            marker: PhantomData,
+        }
+    }
+}
+
+/// Registered high-level view handle for an autonomous model.
+///
+/// Build via `PersistAutonomousModelHandle::view::<V>()` (or
+/// `PersistApp::register_view(&handle)`) to keep model/view operations on the
+/// same in-memory handle.
+pub struct PersistViewHandle<M, V>
+where
+    M: PersistAutonomousModel,
+    V: PersistView<M>,
+{
+    pub(crate) model: PersistAutonomousModelHandle<M>,
+    pub(crate) marker: PhantomData<V>,
+}
+
+impl<M, V> Clone for PersistViewHandle<M, V>
+where
+    M: PersistAutonomousModel,
+    V: PersistView<M>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            model: self.model.clone(),
             marker: PhantomData,
         }
     }

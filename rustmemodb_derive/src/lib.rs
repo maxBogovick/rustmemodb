@@ -1,4 +1,6 @@
 mod api_service_impl;
+mod omni_entity;
+mod omni_value;
 
 use api_service_impl::expand_api_service;
 use proc_macro::TokenStream;
@@ -30,10 +32,37 @@ pub fn derive_persist_model(input: TokenStream) -> TokenStream {
     }
 }
 
+#[proc_macro_derive(OmniEntity, attributes(omni))]
+pub fn derive_omni_entity(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match omni_entity::expand_omni_entity(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(OmniValue)]
+pub fn derive_omni_value(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match omni_value::expand_omni_value(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
 #[proc_macro_attribute]
 pub fn persistent(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemStruct);
     match expand_persistent_attr(attr.into(), input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn domain(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemStruct);
+    match expand_domain_attr(attr.into(), input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -150,7 +179,7 @@ pub fn autonomous_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let input = parse_macro_input!(item as ItemImpl);
-    match expand_autonomous_impl_attr(input, false) {
+    match expand_autonomous_impl_attr(input, false, RestImplAttrOptions::default()) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -158,17 +187,22 @@ pub fn autonomous_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn expose_rest(attr: TokenStream, item: TokenStream) -> TokenStream {
-    if !attr.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "#[expose_rest] does not accept arguments",
-        )
-        .to_compile_error()
-        .into();
-    }
+    let options = match parse_rest_impl_attr_options(attr.into()) {
+        Ok(options) => options,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let input = parse_macro_input!(item as ItemImpl);
-    match expand_autonomous_impl_attr(input, true) {
+    match expand_autonomous_impl_attr(input, true, options) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn api(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemImpl);
+    match expand_api_attr(attr.into(), input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -205,6 +239,33 @@ pub fn derive_persist_json_value(input: TokenStream) -> TokenStream {
 pub fn derive_api_error(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_api_error(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(DomainError, attributes(api_error))]
+pub fn derive_domain_error(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_api_error(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(Validate, attributes(validate))]
+pub fn derive_validate(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_validate(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(PersistView, attributes(persist_view, view_metric))]
+pub fn derive_persist_view(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_persist_view(input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -259,6 +320,97 @@ fn expand_persistent_attr(
         #(#injected)*
         #item_struct
     })
+}
+
+fn expand_domain_attr(attr: TokenStream2, item_struct: ItemStruct) -> syn::Result<TokenStream2> {
+    let options = parse_domain_attr_options(attr)?;
+    let has_derive = has_derive_trait(&item_struct.attrs, "Autonomous");
+    let has_persist_model_attr = item_struct
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("persist_model"));
+
+    if has_persist_model_attr && (options.table_name.is_some() || options.schema_version.is_some())
+    {
+        return Err(syn::Error::new(
+            item_struct.span(),
+            "#[domain(...)] options conflict with existing #[persist_model(...)] attribute",
+        ));
+    }
+
+    let mut injected = Vec::new();
+    if !has_derive {
+        injected.push(quote!(#[derive(::rustmemodb::Autonomous)]));
+    }
+
+    if !has_persist_model_attr && (options.table_name.is_some() || options.schema_version.is_some())
+    {
+        let table_part = options
+            .table_name
+            .as_ref()
+            .map(|table| quote!(table = #table));
+        let schema_part = options
+            .schema_version
+            .map(|version| quote!(schema_version = #version));
+        let persist_model_attr = match (table_part, schema_part) {
+            (Some(table), Some(schema)) => quote!(#[persist_model(#table, #schema)]),
+            (Some(table), None) => quote!(#[persist_model(#table)]),
+            (None, Some(schema)) => quote!(#[persist_model(#schema)]),
+            (None, None) => quote!(),
+        };
+        if !persist_model_attr.is_empty() {
+            injected.push(persist_model_attr);
+        }
+    }
+
+    Ok(quote! {
+        #(#injected)*
+        #item_struct
+    })
+}
+
+fn expand_api_attr(attr: TokenStream2, mut item_impl: ItemImpl) -> syn::Result<TokenStream2> {
+    let options = parse_rest_impl_attr_options(attr)?;
+
+    if item_impl.trait_.is_some() {
+        return Err(syn::Error::new(
+            item_impl.span(),
+            "#[api] can only be used on inherent impl blocks",
+        ));
+    }
+
+    for item in &mut item_impl.items {
+        let ImplItem::Fn(method) = item else {
+            continue;
+        };
+
+        if !matches!(method.vis, syn::Visibility::Public(_)) {
+            continue;
+        }
+        if method_has_explicit_autonomous_marker(&method.attrs)? {
+            continue;
+        }
+
+        let mut inputs = method.sig.inputs.iter();
+        let Some(receiver) = inputs.next() else {
+            continue;
+        };
+        let FnArg::Receiver(receiver) = receiver else {
+            continue;
+        };
+
+        if receiver.reference.is_none() {
+            continue;
+        }
+
+        if receiver.mutability.is_some() {
+            method.attrs.push(syn::parse_quote!(#[command]));
+        } else {
+            method.attrs.push(syn::parse_quote!(#[query]));
+        }
+    }
+
+    expand_autonomous_impl_attr(item_impl, true, options)
 }
 
 fn expand_persistent_impl_attr(mut item_impl: ItemImpl) -> syn::Result<TokenStream2> {
@@ -591,6 +743,7 @@ fn expand_persistent_impl_attr(mut item_impl: ItemImpl) -> syn::Result<TokenStre
 fn expand_autonomous_impl_attr(
     mut item_impl: ItemImpl,
     expose_rest: bool,
+    options: RestImplAttrOptions,
 ) -> syn::Result<TokenStream2> {
     if item_impl.trait_.is_some() {
         return Err(syn::Error::new(
@@ -669,9 +822,16 @@ fn expand_autonomous_impl_attr(
             &rest_ext_trait_ident,
             &methods,
             &views,
+            &options.views,
             constructor_args.as_deref(),
         )?
     } else {
+        if !options.views.is_empty() {
+            return Err(syn::Error::new(
+                item_impl.span(),
+                "#[api(...)] / #[expose_rest(...)] options are only available when REST generation is enabled",
+            ));
+        }
         quote! {}
     };
 
@@ -688,6 +848,7 @@ fn generate_autonomous_rest_tokens(
     rest_ext_trait_ident: &Ident,
     methods: &[AutonomousExposedMethod],
     views: &[AutonomousViewMethod],
+    declared_persist_views: &[Type],
     constructor_args: Option<&[PersistentCommandArg]>,
 ) -> syn::Result<TokenStream2> {
     use std::collections::HashSet;
@@ -762,22 +923,58 @@ fn generate_autonomous_rest_tokens(
     let view_handlers = views
         .iter()
         .map(|view| view.view_handler_tokens(model_ident));
+    let claimed_routes_from_commands = methods.iter().map(|method| {
+        let route = method.route_literal();
+        quote! {
+            claimed_routes.insert(concat!("/:id/", #route).to_string());
+        }
+    });
+    let claimed_routes_from_views = views.iter().map(|view| {
+        let route = view.route_literal();
+        quote! {
+            claimed_routes.insert(concat!("/:id/", #route).to_string());
+        }
+    });
+    let declared_view_routes = declared_persist_views.iter().map(|view_ty| {
+        quote! {
+            let route = format!(
+                "/:id/views/{}",
+                <#view_ty as ::rustmemodb::PersistView<#model_ident>>::VIEW_NAME
+            );
+            if claimed_routes.insert(route.clone()) {
+                router = router.route(&route, axum::routing::get(Self::handle_persist_view::<#view_ty>));
+            }
+        }
+    });
     let model_name = model_ident.to_string();
+    let model_name_snake = to_snake_case(&model_name);
     let record_type_name = format!("PersistAutonomousRecord<{}>", model_name);
     let list_record_type_name = format!("Vec<{}>", record_type_name);
+    let openapi_paths_from_commands = methods.iter().map(|method| {
+        let path = format!("/{{id}}/{}", method.route_literal());
+        quote! {
+            openapi_paths.insert(#path.to_string());
+        }
+    });
+    let openapi_paths_from_views = views.iter().map(|view| {
+        let path = format!("/{{id}}/{}", view.route_literal());
+        quote! {
+            openapi_paths.insert(#path.to_string());
+        }
+    });
     let command_openapi_ops = methods.iter().map(|method| {
         let path = format!("/{{id}}/{}", method.route_literal());
         let operation_id = format!("{}_{}", to_snake_case(&model_name), method.method_ident);
         let summary = format!("{} command", method.method_ident);
         let request_type = method.openapi_request_rust_type_literal(model_ident);
         let request_type_tokens = if let Some(request_type) = request_type {
-            quote!(Some(#request_type))
+            quote!(Some(#request_type.to_string()))
         } else {
             quote!(None)
         };
         let response_type = method.openapi_response_rust_type_literal();
         let response_type_tokens = if let Some(response_type) = response_type {
-            quote!(Some(#response_type))
+            quote!(Some(#response_type.to_string()))
         } else {
             quote!(None)
         };
@@ -785,10 +982,10 @@ fn generate_autonomous_rest_tokens(
         let idempotent = method.idempotent;
         quote! {
             ::rustmemodb::persist::web::PersistOpenApiOperation {
-                method: "post",
-                path: #path,
-                operation_id: #operation_id,
-                summary: #summary,
+                method: "post".to_string(),
+                path: #path.to_string(),
+                operation_id: #operation_id.to_string(),
+                summary: #summary.to_string(),
                 request_rust_type: #request_type_tokens,
                 request_location: Some(::rustmemodb::persist::web::PersistOpenApiInputLocation::Body),
                 response_rust_type: #response_type_tokens,
@@ -807,7 +1004,7 @@ fn generate_autonomous_rest_tokens(
         };
         let request_type = view.openapi_request_rust_type_literal(model_ident);
         let request_type_tokens = if let Some(request_type) = request_type {
-            quote!(Some(#request_type))
+            quote!(Some(#request_type.to_string()))
         } else {
             quote!(None)
         };
@@ -829,17 +1026,17 @@ fn generate_autonomous_rest_tokens(
         };
         let response_type = view.openapi_response_rust_type_literal();
         let response_type_tokens = if let Some(response_type) = response_type {
-            quote!(Some(#response_type))
+            quote!(Some(#response_type.to_string()))
         } else {
             quote!(None)
         };
         let success_status = view.openapi_success_status_code();
         quote! {
             ::rustmemodb::persist::web::PersistOpenApiOperation {
-                method: #method_lit,
-                path: #path,
-                operation_id: #operation_id,
-                summary: #summary,
+                method: #method_lit.to_string(),
+                path: #path.to_string(),
+                operation_id: #operation_id.to_string(),
+                summary: #summary.to_string(),
                 request_rust_type: #request_type_tokens,
                 request_location: #request_location_tokens,
                 response_rust_type: #response_type_tokens,
@@ -848,52 +1045,80 @@ fn generate_autonomous_rest_tokens(
             }
         }
     });
+    let declared_view_openapi_ops = declared_persist_views.iter().map(|view_ty| {
+        quote! {
+            let path = format!(
+                "/{{id}}/views/{}",
+                <#view_ty as ::rustmemodb::PersistView<#model_ident>>::VIEW_NAME
+            );
+            if openapi_paths.insert(path.clone()) {
+                operations.push(::rustmemodb::persist::web::PersistOpenApiOperation {
+                    method: "get".to_string(),
+                    path,
+                    operation_id: format!(
+                        "{}_view_{}",
+                        #model_name_snake,
+                        <#view_ty as ::rustmemodb::PersistView<#model_ident>>::VIEW_NAME
+                    ),
+                    summary: format!(
+                        "Read '{}' view",
+                        <#view_ty as ::rustmemodb::PersistView<#model_ident>>::VIEW_NAME
+                    ),
+                    request_rust_type: None,
+                    request_location: None,
+                    response_rust_type: Some(stringify!(#view_ty).to_string()),
+                    success_status: 200,
+                    idempotent: false,
+                });
+            }
+        }
+    });
     let openapi_ops = vec![
         quote! {
             ::rustmemodb::persist::web::PersistOpenApiOperation {
-                method: "get",
-                path: "/",
-                operation_id: "list",
-                summary: "List entities",
+                method: "get".to_string(),
+                path: "/".to_string(),
+                operation_id: "list".to_string(),
+                summary: "List entities".to_string(),
                 request_rust_type: None,
                 request_location: None,
-                response_rust_type: Some(#list_record_type_name),
+                response_rust_type: Some(#list_record_type_name.to_string()),
                 success_status: 200,
                 idempotent: false,
             }
         },
         quote! {
             ::rustmemodb::persist::web::PersistOpenApiOperation {
-                method: "post",
-                path: "/",
-                operation_id: "create",
-                summary: "Create entity",
-                request_rust_type: Some(#create_request_type_name),
+                method: "post".to_string(),
+                path: "/".to_string(),
+                operation_id: "create".to_string(),
+                summary: "Create entity".to_string(),
+                request_rust_type: Some(#create_request_type_name.to_string()),
                 request_location: Some(::rustmemodb::persist::web::PersistOpenApiInputLocation::Body),
-                response_rust_type: Some(#record_type_name),
+                response_rust_type: Some(#record_type_name.to_string()),
                 success_status: 201,
                 idempotent: false,
             }
         },
         quote! {
             ::rustmemodb::persist::web::PersistOpenApiOperation {
-                method: "get",
-                path: "/{id}",
-                operation_id: "get",
-                summary: "Get entity by id",
+                method: "get".to_string(),
+                path: "/{id}".to_string(),
+                operation_id: "get".to_string(),
+                summary: "Get entity by id".to_string(),
                 request_rust_type: None,
                 request_location: None,
-                response_rust_type: Some(#record_type_name),
+                response_rust_type: Some(#record_type_name.to_string()),
                 success_status: 200,
                 idempotent: false,
             }
         },
         quote! {
             ::rustmemodb::persist::web::PersistOpenApiOperation {
-                method: "delete",
-                path: "/{id}",
-                operation_id: "delete",
-                summary: "Delete entity by id",
+                method: "delete".to_string(),
+                path: "/{id}".to_string(),
+                operation_id: "delete".to_string(),
+                summary: "Delete entity by id".to_string(),
                 request_rust_type: None,
                 request_location: None,
                 response_rust_type: None,
@@ -903,13 +1128,13 @@ fn generate_autonomous_rest_tokens(
         },
         quote! {
             ::rustmemodb::persist::web::PersistOpenApiOperation {
-                method: "get",
-                path: "/{id}/_audits",
-                operation_id: "audits",
-                summary: "List audit trail for entity",
+                method: "get".to_string(),
+                path: "/{id}/_audits".to_string(),
+                operation_id: "audits".to_string(),
+                summary: "List audit trail for entity".to_string(),
                 request_rust_type: None,
                 request_location: None,
-                response_rust_type: Some("Vec<PersistGeneratedAuditLine>"),
+                response_rust_type: Some("Vec<PersistGeneratedAuditLine>".to_string()),
                 success_status: 200,
                 idempotent: false,
             }
@@ -928,6 +1153,7 @@ fn generate_autonomous_rest_tokens(
             ) -> axum::response::Response
             where
                 #model_ident: ::serde::Serialize,
+                <#model_ident as ::rustmemodb::PersistAutonomousModel>::Persisted: ::core::clone::Clone,
             {
                 let _ = (#(&request.#ctor_fields),*);
                 let model = #model_ident::new(#(#ctor_args),*);
@@ -981,28 +1207,46 @@ fn generate_autonomous_rest_tokens(
             }
 
             pub fn router(self) -> axum::Router {
-                axum::Router::new()
+                let mut router = axum::Router::new()
                     .route("/", axum::routing::get(Self::handle_list).post(Self::handle_create))
                     .route("/:id", axum::routing::get(Self::handle_get).delete(Self::handle_delete))
                     .route("/:id/_audits", axum::routing::get(Self::handle_audits))
                     .route("/_openapi.json", axum::routing::get(Self::handle_openapi))
                     #(#command_routes)*
-                    #(#view_routes)*
-                    .with_state(self.handle)
+                    #(#view_routes)*;
+                let mut claimed_routes = ::std::collections::HashSet::<String>::new();
+                claimed_routes.insert("/".to_string());
+                claimed_routes.insert("/:id".to_string());
+                claimed_routes.insert("/:id/_audits".to_string());
+                claimed_routes.insert("/_openapi.json".to_string());
+                #(#claimed_routes_from_commands)*
+                #(#claimed_routes_from_views)*
+                #(#declared_view_routes)*
+                router.with_state(self.handle)
             }
 
             #create_handler
 
             async fn handle_list(
                 axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Query(params): axum::extract::Query<::std::collections::BTreeMap<String, String>>,
             ) -> axum::response::Response
             where
                 #model_ident: ::serde::Serialize,
+                <#model_ident as ::rustmemodb::PersistAutonomousModel>::Persisted: ::core::clone::Clone,
             {
-                let records = handle.list().await;
+                let spec = match ::rustmemodb::persist::web::build_query_spec_from_http_query(&params) {
+                    Ok(spec) => spec,
+                    Err(err) => {
+                        return axum::response::IntoResponse::into_response(
+                            ::rustmemodb::web::WebError::Input(err.to_string())
+                        );
+                    }
+                };
+                let page = handle.query_with_spec(spec).await;
                 axum::response::IntoResponse::into_response((
                     axum::http::StatusCode::OK,
-                    axum::Json(records),
+                    axum::Json(page.items),
                 ))
             }
 
@@ -1069,11 +1313,18 @@ fn generate_autonomous_rest_tokens(
             }
 
             async fn handle_openapi() -> axum::response::Response {
-                let operations = vec![
+                let mut operations = vec![
                     #(#openapi_ops),*,
                     #(#command_openapi_ops),*,
                     #(#view_openapi_ops),*
                 ];
+                let mut openapi_paths = ::std::collections::HashSet::<String>::new();
+                openapi_paths.insert("/".to_string());
+                openapi_paths.insert("/{id}".to_string());
+                openapi_paths.insert("/{id}/_audits".to_string());
+                #(#openapi_paths_from_commands)*
+                #(#openapi_paths_from_views)*
+                #(#declared_view_openapi_ops)*
                 let title = format!("{} Autonomous REST API", stringify!(#model_ident));
                 let doc = ::rustmemodb::persist::web::build_autonomous_openapi_document(
                     &title,
@@ -1082,6 +1333,23 @@ fn generate_autonomous_rest_tokens(
                 axum::response::IntoResponse::into_response((
                     axum::http::StatusCode::OK,
                     axum::Json(doc),
+                ))
+            }
+
+            async fn handle_persist_view<V>(
+                axum::extract::State(handle): axum::extract::State<::rustmemodb::PersistAutonomousModelHandle<#model_ident>>,
+                axum::extract::Path(id): axum::extract::Path<String>,
+            ) -> axum::response::Response
+            where
+                V: ::rustmemodb::PersistView<#model_ident> + ::serde::Serialize,
+            {
+                let Some(record) = handle.get_one(id.as_str()).await else {
+                    return axum::response::IntoResponse::into_response(::rustmemodb::web::WebError::NotFound(format!("entity not found: {}", id)));
+                };
+                let output = V::compute(&record.model);
+                axum::response::IntoResponse::into_response((
+                    axum::http::StatusCode::OK,
+                    axum::Json(output),
                 ))
             }
 
@@ -1390,6 +1658,641 @@ fn expand_api_error(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
     })
+}
+
+fn expand_validate(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let struct_ident = input.ident;
+
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            input.generics,
+            "Validate does not support generic structs yet",
+        ));
+    }
+
+    let data_struct = match input.data {
+        Data::Struct(data) => data,
+        _ => {
+            return Err(syn::Error::new(
+                struct_ident.span(),
+                "#[derive(Validate)] can only be used with structs",
+            ));
+        }
+    };
+
+    let fields = match data_struct.fields {
+        Fields::Named(fields) => fields.named,
+        _ => {
+            return Err(syn::Error::new(
+                struct_ident.span(),
+                "Validate requires named fields",
+            ));
+        }
+    };
+
+    let mut field_checks = Vec::<TokenStream2>::new();
+
+    for field in fields {
+        let field_ident = field
+            .ident
+            .clone()
+            .ok_or_else(|| syn::Error::new(field.span(), "Validate requires named fields"))?;
+        let field_name = field_ident.to_string();
+        let field_ty = field.ty.clone();
+        let options = parse_validate_field_options(&field.attrs)?;
+
+        if !options.trim
+            && !options.non_empty
+            && options.min.is_none()
+            && options.max.is_none()
+            && options.len_min.is_none()
+            && options.len_max.is_none()
+        {
+            continue;
+        }
+
+        let mut checks = Vec::<TokenStream2>::new();
+
+        if options.trim {
+            if is_string_type(&field_ty) {
+                checks.push(quote! {
+                    self.#field_ident = self.#field_ident.trim().to_string();
+                });
+            } else if let Some(inner) = option_inner_type(&field_ty) {
+                if is_string_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_mut() {
+                            *value = value.trim().to_string();
+                        }
+                    });
+                } else {
+                    return Err(syn::Error::new(
+                        field_ty.span(),
+                        format!(
+                            "#[validate(trim)] is only supported for String or Option<String> fields ('{}')",
+                            field_name
+                        ),
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                    field_ty.span(),
+                    format!(
+                        "#[validate(trim)] is only supported for String or Option<String> fields ('{}')",
+                        field_name
+                    ),
+                ));
+            }
+        }
+
+        if options.non_empty {
+            if is_string_type(&field_ty) {
+                checks.push(quote! {
+                    if self.#field_ident.trim().is_empty() {
+                        return Err(format!("field '{}' must not be empty", #field_name));
+                    }
+                });
+            } else if let Some(inner) = option_inner_type(&field_ty) {
+                if is_string_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_ref() {
+                            if value.trim().is_empty() {
+                                return Err(format!("field '{}' must not be empty", #field_name));
+                            }
+                        }
+                    });
+                } else {
+                    return Err(syn::Error::new(
+                        field_ty.span(),
+                        format!(
+                            "#[validate(non_empty)] is only supported for String or Option<String> fields ('{}')",
+                            field_name
+                        ),
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                    field_ty.span(),
+                    format!(
+                        "#[validate(non_empty)] is only supported for String or Option<String> fields ('{}')",
+                        field_name
+                    ),
+                ));
+            }
+        }
+
+        if let Some(min) = options.min {
+            if is_numeric_type(&field_ty) {
+                checks.push(quote! {
+                    if (self.#field_ident as f64) < #min {
+                        return Err(format!("field '{}' must be >= {}", #field_name, #min));
+                    }
+                });
+            } else if let Some(inner) = option_inner_type(&field_ty) {
+                if is_numeric_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_ref() {
+                            if (*value as f64) < #min {
+                                return Err(format!("field '{}' must be >= {}", #field_name, #min));
+                            }
+                        }
+                    });
+                } else {
+                    return Err(syn::Error::new(
+                        field_ty.span(),
+                        format!(
+                            "#[validate(min = ...)] is only supported for numeric fields ('{}')",
+                            field_name
+                        ),
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                    field_ty.span(),
+                    format!(
+                        "#[validate(min = ...)] is only supported for numeric fields ('{}')",
+                        field_name
+                    ),
+                ));
+            }
+        }
+
+        if let Some(max) = options.max {
+            if is_numeric_type(&field_ty) {
+                checks.push(quote! {
+                    if (self.#field_ident as f64) > #max {
+                        return Err(format!("field '{}' must be <= {}", #field_name, #max));
+                    }
+                });
+            } else if let Some(inner) = option_inner_type(&field_ty) {
+                if is_numeric_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_ref() {
+                            if (*value as f64) > #max {
+                                return Err(format!("field '{}' must be <= {}", #field_name, #max));
+                            }
+                        }
+                    });
+                } else {
+                    return Err(syn::Error::new(
+                        field_ty.span(),
+                        format!(
+                            "#[validate(max = ...)] is only supported for numeric fields ('{}')",
+                            field_name
+                        ),
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                    field_ty.span(),
+                    format!(
+                        "#[validate(max = ...)] is only supported for numeric fields ('{}')",
+                        field_name
+                    ),
+                ));
+            }
+        }
+
+        if let Some(min_len) = options.len_min {
+            if is_string_type(&field_ty) {
+                checks.push(quote! {
+                    if self.#field_ident.chars().count() < #min_len {
+                        return Err(format!("field '{}' length must be >= {}", #field_name, #min_len));
+                    }
+                });
+            } else if is_vec_type(&field_ty) {
+                checks.push(quote! {
+                    if self.#field_ident.len() < #min_len {
+                        return Err(format!("field '{}' length must be >= {}", #field_name, #min_len));
+                    }
+                });
+            } else if let Some(inner) = option_inner_type(&field_ty) {
+                if is_string_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_ref() {
+                            if value.chars().count() < #min_len {
+                                return Err(format!("field '{}' length must be >= {}", #field_name, #min_len));
+                            }
+                        }
+                    });
+                } else if is_vec_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_ref() {
+                            if value.len() < #min_len {
+                                return Err(format!("field '{}' length must be >= {}", #field_name, #min_len));
+                            }
+                        }
+                    });
+                } else {
+                    return Err(syn::Error::new(
+                        field_ty.span(),
+                        format!(
+                            "#[validate(len_min = ...)] supports String/Vec and their Option variants ('{}')",
+                            field_name
+                        ),
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                    field_ty.span(),
+                    format!(
+                        "#[validate(len_min = ...)] supports String/Vec and their Option variants ('{}')",
+                        field_name
+                    ),
+                ));
+            }
+        }
+
+        if let Some(max_len) = options.len_max {
+            if is_string_type(&field_ty) {
+                checks.push(quote! {
+                    if self.#field_ident.chars().count() > #max_len {
+                        return Err(format!("field '{}' length must be <= {}", #field_name, #max_len));
+                    }
+                });
+            } else if is_vec_type(&field_ty) {
+                checks.push(quote! {
+                    if self.#field_ident.len() > #max_len {
+                        return Err(format!("field '{}' length must be <= {}", #field_name, #max_len));
+                    }
+                });
+            } else if let Some(inner) = option_inner_type(&field_ty) {
+                if is_string_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_ref() {
+                            if value.chars().count() > #max_len {
+                                return Err(format!("field '{}' length must be <= {}", #field_name, #max_len));
+                            }
+                        }
+                    });
+                } else if is_vec_type(inner) {
+                    checks.push(quote! {
+                        if let Some(value) = self.#field_ident.as_ref() {
+                            if value.len() > #max_len {
+                                return Err(format!("field '{}' length must be <= {}", #field_name, #max_len));
+                            }
+                        }
+                    });
+                } else {
+                    return Err(syn::Error::new(
+                        field_ty.span(),
+                        format!(
+                            "#[validate(len_max = ...)] supports String/Vec and their Option variants ('{}')",
+                            field_name
+                        ),
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                    field_ty.span(),
+                    format!(
+                        "#[validate(len_max = ...)] supports String/Vec and their Option variants ('{}')",
+                        field_name
+                    ),
+                ));
+            }
+        }
+
+        if !checks.is_empty() {
+            field_checks.push(quote! {
+                #(#checks)*
+            });
+        }
+    }
+
+    Ok(quote! {
+        impl ::rustmemodb::PersistInputValidate for #struct_ident {
+            fn normalize_and_validate(&mut self) -> ::std::result::Result<(), ::std::string::String> {
+                #(#field_checks)*
+                Ok(())
+            }
+        }
+    })
+}
+
+fn expand_persist_view(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let struct_ident = input.ident;
+
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            input.generics,
+            "PersistView does not support generic structs yet",
+        ));
+    }
+
+    let options = parse_persist_view_options(&input.attrs)?;
+    let model_ty = options.model.ok_or_else(|| {
+        syn::Error::new(
+            struct_ident.span(),
+            "PersistView requires #[persist_view(model = <Type>, name = \"...\")]",
+        )
+    })?;
+    let view_name = options.name.ok_or_else(|| {
+        syn::Error::new(
+            struct_ident.span(),
+            "PersistView requires #[persist_view(name = \"...\")]",
+        )
+    })?;
+
+    let named_fields = match input.data {
+        Data::Struct(data_struct) => match data_struct.fields {
+            Fields::Named(fields) => fields.named,
+            _ => {
+                return Err(syn::Error::new(
+                    struct_ident.span(),
+                    "PersistView default derive requires a struct with named fields",
+                ));
+            }
+        },
+        _ => {
+            return Err(syn::Error::new(
+                struct_ident.span(),
+                "PersistView can only be derived for structs",
+            ));
+        }
+    };
+
+    let body = if let Some(compute_path) = options.compute {
+        for field in &named_fields {
+            if parse_view_metric_field_options(field)?.is_some() {
+                return Err(syn::Error::new(
+                    field.span(),
+                    "Cannot combine #[persist_view(compute = ...)] with field-level #[view_metric(...)]",
+                ));
+            }
+        }
+        quote! { #compute_path(model) }
+    } else {
+        let mut assigns = Vec::<TokenStream2>::new();
+        for field in named_fields {
+            let field_span = field.span();
+            let metric = parse_view_metric_field_options(&field)?;
+            let Some(field_ident) = field.ident.clone() else {
+                return Err(syn::Error::new(
+                    field_span,
+                    "PersistView requires named fields",
+                ));
+            };
+            if let Some(metric) = metric {
+                assigns.push(metric.view_assign_tokens(&field_ident, field_span)?);
+            } else {
+                assigns.push(quote!(#field_ident: model.#field_ident.clone()));
+            }
+        }
+
+        quote! {
+            Self {
+                #(#assigns),*
+            }
+        }
+    };
+
+    Ok(quote! {
+        impl ::rustmemodb::PersistView<#model_ty> for #struct_ident {
+            const VIEW_NAME: &'static str = #view_name;
+
+            fn compute(model: &#model_ty) -> Self {
+                #body
+            }
+        }
+    })
+}
+
+impl ViewMetricFieldOptions {
+    fn view_assign_tokens(
+        &self,
+        target_field: &Ident,
+        span: proc_macro2::Span,
+    ) -> syn::Result<TokenStream2> {
+        let source_ident = parse_metric_ident(&self.source, span, "source")?;
+        match self.kind {
+            ViewMetricKind::Copy => Ok(quote!(#target_field: model.#source_ident.clone())),
+            ViewMetricKind::Count => Ok(quote!(#target_field: model.#source_ident.len() as _)),
+            ViewMetricKind::Sum => {
+                let value_field = self.field.as_ref().ok_or_else(|| {
+                    syn::Error::new(
+                        span,
+                        "#[view_metric(kind = \"sum\", ...)] requires field = \"...\"",
+                    )
+                })?;
+                let value_ident = parse_metric_ident(value_field, span, "field")?;
+                Ok(quote! {
+                    #target_field: model.#source_ident
+                        .iter()
+                        .map(|entry| {
+                            ::core::convert::TryInto::<i64>::try_into(entry.#value_ident.clone())
+                                .ok()
+                                .unwrap_or(0)
+                        })
+                        .sum::<i64>() as _
+                })
+            }
+            ViewMetricKind::GroupBy => {
+                let by_field = self.by.as_ref().ok_or_else(|| {
+                    syn::Error::new(
+                        span,
+                        "#[view_metric(kind = \"group_by\", ...)] requires by = \"...\"",
+                    )
+                })?;
+                let by_ident = parse_metric_ident(by_field, span, "by")?;
+                let use_sum = matches!(self.op.as_deref(), Some("sum"));
+                let delta_tokens = if use_sum {
+                    let value_field = self.field.as_ref().ok_or_else(|| {
+                        syn::Error::new(
+                            span,
+                            "#[view_metric(kind = \"group_by\", op = \"sum\", ...)] requires field = \"...\"",
+                        )
+                    })?;
+                    let value_ident = parse_metric_ident(value_field, span, "field")?;
+                    quote! {
+                        ::core::convert::TryInto::<i64>::try_into(entry.#value_ident.clone())
+                            .ok()
+                            .unwrap_or(0)
+                    }
+                } else {
+                    quote!(1i64)
+                };
+
+                Ok(quote! {
+                    #target_field: {
+                        let mut grouped = ::std::collections::BTreeMap::<String, i64>::new();
+                        for entry in model.#source_ident.iter() {
+                            let raw_key = format!("{:?}", &entry.#by_ident);
+                            let key = if let Some(unquoted) =
+                                raw_key.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                            {
+                                unquoted.to_string()
+                            } else {
+                                raw_key
+                            };
+                            let delta: i64 = #delta_tokens;
+                            *grouped.entry(key).or_insert(0) += delta;
+                        }
+                        grouped
+                    }
+                })
+            }
+        }
+    }
+}
+
+fn parse_metric_ident(raw: &str, span: proc_macro2::Span, field_name: &str) -> syn::Result<Ident> {
+    syn::parse_str::<Ident>(raw).map_err(|_| {
+        syn::Error::new(
+            span,
+            format!("Invalid view metric {field_name} '{raw}'. Use a valid Rust identifier."),
+        )
+    })
+}
+
+fn parse_view_metric_field_options(
+    field: &syn::Field,
+) -> syn::Result<Option<ViewMetricFieldOptions>> {
+    let mut metric: Option<ViewMetricFieldOptions> = None;
+
+    for attr in &field.attrs {
+        if !path_ends_with_ident(attr.path(), "view_metric") {
+            continue;
+        }
+        if metric.is_some() {
+            return Err(syn::Error::new(
+                attr.span(),
+                "Duplicate #[view_metric(...)] on one field",
+            ));
+        }
+
+        let mut kind: Option<ViewMetricKind> = None;
+        let mut source: Option<String> = None;
+        let mut metric_field: Option<String> = None;
+        let mut by: Option<String> = None;
+        let mut op: Option<String> = None;
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("kind") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                let normalized = lit.value().to_lowercase();
+                kind =
+                    Some(match normalized.as_str() {
+                        "copy" => ViewMetricKind::Copy,
+                        "count" => ViewMetricKind::Count,
+                        "sum" => ViewMetricKind::Sum,
+                        "group_by" => ViewMetricKind::GroupBy,
+                        _ => return Err(meta.error(
+                            "Unsupported view_metric kind. Supported: copy, count, sum, group_by",
+                        )),
+                    });
+                return Ok(());
+            }
+            if meta.path.is_ident("source") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                source = Some(lit.value());
+                return Ok(());
+            }
+            if meta.path.is_ident("field") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                metric_field = Some(lit.value());
+                return Ok(());
+            }
+            if meta.path.is_ident("by") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                by = Some(lit.value());
+                return Ok(());
+            }
+            if meta.path.is_ident("op") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                op = Some(lit.value().to_lowercase());
+                return Ok(());
+            }
+
+            Err(meta.error(
+                "Unsupported #[view_metric(...)] option. Supported: kind, source, field, by, op",
+            ))
+        })?;
+
+        let kind = kind.ok_or_else(|| {
+            syn::Error::new(attr.span(), "#[view_metric(...)] requires kind = \"...\"")
+        })?;
+        let source = source.ok_or_else(|| {
+            syn::Error::new(attr.span(), "#[view_metric(...)] requires source = \"...\"")
+        })?;
+
+        match kind {
+            ViewMetricKind::Copy | ViewMetricKind::Count => {
+                if metric_field.is_some() || by.is_some() || op.is_some() {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "copy/count metrics only support: kind, source",
+                    ));
+                }
+            }
+            ViewMetricKind::Sum => {
+                if metric_field.is_none() {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "sum metric requires field = \"...\"",
+                    ));
+                }
+                if by.is_some() || op.is_some() {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "sum metric only supports: kind, source, field",
+                    ));
+                }
+            }
+            ViewMetricKind::GroupBy => {
+                if by.is_none() {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "group_by metric requires by = \"...\"",
+                    ));
+                }
+                if let Some(ref op_value) = op {
+                    if op_value != "count" && op_value != "sum" {
+                        return Err(syn::Error::new(
+                            attr.span(),
+                            "group_by op must be \"count\" or \"sum\"",
+                        ));
+                    }
+                }
+                if op.as_deref() == Some("sum") && metric_field.is_none() {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "group_by with op = \"sum\" requires field = \"...\"",
+                    ));
+                }
+                if op.as_deref() == Some("count") && metric_field.is_some() {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "group_by with op = \"count\" must not specify field = \"...\"",
+                    ));
+                }
+            }
+        }
+
+        let op = match kind {
+            ViewMetricKind::GroupBy => match (op, metric_field.is_some()) {
+                (Some(value), _) => Some(value),
+                (None, true) => Some("sum".to_string()),
+                (None, false) => Some("count".to_string()),
+            },
+            _ => None,
+        };
+
+        metric = Some(ViewMetricFieldOptions {
+            kind,
+            source,
+            field: metric_field,
+            by,
+            op,
+        });
+    }
+
+    Ok(metric)
 }
 
 fn expand_autonomous(input: DeriveInput) -> syn::Result<TokenStream2> {
@@ -2218,7 +3121,7 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             #( #setter_methods )*
         }
 
-        #[async_trait::async_trait]
+        #[::rustmemodb::async_trait::async_trait]
         impl ::rustmemodb::PersistEntity for #persisted_name {
             fn type_name(&self) -> &'static str {
                 stringify!(#struct_name)
@@ -2238,6 +3141,12 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             fn metadata_mut(&mut self) -> &mut ::rustmemodb::PersistMetadata {
                 &mut self.__metadata
+            }
+
+            fn mark_all_dirty(&mut self) {
+                #(
+                    self.__dirty_fields.insert(stringify!(#field_idents));
+                )*
             }
 
             fn descriptor(&self) -> ::rustmemodb::ObjectDescriptor {
@@ -2487,7 +3396,7 @@ fn expand_persist_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
 
-        #[async_trait::async_trait]
+        #[::rustmemodb::async_trait::async_trait]
         impl ::rustmemodb::PersistEntityFactory for #persisted_name {
             fn entity_type_name() -> &'static str {
                 stringify!(#struct_name)
@@ -2630,10 +3539,44 @@ struct PersistentAttrOptions {
     schema_version: Option<u32>,
 }
 
+struct DomainAttrOptions {
+    table_name: Option<LitStr>,
+    schema_version: Option<u32>,
+}
+
+struct PersistViewAttrOptions {
+    model: Option<Type>,
+    name: Option<LitStr>,
+    compute: Option<syn::Path>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewMetricKind {
+    Copy,
+    Count,
+    Sum,
+    GroupBy,
+}
+
+#[derive(Clone, Debug)]
+struct ViewMetricFieldOptions {
+    kind: ViewMetricKind,
+    source: String,
+    field: Option<String>,
+    by: Option<String>,
+    op: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct RestImplAttrOptions {
+    views: Vec<Type>,
+}
+
 #[derive(Clone)]
 struct CommandAttrOptions {
     name: Option<String>,
     idempotent: bool,
+    validate: bool,
     input: Option<Type>,
     output: Option<Type>,
 }
@@ -2643,6 +3586,7 @@ impl Default for CommandAttrOptions {
         Self {
             name: None,
             idempotent: true,
+            validate: false,
             input: None,
             output: None,
         }
@@ -2672,6 +3616,16 @@ struct ViewAttrOptions {
 struct ApiErrorAttrOptions {
     status: Option<u16>,
     code: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct ValidateFieldOptions {
+    trim: bool,
+    non_empty: bool,
+    min: Option<f64>,
+    max: Option<f64>,
+    len_min: Option<usize>,
+    len_max: Option<usize>,
 }
 
 #[derive(Default)]
@@ -2831,7 +3785,9 @@ impl AutonomousMethodReturnKind {
         match &signature.output {
             ReturnType::Default => Self::Unit,
             ReturnType::Type(_, ty) => {
-                if let Some((ok, err)) = extract_result_types(ty) {
+                if let Some((ok, err_opt)) = extract_result_types(ty) {
+                    let err =
+                        err_opt.unwrap_or_else(|| syn::parse_str("::rustmemodb::DbError").unwrap());
                     return Self::RustResult { ok, err };
                 }
                 Self::Plain((**ty).clone())
@@ -2885,6 +3841,7 @@ struct AutonomousExposedMethod {
     return_kind: AutonomousMethodReturnKind,
     route_name: String,
     idempotent: bool,
+    validate: bool,
     input_ty: Option<Type>,
     output_ty: Option<Type>,
 }
@@ -2963,6 +3920,7 @@ impl AutonomousExposedMethod {
             return_kind: AutonomousMethodReturnKind::from_signature(&method.sig),
             route_name,
             idempotent: marker.idempotent,
+            validate: marker.validate,
             input_ty: marker.input,
             output_ty: marker.output,
         })
@@ -3174,10 +4132,26 @@ impl AutonomousExposedMethod {
         } else {
             quote!(#response_ok: ::serde::Serialize,)
         };
+        let validation_bound = if self.validate {
+            quote!(#request_ty: ::rustmemodb::PersistInputValidate,)
+        } else {
+            quote! {}
+        };
         let applied_binding = if success_is_no_content {
             quote!(_output)
         } else {
             quote!(output)
+        };
+        let request_normalization = if self.validate {
+            quote! {
+                let mut request = request;
+                if let Err(message) = ::rustmemodb::PersistInputValidate::normalize_and_validate(&mut request) {
+                    let web_err = ::rustmemodb::web::WebError::Input(message);
+                    return axum::response::IntoResponse::into_response(web_err);
+                }
+            }
+        } else {
+            quote! {}
         };
         let request_validation = if self.inferred_input_ty().is_some() {
             quote! {}
@@ -3229,8 +4203,10 @@ impl AutonomousExposedMethod {
             ) -> axum::response::Response
             where
                 #response_bound
+                #validation_bound
                 #response_err: ::core::convert::Into<::rustmemodb::PersistServiceError>,
             {
+                #request_normalization
                 #request_validation
                 #idempotency_extract
 
@@ -3273,7 +4249,9 @@ impl AutonomousViewReturnKind {
         match &signature.output {
             ReturnType::Default => Self::Unit,
             ReturnType::Type(_, ty) => {
-                if let Some((ok, err)) = extract_result_types(ty) {
+                if let Some((ok, err_opt)) = extract_result_types(ty) {
+                    let err =
+                        err_opt.unwrap_or_else(|| syn::parse_str("::rustmemodb::DbError").unwrap());
                     return Self::RustResult { ok, err };
                 }
                 Self::Plain((**ty).clone())
@@ -3705,6 +4683,30 @@ fn has_derive_trait(attrs: &[syn::Attribute], trait_name: &str) -> bool {
     false
 }
 
+fn parse_rest_impl_attr_options(attr: TokenStream2) -> syn::Result<RestImplAttrOptions> {
+    let mut options = RestImplAttrOptions::default();
+    if attr.is_empty() {
+        return Ok(options);
+    }
+
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("views") {
+            meta.parse_nested_meta(|view_meta| {
+                options.views.push(Type::Path(TypePath {
+                    qself: None,
+                    path: view_meta.path.clone(),
+                }));
+                Ok(())
+            })?;
+            return Ok(());
+        }
+        Err(meta.error("Unsupported option. Supported: views(ViewTypeA, ViewTypeB, ...)"))
+    });
+
+    parser.parse2(attr)?;
+    Ok(options)
+}
+
 fn parse_persistent_attr_options(attr: TokenStream2) -> syn::Result<PersistentAttrOptions> {
     let mut options = PersistentAttrOptions {
         table_name: None,
@@ -3917,6 +4919,139 @@ fn parse_api_error_options(attrs: &[syn::Attribute]) -> syn::Result<ApiErrorAttr
     Ok(options)
 }
 
+fn parse_validate_field_options(attrs: &[syn::Attribute]) -> syn::Result<ValidateFieldOptions> {
+    let mut options = ValidateFieldOptions::default();
+
+    for attr in attrs {
+        if !path_ends_with_ident(attr.path(), "validate") {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("trim") {
+                if options.trim {
+                    return Err(meta.error("Duplicate validate option: trim"));
+                }
+                options.trim = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("non_empty") {
+                if options.non_empty {
+                    return Err(meta.error("Duplicate validate option: non_empty"));
+                }
+                options.non_empty = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("min") {
+                if options.min.is_some() {
+                    return Err(meta.error("Duplicate validate option: min"));
+                }
+                let value = meta.value()?;
+                options.min = Some(parse_f64_lit(value.parse()?)?);
+                return Ok(());
+            }
+            if meta.path.is_ident("max") {
+                if options.max.is_some() {
+                    return Err(meta.error("Duplicate validate option: max"));
+                }
+                let value = meta.value()?;
+                options.max = Some(parse_f64_lit(value.parse()?)?);
+                return Ok(());
+            }
+            if meta.path.is_ident("len_min") {
+                if options.len_min.is_some() {
+                    return Err(meta.error("Duplicate validate option: len_min"));
+                }
+                let value = meta.value()?;
+                let lit: syn::LitInt = value.parse()?;
+                options.len_min = Some(lit.base10_parse::<usize>()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("len_max") {
+                if options.len_max.is_some() {
+                    return Err(meta.error("Duplicate validate option: len_max"));
+                }
+                let value = meta.value()?;
+                let lit: syn::LitInt = value.parse()?;
+                options.len_max = Some(lit.base10_parse::<usize>()?);
+                return Ok(());
+            }
+
+            Err(meta.error(
+                "Unsupported #[validate(...)] option. Supported: trim, non_empty, min = <number>, max = <number>, len_min = <usize>, len_max = <usize>",
+            ))
+        })?;
+    }
+
+    Ok(options)
+}
+
+fn parse_f64_lit(lit: syn::Lit) -> syn::Result<f64> {
+    match lit {
+        syn::Lit::Int(value) => Ok(value.base10_parse::<f64>()?),
+        syn::Lit::Float(value) => Ok(value.base10_parse::<f64>()?),
+        _ => Err(syn::Error::new(lit.span(), "Expected numeric literal")),
+    }
+}
+
+fn path_last_ident_string(ty: &Type) -> Option<String> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    type_path
+        .path
+        .segments
+        .last()
+        .map(|segment| segment.ident.to_string())
+}
+
+fn option_inner_type(ty: &Type) -> Option<&Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    let arg = args.args.first()?;
+    let syn::GenericArgument::Type(inner) = arg else {
+        return None;
+    };
+    Some(inner)
+}
+
+fn is_string_type(ty: &Type) -> bool {
+    matches!(path_last_ident_string(ty).as_deref(), Some("String"))
+}
+
+fn is_vec_type(ty: &Type) -> bool {
+    matches!(path_last_ident_string(ty).as_deref(), Some("Vec"))
+}
+
+fn is_numeric_type(ty: &Type) -> bool {
+    matches!(
+        path_last_ident_string(ty).as_deref(),
+        Some(
+            "u8" | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "i8"
+                | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "f32"
+                | "f64"
+        )
+    )
+}
+
 fn parse_command_attr_tokens(attr: TokenStream2) -> syn::Result<CommandAttrOptions> {
     let mut options = CommandAttrOptions::default();
     let parser = syn::meta::parser(|meta| {
@@ -3932,6 +5067,12 @@ fn parse_command_attr_tokens(attr: TokenStream2) -> syn::Result<CommandAttrOptio
             options.idempotent = lit.value;
             return Ok(());
         }
+        if meta.path.is_ident("validate") {
+            let value = meta.value()?;
+            let lit: syn::LitBool = value.parse()?;
+            options.validate = lit.value;
+            return Ok(());
+        }
         if meta.path.is_ident("input") {
             let value = meta.value()?;
             options.input = Some(value.parse()?);
@@ -3943,7 +5084,7 @@ fn parse_command_attr_tokens(attr: TokenStream2) -> syn::Result<CommandAttrOptio
             return Ok(());
         }
         Err(meta.error(
-            "Unsupported #[command(...)] option. Supported: name = \"...\", idempotent = <bool>, input = <Type>, output = <Type>",
+            "Unsupported #[command(...)] option. Supported: name = \"...\", idempotent = <bool>, validate = <bool>, input = <Type>, output = <Type>",
         ))
     });
 
@@ -4089,6 +5230,9 @@ fn parse_command_doc_marker(value: &str) -> Option<CommandAttrOptions> {
             }
             "idempotent" => {
                 parsed.idempotent = !value.eq_ignore_ascii_case("false");
+            }
+            "validate" => {
+                parsed.validate = !value.eq_ignore_ascii_case("false");
             }
             "input" => {
                 if !value.is_empty() {
@@ -4353,6 +5497,9 @@ fn build_command_doc_marker(marker: &CommandAttrOptions) -> String {
     if !marker.idempotent {
         parts.push("idempotent=false".to_string());
     }
+    if marker.validate {
+        parts.push("validate=true".to_string());
+    }
     if let Some(input) = marker.input.as_ref() {
         parts.push(format!("input={}", type_to_marker_string(input)));
     }
@@ -4525,11 +5672,7 @@ fn first_generic_type(segment: &syn::PathSegment) -> Option<Type> {
     None
 }
 
-fn extract_result_ok_type(ty: &Type) -> Option<Type> {
-    extract_result_types(ty).map(|(ok, _)| ok)
-}
-
-fn extract_result_types(ty: &Type) -> Option<(Type, Type)> {
+fn extract_result_types(ty: &Type) -> Option<(Type, Option<Type>)> {
     let Type::Path(type_path) = ty else {
         return None;
     };
@@ -4548,8 +5691,12 @@ fn extract_result_types(ty: &Type) -> Option<(Type, Type)> {
         }
     });
     let ok_ty = types.next()?;
-    let err_ty = types.next()?;
+    let err_ty = types.next();
     Some((ok_ty, err_ty))
+}
+
+fn extract_result_ok_type(ty: &Type) -> Option<Type> {
+    extract_result_types(ty).map(|(ok, _)| ok)
 }
 
 fn parse_sql_field_options(attrs: &[syn::Attribute]) -> syn::Result<Option<SqlFieldOptions>> {
@@ -4655,4 +5802,92 @@ fn parse_persist_model_options(attrs: &[syn::Attribute]) -> syn::Result<PersistM
     }
 
     Ok(options)
+}
+
+fn parse_domain_attr_options(attr: TokenStream2) -> syn::Result<DomainAttrOptions> {
+    let mut options = DomainAttrOptions {
+        table_name: None,
+        schema_version: None,
+    };
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("table") {
+            let value = meta.value()?;
+            let lit: LitStr = value.parse()?;
+            options.table_name = Some(lit);
+            return Ok(());
+        }
+        if meta.path.is_ident("schema_version") {
+            let value = meta.value()?;
+            let lit: syn::LitInt = value.parse()?;
+            options.schema_version = Some(lit.base10_parse::<u32>()?);
+            return Ok(());
+        }
+        Err(meta.error(
+            "Unsupported #[domain(...)] option. Supported: table = \"...\", schema_version = <u32>",
+        ))
+    });
+    parser.parse2(attr)?;
+    Ok(options)
+}
+
+fn parse_persist_view_options(attrs: &[syn::Attribute]) -> syn::Result<PersistViewAttrOptions> {
+    let mut options = PersistViewAttrOptions {
+        model: None,
+        name: None,
+        compute: None,
+    };
+
+    for attr in attrs {
+        if !attr.path().is_ident("persist_view") {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("model") {
+                let value = meta.value()?;
+                options.model = Some(value.parse()?);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("name") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                options.name = Some(lit);
+                return Ok(());
+            }
+
+            if meta.path.is_ident("compute") {
+                let value = meta.value()?;
+                options.compute = Some(value.parse()?);
+                return Ok(());
+            }
+
+            Err(meta.error(
+                "Unsupported #[persist_view(...)] option. Supported: model = <Type>, name = \"...\", compute = <path>",
+            ))
+        })?;
+    }
+
+    Ok(options)
+}
+
+fn method_has_explicit_autonomous_marker(attrs: &[syn::Attribute]) -> syn::Result<bool> {
+    for attr in attrs {
+        if path_ends_with_ident(attr.path(), "command")
+            || path_ends_with_ident(attr.path(), "query")
+            || path_ends_with_ident(attr.path(), "view")
+        {
+            return Ok(true);
+        }
+
+        if attr.path().is_ident("doc")
+            && let Ok(marker) = attr.parse_args::<LitStr>()
+            && (parse_command_doc_marker(&marker.value()).is_some()
+                || parse_query_doc_marker(&marker.value()).is_some()
+                || parse_view_doc_marker(&marker.value()).is_some())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

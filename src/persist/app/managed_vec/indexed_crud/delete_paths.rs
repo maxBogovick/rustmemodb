@@ -6,11 +6,18 @@ where
     ///
     /// Manages internal transaction.
     /// Validates the item exists before deleting.
-    pub async fn delete(&mut self, persist_id: &str) -> Result<bool> {
+    pub async fn delete(&mut self, persist_id: &str) -> Result<bool>
+    where
+        V::Item: PersistEntityFactory,
+    {
         let persist_id = persist_id.to_string();
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
+        self.mark_persisted_index_dirty();
+        let maybe_index = self
+            .ensure_item_loaded_by_id_with_session(&tx_session, &persist_id)
+            .await?;
 
-        let operation_result = match self.collection.remove_by_persist_id(&persist_id) {
+        let operation_result = match maybe_index.and_then(|index| self.collection.remove_by_index(index)) {
             Some(mut item) => item.delete(&tx_session).await.map(|_| true),
             None => Ok(false),
         };
@@ -37,12 +44,12 @@ where
         &mut self,
         persist_id: &str,
         expected_version: i64,
-    ) -> Result<bool> {
+    ) -> Result<bool>
+    where
+        V::Item: PersistEntityFactory,
+    {
         let persist_id = persist_id.to_string();
-        let Some(actual_version) = self
-            .get(&persist_id)
-            .map(|existing| existing.metadata().version)
-        else {
+        let Some(actual_version) = self.get_version_db(&persist_id).await? else {
             return Ok(false);
         };
 
@@ -63,14 +70,30 @@ where
     ///
     /// Ignores items that are not found.
     /// Returns the count of actually deleted items.
-    pub async fn delete_many(&mut self, persist_ids: &[String]) -> Result<usize> {
-        let persist_ids = persist_ids.to_vec();
+    pub async fn delete_many(&mut self, persist_ids: &[String]) -> Result<usize>
+    where
+        V::Item: PersistEntityFactory,
+    {
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
+        let mut indexes = Vec::with_capacity(persist_ids.len());
+        for persist_id in persist_ids {
+            if let Some(index) = self
+                .ensure_item_loaded_by_id_with_session(&tx_session, persist_id)
+                .await?
+            {
+                indexes.push(index);
+            }
+        }
+        indexes.sort_unstable();
+        indexes.dedup();
+        indexes.reverse();
+
+        self.mark_persisted_index_dirty();
 
         let mut removed = 0usize;
         let mut operation_result = Ok(());
-        for persist_id in &persist_ids {
-            let mut item = match self.collection.remove_by_persist_id(persist_id) {
+        for index in indexes {
+            let mut item = match self.collection.remove_by_index(index) {
                 Some(item) => item,
                 None => continue,
             };

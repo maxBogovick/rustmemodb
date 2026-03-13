@@ -84,15 +84,15 @@ pub struct LedgerBalanceReport {
     pub all_balances_consistent: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Autonomous)]
-#[persist_model(table = "ledger_books", schema_version = 1)]
+#[domain(table = "ledger_books", schema_version = 1)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LedgerBook {
     name: String,
     accounts: PersistJson<Vec<LedgerAccount>>,
     transactions: PersistJson<Vec<LedgerTransaction>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, ApiError)]
+#[derive(Clone, Debug, PartialEq, Eq, DomainError)]
 pub enum LedgerDomainError {
     #[api_error(status = 404, code = "account_not_found")]
     AccountNotFound(String),

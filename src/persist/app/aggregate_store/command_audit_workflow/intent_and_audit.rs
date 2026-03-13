@@ -1,7 +1,7 @@
 impl<V> PersistAggregateStore<V>
 where
     V: PersistIndexedCollection,
-    V::Item: PersistCommandModel + Clone,
+    V::Item: PersistCommandModel + Clone + PersistEntityFactory,
 {
     /// Executes an intent on a single aggregate, automatically generating an audit record.
     ///
@@ -172,13 +172,17 @@ where
                             continue;
                         }
 
-                        let item = users.get(persist_id).cloned().ok_or_else(|| {
-                            DbError::ExecutionError(format!(
-                                "command applied but entity '{}' is missing in '{}'",
-                                persist_id,
-                                users.name()
-                            ))
-                        })?;
+                        let tx_session = tx.session();
+                        let item = users
+                            .get_one_db_with_session(&tx_session, persist_id)
+                            .await?
+                            .ok_or_else(|| {
+                                DbError::ExecutionError(format!(
+                                    "command applied but entity '{}' is missing in '{}'",
+                                    persist_id,
+                                    users.name()
+                                ))
+                            })?;
                         updated.push(item);
                     }
 

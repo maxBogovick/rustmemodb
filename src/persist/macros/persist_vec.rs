@@ -250,6 +250,11 @@ macro_rules! persist_vec {
                 self.inner.remove_by_persist_id(persist_id)
             }
 
+            /// Removes an entity by in-memory index.
+            pub fn remove_by_index(&mut self, index: usize) -> Option<$item_ty> {
+                self.inner.remove_by_index(index)
+            }
+
             /// Returns entity states for diagnostics and snapshot tooling.
             pub fn states(&self) -> Vec<$crate::persist::PersistState> {
                 self.inner.states()
@@ -427,6 +432,10 @@ macro_rules! persist_vec {
 
             fn remove_by_persist_id(&mut self, persist_id: &str) -> Option<Self::Item> {
                 self.inner.remove_by_persist_id(persist_id)
+            }
+
+            fn remove_by_index(&mut self, index: usize) -> Option<Self::Item> {
+                self.inner.remove_by_index(index)
             }
         }
     };

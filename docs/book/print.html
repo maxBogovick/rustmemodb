@@ -1,0 +1,2415 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>RustMemoDB Documentation</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-4cf175af.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-56e157b1.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">RustMemoDB Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="rustmemodb"><a class="header" href="#rustmemodb">RustMemoDB</a></h1>
+<p>RustMemoDB is an embedded persistence and runtime toolkit for Rust applications that want business-logic-first APIs without starting from a separate database service.</p>
+<p>The recommended product surface today is <code>rustmemodb::prelude::dx::*</code>.
+This book is written around the APIs that are currently exercised by examples and tests in this repository.</p>
+<h2 id="what-you-can-rely-on-today"><a class="header" href="#what-you-can-rely-on-today">What You Can Rely On Today</a></h2>
+<ul>
+<li><code>#[domain]</code> for persisted domain models.</li>
+<li><code>#[api]</code> and <code>#[expose_rest]</code> for generated REST contracts from model methods.</li>
+<li><code>PersistApp::open_auto(...)</code> for opening durable embedded storage.</li>
+<li><code>serve_domain!(...)</code> for mounting generated routers.</li>
+<li><code>PersistJson&lt;T&gt;</code> for nested aggregate state without local wrapper boilerplate.</li>
+<li>Built-in audit endpoints, generated OpenAPI, typed views, and list query DSL.</li>
+<li><code>AgentSessionRuntime</code> and <code>AgentWorkflowExecutor</code> for AI session memory and replay flows.</li>
+</ul>
+<h2 id="who-this-fits"><a class="header" href="#who-this-fits">Who This Fits</a></h2>
+<ul>
+<li>Rust teams shipping single-binary services, edge apps, or local-first tools.</li>
+<li>Product codebases that want the domain model, persistence, and HTTP contract to stay close together.</li>
+<li>Teams that value fast iteration and fewer infrastructure dependencies during the first product phase.</li>
+</ul>
+<h2 id="who-this-does-not-fit"><a class="header" href="#who-this-does-not-fit">Who This Does Not Fit</a></h2>
+<ul>
+<li>Teams whose primary requirement is a shared external SQL service for many unrelated applications.</li>
+<li>SQL-first analytics and warehouse workloads.</li>
+<li>Systems where cross-language writes to the same store are the main integration model.</li>
+</ul>
+<h2 id="recommended-first-path"><a class="header" href="#recommended-first-path">Recommended First Path</a></h2>
+<ol>
+<li>Read <a href="#quickstart">Quickstart</a>.</li>
+<li>Skim <a href="#architecture-overview">Architecture Overview</a>.</li>
+<li>Read <a href="#tradeoffs-and-limits">Tradeoffs and Limits</a>.</li>
+<li>Use <a href="#proof-and-examples">Proof and Examples</a> as the trust anchor.</li>
+<li>Then go deeper into the feature pages.</li>
+<li>Read the Product Playbooks if you want to see what kinds of products RustMemoDB can help you ship quickly and credibly.</li>
+<li>Use the Hands-On Guides when you want concrete walkthroughs, exact demo flows, and product-facing patterns such as typed views and query DSL.</li>
+<li>Read the Technical Buyer Briefings when you need to pitch RustMemoDB internally, win an architecture review, or turn a demo into a credible pilot.</li>
+</ol>
+<p>This documentation intentionally avoids speculative API stories.
+If a page recommends a surface, it should already exist in <code>examples/</code> or <code>tests/</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="quickstart"><a class="header" href="#quickstart">Quickstart</a></h1>
+<p>If you want the shortest path to a real RustMemoDB success, start with the high-level DX surface:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use rustmemodb::prelude::dx::*;
+<span class="boring">}</span></code></pre>
+<p>The current recommended shape is:</p>
+<ol>
+<li>Define a model with <code>#[domain(...)]</code>.</li>
+<li>Put business methods in an <code>#[api]</code> or <code>#[expose_rest]</code> impl.</li>
+<li>Open storage with <code>PersistApp::open_auto(...)</code>.</li>
+<li>Mount the generated router with <code>serve_domain!(...)</code>.</li>
+</ol>
+<h2 id="minimal-domain-model"><a class="header" href="#minimal-domain-model">Minimal Domain Model</a></h2>
+<p>This shape is compile-verified in <code>tests/persist_dx_api_macros_tests.rs</code> and <code>tests/dx_contract_compile_tests.rs</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use rustmemodb::prelude::dx::*;
+use serde::{Deserialize, Serialize};
+
+#[domain(table = "boards", schema_version = 1)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Board {
+    name: String,
+    active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, DomainError)]
+enum BoardError {
+    #[api_error(status = 422, code = "validation_error")]
+    Validation(String),
+}
+
+impl std::fmt::Display for BoardError {
+    fn fmt(&amp;self, f: &amp;mut std::fmt::Formatter&lt;'_&gt;) -&gt; std::fmt::Result {
+        match self {
+            Self::Validation(message) =&gt; write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for BoardError {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+struct RenameInput {
+    #[validate(trim, non_empty, len_max = 64)]
+    name: String,
+}
+
+#[api]
+impl Board {
+    pub fn new(name: String) -&gt; Self {
+        Self {
+            name: name.trim().to_string(),
+            active: false,
+        }
+    }
+
+    #[command(validate = true)]
+    pub fn rename(&amp;mut self, input: RenameInput) -&gt; Result&lt;String, BoardError&gt; {
+        self.name = input.name;
+        Ok(self.name.clone())
+    }
+
+    #[query]
+    pub fn current_name(&amp;self) -&gt; String {
+        self.name.clone()
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="bootstrap-the-app"><a class="header" href="#bootstrap-the-app">Bootstrap the App</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use axum::Router;
+use rustmemodb::prelude::dx::PersistApp;
+
+let app = PersistApp::open_auto("./board_data").await?;
+let boards_router = rustmemodb::serve_domain!(app, Board, "boards")?;
+let app = Router::new().nest("/api/boards", boards_router);
+<span class="boring">}</span></code></pre>
+<h2 id="what-you-get"><a class="header" href="#what-you-get">What You Get</a></h2>
+<ul>
+<li><code>POST /api/boards</code></li>
+<li><code>GET /api/boards</code></li>
+<li><code>GET /api/boards/:id</code></li>
+<li><code>DELETE /api/boards/:id</code></li>
+<li><code>POST /api/boards/:id/rename</code></li>
+<li><code>GET /api/boards/:id/current_name</code></li>
+<li><code>GET /api/boards/:id/_audits</code></li>
+<li><code>GET /api/boards/_openapi.json</code></li>
+</ul>
+<p>Generated list endpoints also support query parameters such as:</p>
+<ul>
+<li><code>page</code></li>
+<li><code>per_page</code></li>
+<li><code>sort</code></li>
+<li><code>field=value</code></li>
+<li><code>field__op=value</code></li>
+</ul>
+<h2 id="where-to-look-next"><a class="header" href="#where-to-look-next">Where To Look Next</a></h2>
+<ul>
+<li><code>examples/agile_board</code> for a full nested aggregate example.</li>
+<li><code>examples/ledger_core</code> for a command-heavy financial example.</li>
+<li><code>tests/persist_view_mvp_tests.rs</code> for typed <code>PersistView</code> endpoints.</li>
+<li><code>tests/ai_memory_phase1_usage_tests.rs</code> for the AI memory runtime.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="architecture-overview"><a class="header" href="#architecture-overview">Architecture Overview</a></h1>
+<p>RustMemoDB is strongest when you let the domain model be the center of the application.</p>
+<h2 id="recommended-stack"><a class="header" href="#recommended-stack">Recommended Stack</a></h2>
+<ol>
+<li>Import <code>rustmemodb::prelude::dx::*</code>.</li>
+<li>Declare persisted domain state with <code>#[domain(table = "...", schema_version = ...)]</code>.</li>
+<li>Put business methods in <code>#[api]</code> or <code>#[expose_rest]</code>.</li>
+<li>Use <code>PersistJson&lt;T&gt;</code> when the aggregate owns nested JSON-like data.</li>
+<li>Open storage with <code>PersistApp::open_auto(...)</code>.</li>
+<li>Mount generated HTTP with <code>serve_domain!(...)</code>.</li>
+</ol>
+<h2 id="what-the-runtime-generates"><a class="header" href="#what-the-runtime-generates">What The Runtime Generates</a></h2>
+<ul>
+<li>A persisted model handle for create/get/list/delete and command execution.</li>
+<li>REST endpoints derived from constructor, command, query, and view methods.</li>
+<li>List query parsing for pagination, sorting, and field filters.</li>
+<li>Audit endpoints at <code>/:id/_audits</code>.</li>
+<li>OpenAPI output at <code>/_openapi.json</code>.</li>
+<li>Typed <code>PersistView</code> endpoints when you register views.</li>
+</ul>
+<h2 id="why-this-matters"><a class="header" href="#why-this-matters">Why This Matters</a></h2>
+<p>The main product win is not a new query language.
+It is that the domain model, generated handle methods, and generated HTTP contract all come from the same Rust source of truth.</p>
+<p>That cuts out the usual drift between:</p>
+<ul>
+<li>model structs</li>
+<li>route DTOs</li>
+<li>hand-written Axum handlers</li>
+<li>repository layers</li>
+<li>documentation that describes a different API than the code actually exposes</li>
+</ul>
+<h2 id="separate-surface-for-ai-memory"><a class="header" href="#separate-surface-for-ai-memory">Separate Surface For AI Memory</a></h2>
+<p>AI session memory is a different runtime surface.
+Use:</p>
+<ul>
+<li><code>AgentSessionRuntime</code></li>
+<li><code>AgentWorkflowExecutor</code></li>
+<li><code>AgentTimelineQuery</code></li>
+</ul>
+<p>That path is covered in <code>tests/ai_memory_phase1_usage_tests.rs</code>.</p>
+<h2 id="escape-hatch"><a class="header" href="#escape-hatch">Escape Hatch</a></h2>
+<p>If you need lower-level persistence internals, RustMemoDB also exposes <code>rustmemodb::prelude::advanced::*</code>.</p>
+<p>That is an escape hatch, not the default starting point for product code.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="tradeoffs-and-limits"><a class="header" href="#tradeoffs-and-limits">Tradeoffs and Limits</a></h1>
+<p>This book should help you choose RustMemoDB for the right reasons.</p>
+<h2 id="good-fit"><a class="header" href="#good-fit">Good Fit</a></h2>
+<ul>
+<li>Service-local state where app and persistence ship together.</li>
+<li>Domain-first APIs where business methods should define the HTTP contract.</li>
+<li>Single-binary deployment targets.</li>
+<li>Edge, desktop, local-first, and internal product backends.</li>
+<li>Teams that want audits, generated OpenAPI, and typed views without building a full platform layer first.</li>
+</ul>
+<h2 id="less-good-fit"><a class="header" href="#less-good-fit">Less Good Fit</a></h2>
+<ul>
+<li>A shared database owned by many applications written in different languages.</li>
+<li>Analytics-first systems centered on external SQL tooling and warehouse workflows.</li>
+<li>Environments where a networked SQL server is already a hard requirement.</li>
+<li>Teams that specifically want raw SQL as the primary public developer surface.</li>
+</ul>
+<h2 id="practical-advice"><a class="header" href="#practical-advice">Practical Advice</a></h2>
+<ul>
+<li>Start with <code>#[domain]</code> and <code>serve_domain!(...)</code> unless you have a concrete reason not to.</li>
+<li>Use <code>PersistJson&lt;T&gt;</code> for nested aggregate state instead of building manual storage wrappers.</li>
+<li>Reach for the lower-level runtime or <code>#[persistent]</code> DSL only when you need explicit command/runtime control.</li>
+<li>Treat examples and tests as the canonical product contract until the book grows broader coverage.</li>
+</ul>
+<h2 id="why-these-limits-matter"><a class="header" href="#why-these-limits-matter">Why These Limits Matter</a></h2>
+<p>RustMemoDB becomes much more compelling when it replaces unnecessary layers.
+It becomes less compelling when you force it to imitate a remote, shared, SQL-first platform that you already have.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="proof-and-examples"><a class="header" href="#proof-and-examples">Proof and Examples</a></h1>
+<p>These files are the current trust anchors for the product story in this repository.</p>
+<h2 id="start-here"><a class="header" href="#start-here">Start Here</a></h2>
+<ul>
+<li><code>examples/agile_board/src/model.rs</code></li>
+<li><code>examples/agile_board/src/main.rs</code></li>
+<li><code>examples/agile_board/tests/http_api.rs</code></li>
+<li><code>examples/ledger_core/src/model.rs</code></li>
+<li><code>examples/ledger_core/tests/http_api.rs</code></li>
+<li><code>examples/pulse_studio/src/model.rs</code></li>
+<li><code>examples/pulse_studio/tests/http_api.rs</code></li>
+<li><code>examples/agentops_mission_control/src/model.rs</code></li>
+<li><code>examples/agentops_mission_control/tests/http_api.rs</code></li>
+<li><code>tests/persist_dx_api_macros_tests.rs</code></li>
+<li><code>tests/dx_contract_compile_tests.rs</code></li>
+<li><code>tests/persist_view_mvp_tests.rs</code></li>
+<li><code>tests/ai_memory_phase1_usage_tests.rs</code></li>
+<li><code>tests/persistent_dsl_tests.rs</code></li>
+<li><code>examples/managed/persistence_demo.rs</code></li>
+</ul>
+<h2 id="what-they-prove"><a class="header" href="#what-they-prove">What They Prove</a></h2>
+<ul>
+<li><code>examples/agile_board</code> shows <code>#[domain]</code>, <code>#[expose_rest]</code>, <code>PersistJson&lt;T&gt;</code>, and <code>serve_domain!(...)</code> in a realistic app.</li>
+<li><code>examples/agile_board/tests/http_api.rs</code> proves list query DSL, idempotent replay, nested graph mutation helpers, and restart durability on the generated HTTP surface.</li>
+<li><code>examples/ledger_core</code> shows the same high-level path in a more command-heavy domain.</li>
+<li><code>examples/ledger_core/tests/http_api.rs</code> proves replay-safe money-like flows, audits, and generated query routes.</li>
+<li><code>examples/pulse_studio</code> shows typed views and product-facing dashboard state.</li>
+<li><code>examples/pulse_studio/tests/http_api.rs</code> proves idempotency, audits, view routes, and query DSL in a commercial-style backend.</li>
+<li><code>examples/agentops_mission_control</code> shows AI-operations workflows and reliability views.</li>
+<li><code>examples/agentops_mission_control/tests/http_api.rs</code> proves replay semantics, auditability, view routes, and restart durability in a workflow-heavy domain.</li>
+<li><code>tests/persist_dx_api_macros_tests.rs</code> proves generated handle methods, REST endpoints, validation, and list query DSL.</li>
+<li><code>tests/dx_contract_compile_tests.rs</code> proves the intended high-level API shape compiles.</li>
+<li><code>tests/persist_view_mvp_tests.rs</code> proves typed views and <code>/views/&lt;name&gt;</code> endpoints.</li>
+<li><code>tests/ai_memory_phase1_usage_tests.rs</code> proves session memory, workflow execution, and timeline replay.</li>
+<li><code>tests/persistent_dsl_tests.rs</code> proves the lower-level <code>#[persistent]</code> command DSL generates command enums and runtime metadata.</li>
+<li><code>examples/managed/persistence_demo.rs</code> proves restart recovery with <code>PersistApp::open_auto(...)</code>.</li>
+</ul>
+<h2 id="recommended-reading-order"><a class="header" href="#recommended-reading-order">Recommended Reading Order</a></h2>
+<ol>
+<li><code>examples/agile_board</code></li>
+<li><code>examples/pulse_studio</code></li>
+<li><code>examples/agentops_mission_control</code></li>
+<li><code>tests/persist_dx_api_macros_tests.rs</code></li>
+<li><code>tests/persist_view_mvp_tests.rs</code></li>
+<li><code>tests/ai_memory_phase1_usage_tests.rs</code></li>
+<li><code>tests/persistent_dsl_tests.rs</code></li>
+</ol>
+<p>If the documentation and the code ever disagree, prefer the code paths listed on this page.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="zero-boilerplate-rest-apis"><a class="header" href="#zero-boilerplate-rest-apis">Zero-Boilerplate REST APIs</a></h1>
+<p>The strongest current RustMemoDB story is domain-first REST generation from plain Rust types and methods.</p>
+<p>The recommended surface for this is:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use rustmemodb::prelude::dx::*;
+<span class="boring">}</span></code></pre>
+<h2 id="a-real-example-shape"><a class="header" href="#a-real-example-shape">A Real Example Shape</a></h2>
+<p>This pattern is exercised by <code>tests/persist_dx_api_macros_tests.rs</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use rustmemodb::prelude::dx::*;
+use serde::{Deserialize, Serialize};
+
+#[domain(table = "macro_boards", schema_version = 1)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct MacroBoard {
+    name: String,
+    active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, DomainError)]
+enum MacroBoardError {
+    #[api_error(status = 422, code = "validation_error")]
+    Validation(String),
+}
+
+impl std::fmt::Display for MacroBoardError {
+    fn fmt(&amp;self, f: &amp;mut std::fmt::Formatter&lt;'_&gt;) -&gt; std::fmt::Result {
+        match self {
+            Self::Validation(message) =&gt; write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for MacroBoardError {}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Validate)]
+struct RenamePayload {
+    #[validate(trim, non_empty, len_max = 32)]
+    name: String,
+}
+
+#[api]
+impl MacroBoard {
+    pub fn new(name: String) -&gt; Self {
+        Self {
+            name,
+            active: false,
+        }
+    }
+
+    #[command(validate = true)]
+    pub fn rename(&amp;mut self, payload: RenamePayload) -&gt; Result&lt;String, MacroBoardError&gt; {
+        self.name = payload.name;
+        Ok(self.name.clone())
+    }
+
+    pub fn activate(&amp;mut self) -&gt; bool {
+        self.active = true;
+        self.active
+    }
+
+    #[query]
+    pub fn is_active(&amp;self) -&gt; bool {
+        self.active
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="bootstrapping-the-router"><a class="header" href="#bootstrapping-the-router">Bootstrapping The Router</a></h2>
+<p>This shape is exercised by <code>examples/agile_board/src/main.rs</code> and <code>tests/dx_contract_compile_tests.rs</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use axum::Router;
+use rustmemodb::prelude::dx::PersistApp;
+
+let app = PersistApp::open_auto("./data").await?;
+let boards_router = rustmemodb::serve_domain!(app, MacroBoard, "boards")?;
+let app = Router::new().nest("/api/boards", boards_router);
+<span class="boring">}</span></code></pre>
+<h2 id="what-you-get-today"><a class="header" href="#what-you-get-today">What You Get Today</a></h2>
+<ul>
+<li><code>POST /api/boards</code></li>
+<li><code>GET /api/boards</code></li>
+<li><code>GET /api/boards/:id</code></li>
+<li><code>DELETE /api/boards/:id</code></li>
+<li><code>POST /api/boards/:id/rename</code></li>
+<li><code>POST /api/boards/:id/activate</code></li>
+<li><code>GET /api/boards/:id/is_active</code></li>
+<li><code>GET /api/boards/:id/_audits</code></li>
+<li><code>GET /api/boards/_openapi.json</code></li>
+</ul>
+<p>Generated list endpoints also accept query params such as:</p>
+<ul>
+<li><code>page</code></li>
+<li><code>per_page</code></li>
+<li><code>sort</code></li>
+<li><code>field=value</code></li>
+<li><code>field__op=value</code></li>
+</ul>
+<p>Command handlers can also use request normalization and idempotency support already built into the runtime.</p>
+<h2 id="when-to-use-api-vs-expose_rest"><a class="header" href="#when-to-use-api-vs-expose_rest">When To Use <code>#[api]</code> vs <code>#[expose_rest]</code></a></h2>
+<ul>
+<li>Use <code>#[expose_rest]</code> for the straightforward model-first case. <code>examples/agile_board</code> and <code>examples/ledger_core</code> follow this path.</li>
+<li>Use <code>#[api]</code> when you want a more explicit contract surface such as registered views. <code>tests/persist_view_mvp_tests.rs</code> and <code>examples/pulse_studio</code> cover that path.</li>
+</ul>
+<h2 id="the-actual-product-story"><a class="header" href="#the-actual-product-story">The Actual Product Story</a></h2>
+<p>The current win is not “generate a SQL app from annotations.”
+It is “define the domain model once, keep business methods near the state, and get the REST layer, audits, and OpenAPI from the same Rust source.”</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="the-invisible-database"><a class="header" href="#the-invisible-database">The Invisible Database</a></h1>
+<p>RustMemoDB is most compelling when persistence feels like part of the application runtime instead of a separate networked system you have to design around on day one.</p>
+<h2 id="what-invisible-means-here"><a class="header" href="#what-invisible-means-here">What “Invisible” Means Here</a></h2>
+<p>The recommended path opens persistence inside the same Rust process as the app:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let app = PersistApp::open_auto(data_dir).await?;
+let boards_router = rustmemodb::serve_domain!(app, Board, "boards")?;
+<span class="boring">}</span></code></pre>
+<p>That changes the developer experience in concrete ways:</p>
+<ul>
+<li>no separate database server for the default path</li>
+<li>one deployable binary plus a data directory</li>
+<li>domain logic, persistence, audits, and generated HTTP stay in one runtime</li>
+</ul>
+<h2 id="what-is-verified-in-this-repository"><a class="header" href="#what-is-verified-in-this-repository">What Is Verified In This Repository</a></h2>
+<ul>
+<li>durable reopen and recovery through <code>PersistApp::open_auto(...)</code></li>
+<li>generated REST routers over persisted domain models</li>
+<li>built-in audit endpoints</li>
+<li>typed views and query DSL on top of persisted state</li>
+</ul>
+<p>You can see those behaviors in:</p>
+<ul>
+<li><code>examples/managed/persistence_demo.rs</code></li>
+<li><code>examples/agile_board</code></li>
+<li><code>examples/ledger_core</code></li>
+<li><code>tests/persist_app_tests.rs</code></li>
+</ul>
+<h2 id="why-this-is-useful"><a class="header" href="#why-this-is-useful">Why This Is Useful</a></h2>
+<p>For many product backends, the hardest part is not raw query power.
+It is operational drag:</p>
+<ul>
+<li>provisioning a separate database early</li>
+<li>keeping route DTOs in sync with the domain model</li>
+<li>maintaining extra persistence plumbing in app code</li>
+</ul>
+<p>RustMemoDB tries to remove that drag for the embedded, service-local case.</p>
+<h2 id="what-this-page-intentionally-does-not-claim"><a class="header" href="#what-this-page-intentionally-does-not-claim">What This Page Intentionally Does Not Claim</a></h2>
+<ul>
+<li>no benchmark table</li>
+<li>no “always faster than Postgres” statement</li>
+<li>no claim that a networked SQL server stops being useful</li>
+</ul>
+<h2 id="when-postgres-still-wins"><a class="header" href="#when-postgres-still-wins">When Postgres Still Wins</a></h2>
+<ul>
+<li>a shared database for many services</li>
+<li>SQL-centric analytics and reporting ecosystems</li>
+<li>cross-language teams writing to the same source of truth</li>
+<li>workloads where external database operations and tooling are already the product standard</li>
+</ul>
+<p>The point of the invisible database story is not “replace every database.”
+It is “for the right class of Rust application, persistence can feel local again.”</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="native-ai-memory"><a class="header" href="#native-ai-memory">Native AI Memory</a></h1>
+<p>RustMemoDB already has a real AI-memory runtime, but the honest current story is session memory, workflow execution, and replay.</p>
+<p>This page is intentionally anchored to the APIs exercised in <code>tests/ai_memory_phase1_usage_tests.rs</code>.</p>
+<h2 id="current-runtime-surface"><a class="header" href="#current-runtime-surface">Current Runtime Surface</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use rustmemodb::prelude::dx::{
+    AgentSessionRuntime,
+    AgentSessionRuntimeConfig,
+    AgentTimelineQuery,
+    AgentWorkflowExecutor,
+    AgentWorkflowStep,
+};
+use serde_json::json;
+use std::sync::Arc;
+
+let mut runtime = AgentSessionRuntime::open(
+    AgentSessionRuntimeConfig::new(&amp;root),
+).await?;
+
+runtime.register_session_command(
+    "set_status",
+    Arc::new(|state, payload, _ctx| {
+        let status = payload
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let fields = state.fields_object_mut()?;
+        fields.insert("status".to_string(), json!(status));
+        state.metadata.version = state.metadata.version.saturating_add(1);
+        Ok(Vec::new())
+    }),
+);
+
+let session_id = runtime
+    .create_session(None, json!({ "status": "new" }))
+    .await?;
+
+let executor = AgentWorkflowExecutor::new(runtime.memory_mut(), session_id.as_str());
+
+let (correlation_id, results) = executor
+    .run_with_generated_correlation(vec![
+        AgentWorkflowStep::new("set_status", json!({ "status": "planning" })),
+        AgentWorkflowStep::new("set_status", json!({ "status": "running" })),
+    ])
+    .await?;
+
+let replay = runtime
+    .replay_envelopes_for_session(
+        session_id.as_str(),
+        &amp;AgentTimelineQuery::new()
+            .with_command_name("set_status")
+            .with_correlation_id(correlation_id),
+    )
+    .await?;
+<span class="boring">}</span></code></pre>
+<h2 id="what-exists-today"><a class="header" href="#what-exists-today">What Exists Today</a></h2>
+<ul>
+<li>Durable session creation.</li>
+<li>Named commands over session state.</li>
+<li>Workflow execution with grouped correlation ids.</li>
+<li>Timeline filtering and replay for a single session.</li>
+<li>A repo-level usage test that exercises the full flow.</li>
+</ul>
+<h2 id="why-this-matters-1"><a class="header" href="#why-this-matters-1">Why This Matters</a></h2>
+<p>If you are building an agent runtime, you usually need more than “store some chat turns.”
+You need:</p>
+<ul>
+<li>current session state</li>
+<li>command history</li>
+<li>replayable timelines</li>
+<li>a place to correlate a workflow run across multiple steps</li>
+</ul>
+<p>That is the current strength of this AI memory surface.</p>
+<h2 id="what-this-page-does-not-claim"><a class="header" href="#what-this-page-does-not-claim">What This Page Does Not Claim</a></h2>
+<ul>
+<li>built-in vector search</li>
+<li>automatic semantic chunking</li>
+<li>a general-purpose RAG stack</li>
+</ul>
+<p>Those can be layered on top, but they are not the verified core API today.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="zero-cost-abstractions"><a class="header" href="#zero-cost-abstractions">Zero-Cost Abstractions</a></h1>
+<p>The most believable RustMemoDB abstraction win today is not “magic SQL with no overhead.”
+It is that your domain model remains the source of truth while the framework generates the repetitive edges around it.</p>
+<h2 id="compile-verified-dx-surface"><a class="header" href="#compile-verified-dx-surface">Compile-Verified DX Surface</a></h2>
+<p><code>tests/dx_contract_compile_tests.rs</code> exercises this shape directly:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let _router = rustmemodb::serve_domain!(
+    app,
+    CompileContractBoard,
+    "compile_contract_boards",
+)?;
+
+let _ = handle
+    .rename(
+        &amp;id,
+        RenameInput {
+            name: "Next".to_string(),
+        },
+    )
+    .await;
+
+let _ = handle.activate(&amp;id).await;
+let _ = handle.view::&lt;CompileContractBoardSummary&gt;();
+
+let _ = handle
+    .query()
+    .where_eq("active", true)
+    .sort_desc("name")
+    .per_page(10)
+    .fetch()
+    .await;
+<span class="boring">}</span></code></pre>
+<h2 id="what-you-do-not-maintain"><a class="header" href="#what-you-do-not-maintain">What You Do Not Maintain</a></h2>
+<ul>
+<li>A separate route layer for every command.</li>
+<li>Hand-written request parsing for every list endpoint.</li>
+<li>Extra repository plumbing for basic persisted-domain operations.</li>
+<li>Parallel view projection code for common read models.</li>
+<li>A second “API model” that drifts away from the business model.</li>
+</ul>
+<h2 id="nested-state-stays-in-rust"><a class="header" href="#nested-state-stays-in-rust">Nested State Stays In Rust</a></h2>
+<p>Examples such as <code>examples/agile_board/src/model.rs</code> keep nested aggregate data inside the model with <code>PersistJson&lt;Vec&lt;...&gt;&gt;</code>.</p>
+<p>That means the code you read is still ordinary Rust domain logic.
+You are not forced into a second storage-specific object graph just to persist owned nested data.</p>
+<h2 id="what-zero-cost-means-here"><a class="header" href="#what-zero-cost-means-here">What “Zero-Cost” Means Here</a></h2>
+<p>In this book, “zero-cost” should be interpreted as a product-DX claim:</p>
+<ul>
+<li>fewer layers</li>
+<li>fewer duplicate schemas</li>
+<li>fewer manual routes</li>
+<li>fewer contract mismatches</li>
+</ul>
+<p>It should not be read as:</p>
+<ul>
+<li>a promise of zero allocations</li>
+<li>a claim that every operation is literally a pointer read</li>
+<li>a statement that raw SQL is the main public API</li>
+</ul>
+<p>The real, verified advantage is that the abstraction removes boilerplate without requiring a second application architecture.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="eternal-runtime-and-command-dsl"><a class="header" href="#eternal-runtime-and-command-dsl">Eternal Runtime and Command DSL</a></h1>
+<p>The <code>#[domain]</code> path is the default product path for new apps.
+RustMemoDB also has a lower-level command/runtime surface for teams that want explicit generated command enums and runtime registration.</p>
+<p>This page is anchored to <code>tests/persistent_dsl_tests.rs</code>.</p>
+<h2 id="a-real-persistent-example"><a class="header" href="#a-real-persistent-example">A Real <code>#[persistent]</code> Example</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[rustmemodb::persistent(schema_version = 2, table = "wallet_dsl")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct WalletModel {
+    #[sql(index)]
+    pub owner: String,
+    #[sql]
+    pub balance: i64,
+}
+
+#[rustmemodb::persistent_impl]
+impl WalletModel {
+    #[rustmemodb::command]
+    pub fn deposit(&amp;mut self, amount: i64) -&gt; rustmemodb::Result&lt;i64&gt; {
+        if amount &lt;= 0 {
+            return Err(rustmemodb::DbError::ExecutionError(
+                "amount must be positive".to_string(),
+            ));
+        }
+        self.balance += amount;
+        Ok(self.balance)
+    }
+
+    #[rustmemodb::command(name = "rename_owner")]
+    pub fn rename_owner(&amp;mut self, owner: String) {
+        self.owner = owner;
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="what-is-verified-today"><a class="header" href="#what-is-verified-today">What Is Verified Today</a></h2>
+<p>The repository tests confirm that this surface generates:</p>
+<ul>
+<li><code>WalletModelPersistentCommand</code></li>
+<li>command names and payload schema metadata</li>
+<li>runtime envelopes from command values</li>
+<li>persisted command application</li>
+<li>runtime command registration</li>
+<li>projection lookup helpers</li>
+</ul>
+<p>The tests also verify schema-version-aware runtime behavior.</p>
+<h2 id="managed-persistence-path"><a class="header" href="#managed-persistence-path">Managed Persistence Path</a></h2>
+<p>If you want lower ceremony without going all the way to the explicit runtime APIs, there is also a managed macro path built around:</p>
+<ul>
+<li><code>PersistModel</code></li>
+<li><code>persist_struct!</code></li>
+<li><code>persist_vec!</code></li>
+<li><code>PersistApp::open_auto(...)</code></li>
+</ul>
+<p><code>examples/managed/persistence_demo.rs</code> shows restart recovery for that path.
+<code>examples/managed/todo_persist_runtime/src/macro_showcase.rs</code> shows command and patch application on managed collections.</p>
+<h2 id="scope-note"><a class="header" href="#scope-note">Scope Note</a></h2>
+<p>This page is about command/runtime internals.
+It is not the first page a new application developer should start with.</p>
+<p>For the default product path, go back to:</p>
+<ul>
+<li><code>#[domain]</code></li>
+<li><code>#[api]</code> or <code>#[expose_rest]</code></li>
+<li><code>PersistApp::open_auto(...)</code></li>
+<li><code>serve_domain!(...)</code></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="the-one-binary-backend"><a class="header" href="#the-one-binary-backend">The One-Binary Backend</a></h1>
+<p>Many teams do not need a large backend architecture to start building a serious product.
+They need one binary, one data directory, one deploy story, and one codebase where the model and API do not drift apart in the first two weeks.</p>
+<p>That is one of RustMemoDB’s strongest product stories.</p>
+<h2 id="the-pitch"><a class="header" href="#the-pitch">The Pitch</a></h2>
+<p>With the high-level DX path, the application shape is small:</p>
+<ol>
+<li>define the model with <code>#[domain(...)]</code></li>
+<li>expose business methods with <code>#[api]</code> or <code>#[expose_rest]</code></li>
+<li>open storage with <code>PersistApp::open_auto(...)</code></li>
+<li>mount the generated router with <code>serve_domain!(...)</code></li>
+</ol>
+<p>The bootstrap can stay this small:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use axum::Router;
+use rustmemodb::prelude::dx::PersistApp;
+
+let app = PersistApp::open_auto(data_dir).await?;
+let boards_router = rustmemodb::serve_domain!(app, Board, "boards")?;
+let app = Router::new().nest("/api/boards", boards_router);
+<span class="boring">}</span></code></pre>
+<p>That is not a toy story.
+That is the actual runtime shape exercised by repository examples such as:</p>
+<ul>
+<li><code>examples/agile_board</code></li>
+<li><code>examples/ledger_core</code></li>
+<li><code>examples/pulse_studio</code></li>
+</ul>
+<p><code>tests/dx_contract_examples_tests.rs</code> also guards that those examples stay on the high-level generated REST path instead of regressing into extra hand-written API plumbing.</p>
+<h2 id="why-this-sells"><a class="header" href="#why-this-sells">Why This Sells</a></h2>
+<p>The one-binary backend story is attractive because it compresses both technical and operational complexity:</p>
+<ul>
+<li>fewer moving parts to explain to a buyer or teammate</li>
+<li>fewer layers that can go stale</li>
+<li>faster setup for demos and pilots</li>
+<li>easier deployment for local-first, edge, and internal product backends</li>
+</ul>
+<p>The real strategic value is not “save a few files.”
+It is that product momentum stays attached to business logic instead of to infrastructure assembly.</p>
+<h2 id="who-should-read-this-as-a-buying-signal"><a class="header" href="#who-should-read-this-as-a-buying-signal">Who Should Read This As a Buying Signal</a></h2>
+<ul>
+<li>founders shipping the first serious backend for a product</li>
+<li>internal platform teams building a service-local control plane</li>
+<li>product engineers who want Axum, persistence, audits, and OpenAPI without a repo-service-handler maze</li>
+<li>teams targeting desktop, local-first, or edge distribution where a separate DB is a tax</li>
+</ul>
+<h2 id="what-to-demo-in-five-minutes"><a class="header" href="#what-to-demo-in-five-minutes">What To Demo In Five Minutes</a></h2>
+<p>If you want to show RustMemoDB’s value to a technical audience, demo this sequence:</p>
+<ol>
+<li>start <code>examples/agile_board</code></li>
+<li>create a board with <code>POST /api/boards</code></li>
+<li>execute a few commands such as <code>add_column</code> and <code>add_task</code></li>
+<li>fetch <code>GET /api/boards/:id/_audits</code></li>
+<li>open <code>GET /api/boards/_openapi.json</code></li>
+</ol>
+<p>That sequence tells a very compact product story:</p>
+<ul>
+<li>model-driven REST</li>
+<li>durable state</li>
+<li>generated contracts</li>
+<li>built-in auditability</li>
+</ul>
+<h2 id="the-deeper-product-message"><a class="header" href="#the-deeper-product-message">The Deeper Product Message</a></h2>
+<p>Most backend stacks begin by teaching the team how to wire layers together.
+RustMemoDB is strongest when it begins by letting the team write product behavior.</p>
+<p>That difference matters.
+People buy infrastructure when it shortens the path to something real.
+The one-binary backend story is RustMemoDB at its most immediately understandable and easiest to love.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="schema-first-speedrun"><a class="header" href="#schema-first-speedrun">Schema-First Speedrun</a></h1>
+<p>Sometimes the best way to win is not to start with a full domain model.
+Sometimes you need a working API this afternoon so the team can unblock a UI, a data import, or an internal workflow.</p>
+<p>RustMemoDB has a real story for that too.</p>
+<h2 id="the-shape"><a class="header" href="#the-shape">The Shape</a></h2>
+<p><code>examples/no_db_api</code> shows a schema-first path where the router is generated from JSON schema files:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let schemas_dir = std::env::current_dir()?.join("schemas");
+let persist = PersistApp::open_auto(data_dir).await?;
+let dynamic_router = persist.serve_json_schema_dir(&amp;schemas_dir).await?;
+let app = axum::Router::new().nest("/api", dynamic_router);
+<span class="boring">}</span></code></pre>
+<p>In that example, <code>examples/no_db_api/schemas/users.json</code> is enough to generate CRUD endpoints such as:</p>
+<ul>
+<li><code>GET /api/users</code></li>
+<li><code>POST /api/users</code></li>
+<li><code>GET /api/users/:id</code></li>
+<li><code>PATCH /api/users/:id</code></li>
+<li><code>DELETE /api/users/:id</code></li>
+<li><code>GET /api/_openapi.json</code></li>
+</ul>
+<h2 id="why-this-is-useful-1"><a class="header" href="#why-this-is-useful-1">Why This Is Useful</a></h2>
+<p>This path is strong when the immediate problem is not domain sophistication.
+The immediate problem is speed.</p>
+<p>Typical good fits:</p>
+<ul>
+<li>internal tools</li>
+<li>admin back offices</li>
+<li>temporary integration surfaces</li>
+<li>proof-of-concept APIs</li>
+<li>early frontend unblockers</li>
+</ul>
+<p>The advantage is not only that the CRUD exists quickly.
+The advantage is that you still stay inside the RustMemoDB runtime, so the path from fast prototype to more intentional product architecture is shorter.</p>
+<h2 id="why-this-promotes-the-product-well"><a class="header" href="#why-this-promotes-the-product-well">Why This Promotes the Product Well</a></h2>
+<p>Technical buyers like seeing that a platform has more than one on-ramp.</p>
+<p>The domain-first path proves product depth.
+The schema-first path proves practical empathy.</p>
+<p>Together, they make a stronger commercial story:</p>
+<ul>
+<li>start with schemas when speed matters most</li>
+<li>move to <code>#[domain]</code> when behavior and invariants become the product</li>
+</ul>
+<p>That is a far better adoption funnel than forcing every user to commit to the most sophisticated model on day one.</p>
+<h2 id="a-strong-demo-narrative"><a class="header" href="#a-strong-demo-narrative">A Strong Demo Narrative</a></h2>
+<p>If you are showing the project to a team, this chapter gives you a great progression:</p>
+<ol>
+<li>show a working CRUD API from JSON schema</li>
+<li>show generated OpenAPI</li>
+<li>explain that the next step is not a rewrite to a different platform</li>
+<li>show how the same runtime also supports the richer <code>#[domain]</code> story</li>
+</ol>
+<p>That tells people the product is flexible without being incoherent.</p>
+<h2 id="the-right-promise"><a class="header" href="#the-right-promise">The Right Promise</a></h2>
+<p>The schema-first speedrun is not the whole RustMemoDB story.
+It is a wedge.</p>
+<p>It tells a new user:</p>
+<p>“You can get value immediately, and you do not have to leave the product when your requirements become more serious.”</p>
+<p>That is exactly the kind of chapter that helps a project convert curiosity into usage.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="rich-product-state"><a class="header" href="#rich-product-state">Rich Product State</a></h1>
+<p>Most real products are not just rows in separate tables.
+They are workspaces, boards, campaigns, ledgers, timelines, tasks, and nested state that changes together for business reasons.</p>
+<p>RustMemoDB becomes especially compelling when you model that product state directly instead of flattening it too early into infrastructure-shaped code.</p>
+<h2 id="the-important-pattern"><a class="header" href="#the-important-pattern">The Important Pattern</a></h2>
+<p>Examples in this repository keep aggregate-owned nested state inside the model with <code>PersistJson&lt;T&gt;</code>.</p>
+<p>You can see that pattern in:</p>
+<ul>
+<li><code>examples/agile_board/src/model.rs</code></li>
+<li><code>examples/ledger_core/src/model.rs</code></li>
+<li><code>examples/pulse_studio/src/model.rs</code></li>
+</ul>
+<p>That means a model can own things like:</p>
+<ul>
+<li>columns and tasks</li>
+<li>channels and campaigns</li>
+<li>accounts and transaction history</li>
+</ul>
+<p>without forcing the application to split everything into a maze of repositories, join DTOs, and projection glue on day one.</p>
+<h2 id="why-this-matters-2"><a class="header" href="#why-this-matters-2">Why This Matters</a></h2>
+<p>When product state is rich, the usual architecture penalty appears quickly:</p>
+<ul>
+<li>one concept becomes many storage tables</li>
+<li>business changes require edits across handlers, services, repositories, and mappers</li>
+<li>nested updates become orchestration problems instead of model behavior</li>
+</ul>
+<p>RustMemoDB pushes back on that drift by letting the domain stay central.</p>
+<p>In <code>agile_board</code>, commands such as <code>add_column</code>, <code>add_task</code>, <code>move_task</code>, and <code>update_task</code> live where a product engineer expects them to live: on the board model.</p>
+<p>That is more than aesthetics.
+It is a development-speed advantage.</p>
+<h2 id="why-it-is-a-great-product-story"><a class="header" href="#why-it-is-a-great-product-story">Why It Is A Great Product Story</a></h2>
+<p>A technical audience will immediately understand the emotional payoff of this chapter:</p>
+<ul>
+<li>less ORM ceremony</li>
+<li>fewer translation layers</li>
+<li>easier feature additions</li>
+<li>a model that still reads like the product</li>
+</ul>
+<p>This is the kind of story that gets nods during architecture reviews because it mirrors how teams actually feel pain in medium-complexity backends.</p>
+<h2 id="what-to-show"><a class="header" href="#what-to-show">What To Show</a></h2>
+<p>If you want to sell this chapter in a demo or talk:</p>
+<ol>
+<li>open <code>examples/agile_board/src/model.rs</code></li>
+<li>point at the nested <code>PersistJson&lt;Vec&lt;...&gt;&gt;</code> state</li>
+<li>show several commands on the same aggregate</li>
+<li>explain that REST is generated from those methods</li>
+<li>show the corresponding HTTP flow from the example README or tests</li>
+</ol>
+<p>That demonstration lands because the code looks like product logic, not like persistence choreography.</p>
+<h2 id="the-strategic-message"><a class="header" href="#the-strategic-message">The Strategic Message</a></h2>
+<p>Many backend tools are fine at simple CRUD.
+The harder test is whether they still feel good when the product starts to develop shape.</p>
+<p>RustMemoDB should keep leaning into this chapter because it tells a stronger story than generic database claims:</p>
+<p>“When your product becomes richer, your code does not have to become uglier.”</p>
+<p>That is memorable.
+And it is a value proposition grounded in code that already exists in this repository.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="reliability-you-can-demo"><a class="header" href="#reliability-you-can-demo">Reliability You Can Demo</a></h1>
+<p>A product backend does not become persuasive when it only creates records.
+It becomes persuasive when it handles retries, errors, audits, and invariants without looking fragile.</p>
+<p>RustMemoDB already has a strong story here, and it deserves to be told as a first-class chapter.</p>
+<h2 id="the-high-trust-ingredients"><a class="header" href="#the-high-trust-ingredients">The High-Trust Ingredients</a></h2>
+<p>RustMemoDB already has a cluster of features that matter in real product environments:</p>
+<ul>
+<li>runtime-level command identity and replay semantics</li>
+<li>generated REST support for <code>Idempotency-Key</code></li>
+<li>built-in audit endpoints at <code>/:id/_audits</code></li>
+<li>generated OpenAPI</li>
+<li>generated validation on command payloads</li>
+<li>declarative HTTP error mapping through <code>#[derive(DomainError)]</code></li>
+</ul>
+<p>The clearest proof anchors in this repository are:</p>
+<ul>
+<li><code>tests/persist_runtime_tests.rs</code></li>
+<li><code>examples/agile_board/tests/http_api.rs</code></li>
+<li><code>examples/ledger_core/tests/http_api.rs</code></li>
+<li><code>examples/pulse_studio</code></li>
+<li><code>examples/agentops_mission_control</code></li>
+<li><code>tests/persist_dx_api_macros_tests.rs</code></li>
+</ul>
+<h2 id="why-this-changes-the-conversation"><a class="header" href="#why-this-changes-the-conversation">Why This Changes The Conversation</a></h2>
+<p>Without these pieces, a “fast backend” story can sound like a prototype story.
+With these pieces, it starts sounding production-aware.</p>
+<p>That shift matters if you want to promote the project to serious teams.</p>
+<p>For example:</p>
+<ul>
+<li><code>agile_board</code> shows idempotent replay on a simple product command surface</li>
+<li><code>ledger_core</code> shows transfer replay without double spend</li>
+<li><code>pulse_studio</code> makes budget and lifecycle rules visible</li>
+<li><code>agentops_mission_control</code> shows retries and auditability in an AI-operations setting</li>
+<li>generated validation makes bad payload behavior predictable</li>
+<li>generated OpenAPI turns the runtime into something clients can integrate with immediately</li>
+</ul>
+<p>This is how the product stops sounding like a macro trick and starts sounding like a platform choice.</p>
+<h2 id="a-demo-sequence-that-sells-the-product"><a class="header" href="#a-demo-sequence-that-sells-the-product">A Demo Sequence That Sells The Product</a></h2>
+<p>Here is a particularly strong flow:</p>
+<ol>
+<li>execute a command with <code>Idempotency-Key</code></li>
+<li>replay the same command with the same key</li>
+<li>trigger either a clean <code>422</code> validation failure or a domain-level <code>409</code></li>
+<li>fetch the audit trail</li>
+<li>open the generated OpenAPI document</li>
+<li>show a typed view or list endpoint that reflects the resulting state</li>
+</ol>
+<p>That sequence says:</p>
+<ul>
+<li>retries are expected</li>
+<li>the platform has discipline</li>
+<li>the platform has memory</li>
+<li>the platform has contracts</li>
+<li>the platform has operational dignity</li>
+</ul>
+<p>That is a very good sales story for technical buyers.</p>
+<h2 id="why-this-chapter-is-important"><a class="header" href="#why-this-chapter-is-important">Why This Chapter Is Important</a></h2>
+<p>A lot of infrastructure projects talk only about write speed or convenience.
+That is not enough.</p>
+<p>Buyers also want confidence that the system respects the ugly realities of production:</p>
+<ul>
+<li>clients retry</li>
+<li>invariants fail</li>
+<li>teams need to explain what happened</li>
+<li>APIs need discoverable contracts</li>
+<li>command execution needs traceable semantics</li>
+</ul>
+<p>RustMemoDB already has enough proof in-repo to tell that story honestly.
+This chapter should make it easier for a reader to see that value quickly.</p>
+<h2 id="the-best-one-line-takeaway"><a class="header" href="#the-best-one-line-takeaway">The Best One-Line Takeaway</a></h2>
+<p>RustMemoDB is not just about generating endpoints faster.
+It is about generating endpoints that behave like product-grade commands instead of disposable demo handlers.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="views-and-ai-control-planes"><a class="header" href="#views-and-ai-control-planes">Views and AI Control Planes</a></h1>
+<p>The strongest product demos are not always the CRUD endpoints.
+They are the dashboards, summaries, reliability views, and replay flows that make a system feel alive.</p>
+<p>RustMemoDB has a very good story here because typed views and AI-runtime surfaces already exist in the repository.</p>
+<h2 id="typed-views-make-the-product-feel-real"><a class="header" href="#typed-views-make-the-product-feel-real">Typed Views Make The Product Feel Real</a></h2>
+<p><code>tests/persist_view_mvp_tests.rs</code> verifies typed <code>PersistView</code> behavior and generated <code>/views/&lt;name&gt;</code> endpoints.</p>
+<p>Examples such as <code>pulse_studio</code> and <code>agentops_mission_control</code> show why this matters:</p>
+<ul>
+<li>dashboards are part of the product</li>
+<li>operational summaries are part of the product</li>
+<li>reliability views are part of the product</li>
+</ul>
+<p>When a model declares views directly, the read side stops looking like an afterthought.</p>
+<p>That is a powerful idea for product teams because it keeps the API story coherent:</p>
+<ul>
+<li>commands mutate the domain</li>
+<li>queries answer focused questions</li>
+<li>views expose stable, product-facing summaries</li>
+</ul>
+<h2 id="agentops-is-a-great-showcase"><a class="header" href="#agentops-is-a-great-showcase">AgentOps Is A Great Showcase</a></h2>
+<p><code>examples/agentops_mission_control</code> is especially valuable because it feels modern and commercially legible.</p>
+<p>It demonstrates:</p>
+<ul>
+<li>workspaces for AI operations</li>
+<li>generated command APIs for runs, handoffs, and incidents</li>
+<li>typed views for operations and reliability</li>
+<li>built-in audits and product-facing operational surfaces</li>
+</ul>
+<p>This is exactly the kind of example that can make a prospect think:</p>
+<p>“This is not just a persistence crate. This could actually be the runtime for a real product surface.”</p>
+<h2 id="the-ai-memory-companion-story"><a class="header" href="#the-ai-memory-companion-story">The AI Memory Companion Story</a></h2>
+<p>RustMemoDB also has an AI-memory runtime exercised by <code>tests/ai_memory_phase1_usage_tests.rs</code>.</p>
+<p>That surface gives you:</p>
+<ul>
+<li><code>AgentSessionRuntime</code></li>
+<li><code>AgentWorkflowExecutor</code></li>
+<li><code>AgentTimelineQuery</code></li>
+</ul>
+<p>This is the honest current story:</p>
+<ul>
+<li>session state</li>
+<li>workflow steps</li>
+<li>correlation ids</li>
+<li>replayable timelines</li>
+</ul>
+<p>That is already useful for agent products, support copilots, and internal AI operations tooling.</p>
+<h2 id="why-this-chapter-helps-promote-the-product"><a class="header" href="#why-this-chapter-helps-promote-the-product">Why This Chapter Helps Promote The Product</a></h2>
+<p>Many infrastructure tools feel abstract until you show the read models and operator workflows.</p>
+<p>This chapter changes that.
+It helps a reader picture RustMemoDB in categories that are easy to value:</p>
+<ul>
+<li>campaign dashboards</li>
+<li>operations consoles</li>
+<li>reliability summaries</li>
+<li>AI mission control</li>
+<li>incident replay</li>
+</ul>
+<p>These are emotionally strong use cases because they look like product surfaces, not framework internals.</p>
+<h2 id="the-right-closing-message"><a class="header" href="#the-right-closing-message">The Right Closing Message</a></h2>
+<p>RustMemoDB should keep leaning into this idea:</p>
+<p>“The product is not complete when writes work. The product becomes compelling when reads, views, and operator workflows are first-class too.”</p>
+<p>That is where the platform starts to feel ambitious in the right way.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="persistview-read-models"><a class="header" href="#persistview-read-models">PersistView Read Models</a></h1>
+<p>One of the easiest ways to make RustMemoDB feel like a product platform instead of a persistence library is to show typed views.</p>
+<p>Views let you keep product-facing read models close to the domain model and expose them as stable endpoints without writing separate projection handlers by hand.</p>
+<h2 id="two-real-shapes"><a class="header" href="#two-real-shapes">Two Real Shapes</a></h2>
+<p><code>tests/persist_view_mvp_tests.rs</code> exercises both of the current view styles:</p>
+<ol>
+<li>a custom computed view</li>
+<li>a metric-derived view</li>
+</ol>
+<h3 id="custom-computed-view"><a class="header" href="#custom-computed-view">Custom Computed View</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PersistView)]
+#[persist_view(model = ViewBoard, name = "status", compute = compute_status_view)]
+struct ViewBoardStatus {
+    status: String,
+}
+
+fn compute_status_view(model: &amp;ViewBoard) -&gt; ViewBoardStatus {
+    ViewBoardStatus {
+        status: if model.active {
+            "active".to_string()
+        } else {
+            "inactive".to_string()
+        },
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="metric-derived-view"><a class="header" href="#metric-derived-view">Metric-Derived View</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PersistView)]
+#[persist_view(model = MetricsWorkspace, name = "kpis")]
+struct MetricsWorkspaceKpis {
+    #[view_metric(kind = "copy", source = "name")]
+    workspace_name: String,
+    #[view_metric(kind = "count", source = "channels")]
+    channels_total: i64,
+    #[view_metric(kind = "count", source = "campaigns")]
+    campaigns_total: i64,
+    #[view_metric(kind = "sum", source = "campaigns", field = "spent_minor")]
+    spent_total_minor: i64,
+}
+<span class="boring">}</span></code></pre>
+<h2 id="how-views-get-exposed"><a class="header" href="#how-views-get-exposed">How Views Get Exposed</a></h2>
+<p>You can surface them in three complementary ways:</p>
+<ol>
+<li>register a typed handle with <code>app.register_view::&lt;Model, View&gt;(&amp;handle)</code></li>
+<li>create a handle-side accessor with <code>handle.view::&lt;View&gt;()</code></li>
+<li>auto-mount REST endpoints through <code>#[api(views(...))]</code> or <code>#[expose_rest(views(...))]</code></li>
+</ol>
+<p>The generated HTTP shape is straightforward:</p>
+<ul>
+<li><code>GET /:id/views/summary</code></li>
+<li><code>GET /:id/views/status</code></li>
+<li><code>GET /:id/views/dashboard</code></li>
+</ul>
+<p><code>tests/persist_view_mvp_tests.rs</code> verifies that these routes are generated and included in OpenAPI.</p>
+<h2 id="why-this-helps-sell-the-product"><a class="header" href="#why-this-helps-sell-the-product">Why This Helps Sell The Product</a></h2>
+<p>Typed views are a powerful demo surface because they show that RustMemoDB is not just about write commands.</p>
+<p>They show:</p>
+<ul>
+<li>stable product-facing summaries</li>
+<li>dashboards without hand-written projection plumbing</li>
+<li>a cleaner split between domain mutation and product read models</li>
+</ul>
+<p>This becomes especially persuasive in examples such as:</p>
+<ul>
+<li><code>examples/pulse_studio</code></li>
+<li><code>examples/agentops_mission_control</code></li>
+</ul>
+<p>Those examples feel more like real products because the dashboard layer is part of the same model story.</p>
+<h2 id="recommended-demo"><a class="header" href="#recommended-demo">Recommended Demo</a></h2>
+<p>If you want a crisp demo for a technical audience:</p>
+<ol>
+<li>create an entity</li>
+<li>change it with one or two commands</li>
+<li>fetch <code>GET /:id/views/&lt;name&gt;</code></li>
+<li>show that the view changed without any custom handler or projection service</li>
+<li>open <code>/_openapi.json</code> and show that the view route is documented</li>
+</ol>
+<p>That sequence lands quickly because it proves the read side is first-class.</p>
+<h2 id="best-mental-model"><a class="header" href="#best-mental-model">Best Mental Model</a></h2>
+<p>Think of <code>PersistView</code> as a typed product read model that stays anchored to the domain instead of drifting into a parallel read stack too early.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="query-dsl-and-nested-graph-ops"><a class="header" href="#query-dsl-and-nested-graph-ops">Query DSL and Nested Graph Ops</a></h1>
+<p>RustMemoDB gets much more compelling when you show that it can do more than plain CRUD without forcing the user into a large query framework or hand-written traversal code.</p>
+<p>Two repo-level surfaces matter here:</p>
+<ol>
+<li>the declarative query DSL</li>
+<li>the nested graph mutation helpers</li>
+</ol>
+<p><code>tests/persist_query_nested_dsl_tests.rs</code> exercises both directly.</p>
+<h2 id="declarative-query-dsl"><a class="header" href="#declarative-query-dsl">Declarative Query DSL</a></h2>
+<p>Handle-side queries can stay concise and readable:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let page = workspaces
+    .query()
+    .where_eq("tier", "pro")
+    .where_eq("active", true)
+    .where_gte("score", 60)
+    .sort_desc("score")
+    .page(1)
+    .per_page(2)
+    .fetch()
+    .await;
+<span class="boring">}</span></code></pre>
+<p>That test verifies:</p>
+<ul>
+<li>filtering</li>
+<li>sorting</li>
+<li>pagination</li>
+<li>result totals and total pages</li>
+</ul>
+<p>The generated REST list endpoint also accepts HTTP query parameters with the same intent:</p>
+<ul>
+<li><code>page</code></li>
+<li><code>per_page</code></li>
+<li><code>sort</code></li>
+<li><code>field=value</code></li>
+<li><code>field__op=value</code></li>
+</ul>
+<p>Examples such as <code>agile_board</code>, <code>ledger_core</code>, <code>pulse_studio</code>, and <code>agentops_mission_control</code> all lean on this path.</p>
+<h2 id="nested-graph-ops"><a class="header" href="#nested-graph-ops">Nested Graph Ops</a></h2>
+<p>For aggregates with owned nested structures, the handle exposes high-level graph mutation helpers:</p>
+<ul>
+<li><code>nested_push(...)</code></li>
+<li><code>nested_patch_where_eq(...)</code></li>
+<li><code>nested_move_where_eq(...)</code></li>
+<li><code>nested_remove_where_eq(...)</code></li>
+</ul>
+<p>Example from <code>tests/persist_query_nested_dsl_tests.rs</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>boards
+    .nested_move_where_eq(
+        &amp;board_id,
+        "columns.0.tasks",
+        "columns.1.tasks",
+        "id",
+        "task-2",
+    )
+    .await
+    .expect("move task-2");
+<span class="boring">}</span></code></pre>
+<p>That is a very strong product signal because it solves a real pain point:
+teams often want aggregate-shaped state, but they do not want to write manual loops and patch choreography every time the graph changes.</p>
+<h2 id="why-this-matters-for-product-positioning"><a class="header" href="#why-this-matters-for-product-positioning">Why This Matters For Product Positioning</a></h2>
+<p>This chapter promotes RustMemoDB well because it shows a middle ground:</p>
+<ul>
+<li>more capable than bare CRUD</li>
+<li>less heavy than a custom persistence orchestration layer</li>
+<li>still readable by product engineers</li>
+</ul>
+<p>It tells a prospective user:</p>
+<p>“You can keep the product model rich without paying for it in handler and repository complexity.”</p>
+<h2 id="great-demo-sequence"><a class="header" href="#great-demo-sequence">Great Demo Sequence</a></h2>
+<ol>
+<li>create a nested aggregate</li>
+<li>append nested items with <code>nested_push</code></li>
+<li>move or patch one nested item</li>
+<li>fetch the aggregate again</li>
+<li>run a filtered/sorted query over another model</li>
+</ol>
+<p>That single demo proves both mutation depth and query ergonomics.</p>
+<h2 id="best-audience-for-this-chapter"><a class="header" href="#best-audience-for-this-chapter">Best Audience For This Chapter</a></h2>
+<ul>
+<li>teams building workspace-style products</li>
+<li>boards, ledgers, campaign systems, and operational control planes</li>
+<li>any product where the domain naturally owns a nested graph</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="contracts-audits-and-idempotency"><a class="header" href="#contracts-audits-and-idempotency">Contracts, Audits, and Idempotency</a></h1>
+<p>The fastest way to make a generated API feel serious is to show that it has contracts, memory, and retry discipline.</p>
+<p>RustMemoDB already has all three.</p>
+<h2 id="the-three-surfaces"><a class="header" href="#the-three-surfaces">The Three Surfaces</a></h2>
+<h3 id="openapi"><a class="header" href="#openapi">OpenAPI</a></h3>
+<p>Generated routers expose an OpenAPI document:</p>
+<ul>
+<li><code>GET /api/boards/_openapi.json</code></li>
+<li><code>GET /api/workspaces/_openapi.json</code></li>
+<li><code>GET /api/ledgers/_openapi.json</code></li>
+</ul>
+<p>This matters because the project stops being “a nice internal abstraction” and starts being something clients can inspect, evaluate, and integrate against.</p>
+<h3 id="audits"><a class="header" href="#audits">Audits</a></h3>
+<p>Generated routers also expose audit endpoints:</p>
+<ul>
+<li><code>GET /:id/_audits</code></li>
+</ul>
+<p>That is one of the strongest product-level trust signals in the repository because it makes command history visible without manual audit infrastructure.</p>
+<h3 id="idempotency"><a class="header" href="#idempotency">Idempotency</a></h3>
+<p>Generated command endpoints support <code>Idempotency-Key</code>, and the repository examples now verify replay behavior on product-facing flows such as:</p>
+<ul>
+<li><code>examples/agile_board/tests/http_api.rs</code></li>
+<li><code>examples/ledger_core/tests/http_api.rs</code></li>
+<li><code>examples/pulse_studio/tests/http_api.rs</code></li>
+<li><code>examples/agentops_mission_control/tests/http_api.rs</code></li>
+</ul>
+<p>This is where the platform starts feeling ready for real client behavior instead of idealized demo traffic.</p>
+<h2 id="why-this-chapter-promotes-the-product"><a class="header" href="#why-this-chapter-promotes-the-product">Why This Chapter Promotes The Product</a></h2>
+<p>Many tools can generate endpoints.
+Fewer can generate endpoints that feel trustworthy when someone asks:</p>
+<ul>
+<li>what is the contract?</li>
+<li>what happened before?</li>
+<li>what happens if the client retries?</li>
+</ul>
+<p>Those are product questions, not just implementation questions.</p>
+<p>RustMemoDB answers them with surfaces that are easy to demonstrate.</p>
+<h2 id="the-best-demo-sequence"><a class="header" href="#the-best-demo-sequence">The Best Demo Sequence</a></h2>
+<ol>
+<li>execute a command with <code>Idempotency-Key</code></li>
+<li>replay the same request with the same key</li>
+<li>show the stable response</li>
+<li>fetch <code>/:id/_audits</code></li>
+<li>open <code>/_openapi.json</code></li>
+</ol>
+<p>That sequence sells extremely well because it demonstrates:</p>
+<ul>
+<li>generated contract</li>
+<li>repeatable command semantics</li>
+<li>observable history</li>
+</ul>
+<h2 id="why-this-matters-strategically"><a class="header" href="#why-this-matters-strategically">Why This Matters Strategically</a></h2>
+<p>This is the difference between “fast CRUD” and “product runtime.”</p>
+<p>When OpenAPI, audits, and idempotency are visible from the start, the project feels much closer to something a team can build on with confidence.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="pulsestudio-walkthrough"><a class="header" href="#pulsestudio-walkthrough">PulseStudio Walkthrough</a></h1>
+<p><code>PulseStudio</code> is one of the strongest showcases in the repository because it looks like a modern growth or marketing product, not a database tutorial.</p>
+<p>It demonstrates:</p>
+<ul>
+<li>workspaces</li>
+<li>channel onboarding</li>
+<li>campaign launch</li>
+<li>spend tracking</li>
+<li>dashboard reads</li>
+<li>conflict handling</li>
+<li>idempotent command replay</li>
+</ul>
+<h2 id="why-it-is-so-good-for-the-product-story"><a class="header" href="#why-it-is-so-good-for-the-product-story">Why It Is So Good For The Product Story</a></h2>
+<p>This example stresses the exact areas that usually become painful in backend development:</p>
+<ul>
+<li>business invariants</li>
+<li>retries</li>
+<li>dashboards</li>
+<li>nested product state</li>
+<li>money-like command safety</li>
+</ul>
+<p>In a conventional stack, this kind of example usually needs a lot of route, DTO, transaction, and repository ceremony before it starts feeling safe.</p>
+<p>In <code>PulseStudio</code>, the bootstrap still stays minimal:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let app = PersistApp::open_auto(data_dir.clone()).await?;
+let workspaces_router = rustmemodb::serve_domain!(app, PulseWorkspace, "workspaces")?;
+let app = Router::new().nest("/api/workspaces", workspaces_router);
+<span class="boring">}</span></code></pre>
+<h2 id="the-product-moments-to-show"><a class="header" href="#the-product-moments-to-show">The Product Moments To Show</a></h2>
+<p>The best walkthrough is not “look at this code.”
+It is “watch how the product behaves.”</p>
+<p>Recommended flow:</p>
+<ol>
+<li><code>POST /api/workspaces</code></li>
+<li><code>POST /api/workspaces/:id/add_channel</code></li>
+<li>replay <code>add_channel</code> with the same <code>Idempotency-Key</code></li>
+<li><code>POST /api/workspaces/:id/launch_campaign</code></li>
+<li><code>POST /api/workspaces/:id/record_spend</code></li>
+<li>intentionally overspend and show <code>409 budget_exceeded</code></li>
+<li>fetch <code>GET /api/workspaces/:id/workspace_dashboard</code></li>
+<li>fetch <code>GET /api/workspaces/:id/views/dashboard</code></li>
+<li>open <code>GET /api/workspaces/_openapi.json</code></li>
+</ol>
+<p>That demo tells a very strong story:</p>
+<ul>
+<li>commands are product-shaped</li>
+<li>retries are handled</li>
+<li>conflicts are explicit</li>
+<li>read models are built in</li>
+<li>contracts are inspectable</li>
+</ul>
+<h2 id="why-buyers-understand-it-quickly"><a class="header" href="#why-buyers-understand-it-quickly">Why Buyers Understand It Quickly</a></h2>
+<p>People immediately understand what a campaign, budget, and dashboard are.</p>
+<p>That makes <code>PulseStudio</code> valuable as a promotional example because the user does not need to decode an abstract domain before they appreciate the engineering value.</p>
+<h2 id="what-it-proves-technically"><a class="header" href="#what-it-proves-technically">What It Proves Technically</a></h2>
+<p>The example and its tests prove a stack of things at once:</p>
+<ul>
+<li>generated REST from domain methods</li>
+<li><code>PersistJson&lt;T&gt;</code> for owned nested product state</li>
+<li>generated list query DSL</li>
+<li>typed dashboard views</li>
+<li>domain error mapping</li>
+<li>idempotent replay on command endpoints</li>
+</ul>
+<p>This is exactly the kind of example that helps a project feel commercially legible.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="agentops-walkthrough"><a class="header" href="#agentops-walkthrough">AgentOps Walkthrough</a></h1>
+<p><code>agentops_mission_control</code> is the example that makes RustMemoDB look modern.</p>
+<p>It is not only about persistence.
+It is about running an AI-operations control plane with:</p>
+<ul>
+<li>agents</li>
+<li>missions</li>
+<li>mission runs</li>
+<li>handoffs</li>
+<li>incidents</li>
+<li>operational views</li>
+</ul>
+<h2 id="why-this-example-matters"><a class="header" href="#why-this-example-matters">Why This Example Matters</a></h2>
+<p>This showcase is especially strong because it turns several product ideas into one coherent runtime story:</p>
+<ul>
+<li>command-heavy workflow</li>
+<li>reliability dashboards</li>
+<li>audit trail</li>
+<li>generated OpenAPI</li>
+<li>idempotent command replay</li>
+<li>domain validation</li>
+</ul>
+<p>The result is a demo that feels closer to an operator console than to a toy CRUD API.</p>
+<h2 id="minimal-bootstrap-large-surface"><a class="header" href="#minimal-bootstrap-large-surface">Minimal Bootstrap, Large Surface</a></h2>
+<p>The app startup is still small:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let app = PersistApp::open_auto(data_dir).await?;
+let mission_control_router = rustmemodb::serve_domain!(app, AgentOpsWorkspace, "workspaces")?;
+let app = Router::new().nest("/api/workspaces", mission_control_router);
+<span class="boring">}</span></code></pre>
+<p>That is a good promotional contrast:
+the runtime surface looks large, but the app shell does not become large with it.</p>
+<h2 id="the-best-walkthrough"><a class="header" href="#the-best-walkthrough">The Best Walkthrough</a></h2>
+<ol>
+<li>create a workspace</li>
+<li>register two agents</li>
+<li>create and activate a mission</li>
+<li>start a run</li>
+<li>append a run step with <code>Idempotency-Key</code></li>
+<li>replay the same append request and show stable behavior</li>
+<li>hand off the run to another agent</li>
+<li>fetch <code>GET /api/workspaces/:id/views/ops_dashboard</code></li>
+<li>fetch <code>GET /api/workspaces/:id/views/reliability</code></li>
+<li>fetch <code>GET /api/workspaces/:id/_audits</code></li>
+</ol>
+<p>This walkthrough is powerful because it presents RustMemoDB as a runtime for an AI product surface, not just a storage mechanism.</p>
+<h2 id="why-it-promotes-the-project-well"><a class="header" href="#why-it-promotes-the-project-well">Why It Promotes The Project Well</a></h2>
+<p>For a technical buyer, this example answers several questions at once:</p>
+<ul>
+<li>can the framework support workflow-style products?</li>
+<li>can it expose modern operator dashboards?</li>
+<li>can it handle retries and audits?</li>
+<li>can it stay readable even when the domain is no longer simple?</li>
+</ul>
+<p>That is why this example should stay prominent in the book.</p>
+<h2 id="best-message-to-leave-with"><a class="header" href="#best-message-to-leave-with">Best Message To Leave With</a></h2>
+<p>If <code>PulseStudio</code> proves RustMemoDB can model business products, <code>AgentOps Mission Control</code> proves it can model modern operational products too.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="where-rustmemodb-wins-first"><a class="header" href="#where-rustmemodb-wins-first">Where RustMemoDB Wins First</a></h1>
+<p>The fastest way to understand RustMemoDB is not to ask whether it can replace every database stack.
+The right question is where it wins first.</p>
+<p>That matters because strong products rarely spread by trying to solve every problem on day one.
+They spread by being obviously better for a clear first wedge.</p>
+<h2 id="the-best-first-wedges"><a class="header" href="#the-best-first-wedges">The Best First Wedges</a></h2>
+<h3 id="one-binary-product-backends"><a class="header" href="#one-binary-product-backends">One-Binary Product Backends</a></h3>
+<p>If your application wants:</p>
+<ul>
+<li>one Rust service</li>
+<li>one data directory</li>
+<li>generated REST</li>
+<li>no separate database service in the first phase</li>
+</ul>
+<p>then RustMemoDB is unusually strong.</p>
+<p>The clearest examples are:</p>
+<ul>
+<li><code>examples/agile_board</code></li>
+<li><code>examples/ledger_core</code></li>
+<li><code>examples/pulse_studio</code></li>
+</ul>
+<h3 id="internal-tools-and-control-planes"><a class="header" href="#internal-tools-and-control-planes">Internal Tools and Control Planes</a></h3>
+<p>RustMemoDB is strong when the product is really an operational surface:</p>
+<ul>
+<li>a team console</li>
+<li>a workflow dashboard</li>
+<li>a mission control app</li>
+<li>a growth or campaign control plane</li>
+</ul>
+<p>That is why <code>examples/pulse_studio</code> and <code>examples/agentops_mission_control</code> are such important showcases.</p>
+<h3 id="local-first-edge-and-service-local-state"><a class="header" href="#local-first-edge-and-service-local-state">Local-First, Edge, and Service-Local State</a></h3>
+<p>When the app and the persistence are supposed to live together, RustMemoDB gets more compelling:</p>
+<ul>
+<li>desktop tools</li>
+<li>edge services</li>
+<li>local-first prototypes</li>
+<li>service-owned state that does not need to be shared across many unrelated applications</li>
+</ul>
+<h2 id="the-wrong-starting-question"><a class="header" href="#the-wrong-starting-question">The Wrong Starting Question</a></h2>
+<p>Do not start by asking:</p>
+<p>“Can this be our forever shared database for every team, every language, and every analytics workflow?”</p>
+<p>That is not the sharpest first product story.</p>
+<p>Start by asking:</p>
+<p>“Can this remove infrastructure drag and architecture sprawl for a product surface we want to ship quickly and keep coherent?”</p>
+<p>That is where RustMemoDB is easier to love.</p>
+<h2 id="why-this-helps-promote-the-project"><a class="header" href="#why-this-helps-promote-the-project">Why This Helps Promote The Project</a></h2>
+<p>A lot of technically interesting tools fail because they do not clearly define their first win.</p>
+<p>This chapter exists so the reader can immediately recognize:</p>
+<ul>
+<li>whether they are in the sweet spot</li>
+<li>whether they should try the product now</li>
+<li>which example in the repository looks most like their use case</li>
+</ul>
+<h2 id="the-best-mapping-from-need-to-example"><a class="header" href="#the-best-mapping-from-need-to-example">The Best Mapping From Need to Example</a></h2>
+<ul>
+<li>Need a simple generated REST product backend:
+<code>examples/agile_board</code></li>
+<li>Need money-like workflow invariants:
+<code>examples/ledger_core</code></li>
+<li>Need dashboards, views, and idempotent workflow commands:
+<code>examples/pulse_studio</code></li>
+<li>Need a modern AI operations control plane:
+<code>examples/agentops_mission_control</code></li>
+<li>Need a schema-first on-ramp:
+<code>examples/no_db_api</code></li>
+</ul>
+<h2 id="the-core-message"><a class="header" href="#the-core-message">The Core Message</a></h2>
+<p>RustMemoDB wins first where app logic, product surface, and persistence should live close together.
+If that is your problem, the product is already pointed in your direction.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="the-adoption-ladder"><a class="header" href="#the-adoption-ladder">The Adoption Ladder</a></h1>
+<p>One reason RustMemoDB can be a practical product choice is that it has more than one adoption step.</p>
+<p>You do not need to jump directly from “plain Rust service” to “full generated domain platform” in one move.</p>
+<h2 id="step-1-schema-first-speed"><a class="header" href="#step-1-schema-first-speed">Step 1: Schema-First Speed</a></h2>
+<p>Start with <code>examples/no_db_api</code> if the immediate goal is a working CRUD surface from JSON schemas.</p>
+<p>This step is good when:</p>
+<ul>
+<li>frontend work is blocked</li>
+<li>you need an internal API quickly</li>
+<li>you want immediate value before deeper modeling</li>
+</ul>
+<h2 id="step-2-domain-first-product-model"><a class="header" href="#step-2-domain-first-product-model">Step 2: Domain-First Product Model</a></h2>
+<p>Move to <code>#[domain]</code> plus <code>#[api]</code> or <code>#[expose_rest]</code> when the product starts to care about business behavior and invariants.</p>
+<p>Examples:</p>
+<ul>
+<li><code>examples/agile_board</code></li>
+<li><code>examples/ledger_core</code></li>
+</ul>
+<p>This is the step where RustMemoDB starts feeling distinct from a generic CRUD generator.</p>
+<h2 id="step-3-typed-read-models-and-product-views"><a class="header" href="#step-3-typed-read-models-and-product-views">Step 3: Typed Read Models and Product Views</a></h2>
+<p>Add <code>PersistView</code> when the product needs dashboards, summaries, and stable read models.</p>
+<p>Proof anchors:</p>
+<ul>
+<li><code>tests/persist_view_mvp_tests.rs</code></li>
+<li><code>examples/pulse_studio</code></li>
+<li><code>examples/agentops_mission_control</code></li>
+</ul>
+<h2 id="step-4-product-grade-contracts-and-retry-discipline"><a class="header" href="#step-4-product-grade-contracts-and-retry-discipline">Step 4: Product-Grade Contracts and Retry Discipline</a></h2>
+<p>Lean on:</p>
+<ul>
+<li><code>Idempotency-Key</code></li>
+<li><code>_audits</code></li>
+<li><code>_openapi.json</code></li>
+<li>generated validation</li>
+</ul>
+<p>This is the step where the runtime begins to look production-aware to other engineers.</p>
+<h2 id="step-5-workflow-and-ai-runtime-surfaces"><a class="header" href="#step-5-workflow-and-ai-runtime-surfaces">Step 5: Workflow and AI Runtime Surfaces</a></h2>
+<p>When the product is no longer just CRUD and dashboards, RustMemoDB still has room to grow with you:</p>
+<ul>
+<li>command-heavy workflow products</li>
+<li>operational control planes</li>
+<li>AI session memory and replay</li>
+</ul>
+<p>Examples and tests:</p>
+<ul>
+<li><code>examples/agentops_mission_control</code></li>
+<li><code>tests/ai_memory_phase1_usage_tests.rs</code></li>
+</ul>
+<h2 id="why-this-ladder-matters"><a class="header" href="#why-this-ladder-matters">Why This Ladder Matters</a></h2>
+<p>This is an adoption advantage.</p>
+<p>It means a team can begin with the easiest on-ramp and still stay inside the same overall product story as requirements become more ambitious.</p>
+<p>That is a stronger story than:</p>
+<ul>
+<li>one very rigid entrypoint</li>
+<li>one giant architectural commitment upfront</li>
+<li>one tutorial path that only fits greenfield purists</li>
+</ul>
+<h2 id="best-use-of-this-chapter"><a class="header" href="#best-use-of-this-chapter">Best Use Of This Chapter</a></h2>
+<p>When someone asks “where should we start?”, point them here.</p>
+<p>The answer should usually be:</p>
+<ol>
+<li>start with the smallest step that solves a real problem</li>
+<li>use the repo example that matches that step</li>
+<li>grow upward only when the product actually needs the next layer</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="evaluating-against-your-current-stack"><a class="header" href="#evaluating-against-your-current-stack">Evaluating Against Your Current Stack</a></h1>
+<p>If your current mental model is <code>axum + sqlx + postgres + migrations + hand-written handlers</code>, RustMemoDB should not be evaluated as “yet another database.”</p>
+<p>It should be evaluated as a different application construction path.</p>
+<h2 id="what-changes"><a class="header" href="#what-changes">What Changes</a></h2>
+<p>With the recommended DX surface, the center of gravity shifts:</p>
+<ul>
+<li>from handlers to domain methods</li>
+<li>from route DTO layers to generated contracts</li>
+<li>from separate read glue to typed views</li>
+<li>from external database coordination to embedded service-local persistence</li>
+</ul>
+<p>That is the real comparison.</p>
+<h2 id="questions-to-ask"><a class="header" href="#questions-to-ask">Questions To Ask</a></h2>
+<h3 id="choose-rustmemodb-first-if"><a class="header" href="#choose-rustmemodb-first-if">Choose RustMemoDB First If</a></h3>
+<ul>
+<li>your app and its state naturally belong together</li>
+<li>you want one-binary deployment simplicity</li>
+<li>your product logic is getting buried under service/repository/DTO layers</li>
+<li>you care about generated audits, OpenAPI, and idempotent command endpoints</li>
+<li>your team wants to move faster on product behavior without writing platform glue first</li>
+</ul>
+<h3 id="stay-on-your-current-stack-first-if"><a class="header" href="#stay-on-your-current-stack-first-if">Stay On Your Current Stack First If</a></h3>
+<ul>
+<li>you need a shared external database for many applications</li>
+<li>external SQL tooling is part of the core value stream</li>
+<li>your system is heavily organized around cross-language data access</li>
+<li>centralized DB infrastructure is already the right constraint, not a burden</li>
+</ul>
+<h2 id="a-better-comparison-table"><a class="header" href="#a-better-comparison-table">A Better Comparison Table</a></h2>
+<p>Compare these things, not just raw storage features:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Decision axis</th><th>Conventional stack</th><th>RustMemoDB</th></tr>
+</thead>
+<tbody>
+<tr><td>First backend setup</td><td>route + DTO + DB + migration wiring</td><td>model + app open + generated router</td></tr>
+<tr><td>Domain/read-model distance</td><td>often grows quickly</td><td>intentionally kept short</td></tr>
+<tr><td>Retry discipline</td><td>usually hand-added</td><td>built into generated command path</td></tr>
+<tr><td>Product dashboards</td><td>often separate projection work</td><td>can be typed <code>PersistView</code></td></tr>
+<tr><td>Demoability</td><td>depends on custom glue</td><td>OpenAPI, audits, views, commands are visible early</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="why-this-chapter-helps-adoption"><a class="header" href="#why-this-chapter-helps-adoption">Why This Chapter Helps Adoption</a></h2>
+<p>A project gets adopted faster when it helps engineers compare architectures honestly.</p>
+<p>This chapter is useful because it does not try to “win” every category.
+It helps the right teams say yes for the right reasons.</p>
+<h2 id="the-strongest-internal-selling-point"><a class="header" href="#the-strongest-internal-selling-point">The Strongest Internal Selling Point</a></h2>
+<p>The best argument for RustMemoDB inside a team is usually not “it is more clever.”
+It is:</p>
+<p>“It lets us keep product logic, contract surface, and persistence closer together, which should reduce both build time and drift.”</p>
+<p>That is a serious engineering argument.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="a-7-day-pilot-plan"><a class="header" href="#a-7-day-pilot-plan">A 7-Day Pilot Plan</a></h1>
+<p>If a team is curious but skeptical, the best next step is not a months-long migration.
+It is a small pilot with a real success condition.</p>
+<p>This chapter gives you a practical one-week adoption plan.</p>
+<h2 id="day-1-pick-the-right-wedge"><a class="header" href="#day-1-pick-the-right-wedge">Day 1: Pick The Right Wedge</a></h2>
+<p>Choose one of these starting points:</p>
+<ul>
+<li><code>examples/no_db_api</code> if speed matters most</li>
+<li><code>examples/agile_board</code> if you want a clean domain-first REST example</li>
+<li><code>examples/pulse_studio</code> if you want a product-grade demo with views and idempotency</li>
+</ul>
+<p>The rule is simple:
+pick the example that already looks closest to the product you want to build.</p>
+<h2 id="day-2-recreate-one-core-aggregate"><a class="header" href="#day-2-recreate-one-core-aggregate">Day 2: Recreate One Core Aggregate</a></h2>
+<p>Model one real thing from your product:</p>
+<ul>
+<li>a workspace</li>
+<li>a board</li>
+<li>a ledger</li>
+<li>a campaign</li>
+<li>a runbook or mission</li>
+</ul>
+<p>Do not model everything.
+Model the unit that most clearly exposes the value of keeping domain logic and API close together.</p>
+<h2 id="day-3-add-one-high-value-command"><a class="header" href="#day-3-add-one-high-value-command">Day 3: Add One High-Value Command</a></h2>
+<p>Choose a command that matters:</p>
+<ul>
+<li>launch campaign</li>
+<li>transfer funds</li>
+<li>move task</li>
+<li>hand off run</li>
+</ul>
+<p>This is the moment where RustMemoDB should start feeling better than boilerplate-heavy handler code.</p>
+<h2 id="day-4-add-one-read-model"><a class="header" href="#day-4-add-one-read-model">Day 4: Add One Read Model</a></h2>
+<p>Create one view or dashboard-shaped surface.</p>
+<p>This is where <code>PersistView</code> can make the pilot feel much more like a real product and much less like a toy API.</p>
+<h2 id="day-5-prove-reliability"><a class="header" href="#day-5-prove-reliability">Day 5: Prove Reliability</a></h2>
+<p>Show:</p>
+<ul>
+<li><code>_openapi.json</code></li>
+<li><code>Idempotency-Key</code></li>
+<li><code>_audits</code></li>
+<li>one clean validation or conflict response</li>
+</ul>
+<p>If the pilot cannot show these, it is not yet persuasive enough.</p>
+<h2 id="day-6-compare-against-current-practice"><a class="header" href="#day-6-compare-against-current-practice">Day 6: Compare Against Current Practice</a></h2>
+<p>Ask the team:</p>
+<ul>
+<li>did this remove code or just move it?</li>
+<li>did the domain model become clearer?</li>
+<li>did the API become easier to explain?</li>
+<li>did a useful demo appear faster?</li>
+</ul>
+<p>Those are the right pilot questions.</p>
+<h2 id="day-7-decide"><a class="header" href="#day-7-decide">Day 7: Decide</a></h2>
+<p>At the end of the week, make one of three decisions:</p>
+<ol>
+<li>continue with RustMemoDB for this slice</li>
+<li>keep it for prototype/internal-tool/local-first scenarios only</li>
+<li>reject it because your real constraints are outside its sweet spot</li>
+</ol>
+<p>All three outcomes are valid.
+The goal is clarity, not forced adoption.</p>
+<h2 id="why-this-chapter-promotes-the-product-well"><a class="header" href="#why-this-chapter-promotes-the-product-well">Why This Chapter Promotes The Product Well</a></h2>
+<p>A good pilot plan lowers emotional resistance.
+It tells the reader:</p>
+<p>“You do not need a faith-based rewrite. You can test the product on one real slice and learn something useful in a week.”</p>
+<p>That is exactly the kind of pragmatic confidence a serious tool should project.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="product-categories-to-build"><a class="header" href="#product-categories-to-build">Product Categories to Build</a></h1>
+<p>One of the strongest ways to promote a technical product is to help the reader picture what they could actually ship with it.</p>
+<p>RustMemoDB already points toward several compelling product categories.</p>
+<h2 id="1-workspace-and-collaboration-products"><a class="header" href="#1-workspace-and-collaboration-products">1. Workspace and Collaboration Products</a></h2>
+<p>Best example:</p>
+<ul>
+<li><code>examples/agile_board</code></li>
+</ul>
+<p>Why it fits:</p>
+<ul>
+<li>nested owned state</li>
+<li>command-heavy updates</li>
+<li>list queries</li>
+<li>clean generated REST</li>
+</ul>
+<p>This category includes:</p>
+<ul>
+<li>planning tools</li>
+<li>team boards</li>
+<li>lightweight project systems</li>
+<li>operational workspaces</li>
+</ul>
+<h2 id="2-finance-and-operational-integrity-products"><a class="header" href="#2-finance-and-operational-integrity-products">2. Finance and Operational Integrity Products</a></h2>
+<p>Best example:</p>
+<ul>
+<li><code>examples/ledger_core</code></li>
+</ul>
+<p>Why it fits:</p>
+<ul>
+<li>commands with real invariants</li>
+<li>conflict safety</li>
+<li>auditability</li>
+<li>idempotent replay matters</li>
+</ul>
+<p>This category includes:</p>
+<ul>
+<li>wallet-style systems</li>
+<li>internal finance tooling</li>
+<li>quota and balance engines</li>
+<li>credit or usage control services</li>
+</ul>
+<h2 id="3-growth-campaign-and-commerce-control-planes"><a class="header" href="#3-growth-campaign-and-commerce-control-planes">3. Growth, Campaign, and Commerce Control Planes</a></h2>
+<p>Best example:</p>
+<ul>
+<li><code>examples/pulse_studio</code></li>
+</ul>
+<p>Why it fits:</p>
+<ul>
+<li>product dashboard surface</li>
+<li>views</li>
+<li>spend and lifecycle rules</li>
+<li>modern product feel</li>
+</ul>
+<p>This category includes:</p>
+<ul>
+<li>creator tools</li>
+<li>campaign managers</li>
+<li>partner consoles</li>
+<li>commercial operations dashboards</li>
+</ul>
+<h2 id="4-ai-operations-and-mission-control"><a class="header" href="#4-ai-operations-and-mission-control">4. AI Operations and Mission Control</a></h2>
+<p>Best example:</p>
+<ul>
+<li><code>examples/agentops_mission_control</code></li>
+</ul>
+<p>Why it fits:</p>
+<ul>
+<li>workflow-heavy commands</li>
+<li>typed reliability views</li>
+<li>audit trail</li>
+<li>modern operational storytelling</li>
+</ul>
+<p>This category includes:</p>
+<ul>
+<li>internal agent orchestration consoles</li>
+<li>reliability dashboards for AI workflows</li>
+<li>support copilots with replay needs</li>
+<li>mission and incident management tools</li>
+</ul>
+<h2 id="5-fast-internal-apis-and-prototype-platforms"><a class="header" href="#5-fast-internal-apis-and-prototype-platforms">5. Fast Internal APIs and Prototype Platforms</a></h2>
+<p>Best example:</p>
+<ul>
+<li><code>examples/no_db_api</code></li>
+</ul>
+<p>Why it fits:</p>
+<ul>
+<li>schema-first speed</li>
+<li>immediate CRUD</li>
+<li>quick unblock for frontend or integration teams</li>
+</ul>
+<p>This category includes:</p>
+<ul>
+<li>admin tooling backends</li>
+<li>temporary integration surfaces</li>
+<li>rapid internal services</li>
+<li>spike solutions that may later grow into domain-first apps</li>
+</ul>
+<h2 id="why-this-chapter-matters"><a class="header" href="#why-this-chapter-matters">Why This Chapter Matters</a></h2>
+<p>A reader may not know whether they need RustMemoDB yet.
+But they usually know what kind of product they are trying to build.</p>
+<p>That is why product-category framing is so useful:</p>
+<ul>
+<li>it makes the project concrete</li>
+<li>it makes the examples easier to choose from</li>
+<li>it makes the value proposition easier to remember</li>
+</ul>
+<h2 id="the-message-to-leave-behind"><a class="header" href="#the-message-to-leave-behind">The Message To Leave Behind</a></h2>
+<p>RustMemoDB is most persuasive when it is shown as a way to build specific kinds of products faster and more coherently, not as an abstract storage technology looking for a purpose.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="is-rustmemodb-trying-to-replace-postgres"><a class="header" href="#is-rustmemodb-trying-to-replace-postgres">Is RustMemoDB Trying to Replace Postgres?</a></h1>
+<p>No.</p>
+<p>That is the wrong frame for understanding the product.</p>
+<p>RustMemoDB is strongest when the application runtime, the product API surface, and the persistence layer should live close together inside the same Rust service.</p>
+<h2 id="what-it-is-trying-to-replace"><a class="header" href="#what-it-is-trying-to-replace">What It Is Trying To Replace</a></h2>
+<p>More often, RustMemoDB replaces this stack of friction:</p>
+<ul>
+<li>hand-written route glue</li>
+<li>service/repository layering that exists mostly for plumbing</li>
+<li>separate database setup too early in the product</li>
+<li>projection and audit infrastructure that delays the first serious demo</li>
+</ul>
+<p>That is a much more useful comparison than “database versus database.”</p>
+<h2 id="when-postgres-still-wins-1"><a class="header" href="#when-postgres-still-wins-1">When Postgres Still Wins</a></h2>
+<p>Postgres remains the better first choice when you need:</p>
+<ul>
+<li>a shared external database for many applications</li>
+<li>a SQL-first analytics ecosystem</li>
+<li>heavy cross-language access to the same source of truth</li>
+<li>organization-wide database tooling and workflows</li>
+</ul>
+<p>This book is explicit about that because credibility matters more than trying to win every argument.</p>
+<h2 id="when-rustmemodb-wins"><a class="header" href="#when-rustmemodb-wins">When RustMemoDB Wins</a></h2>
+<p>RustMemoDB wins when you want:</p>
+<ul>
+<li>one Rust service and one deployable binary</li>
+<li>generated REST from domain methods</li>
+<li>typed views close to the model</li>
+<li>audits, OpenAPI, and idempotent command endpoints</li>
+<li>a product backend that stays coherent while the domain gets richer</li>
+</ul>
+<p>That is why examples like <code>agile_board</code>, <code>ledger_core</code>, <code>pulse_studio</code>, and <code>agentops_mission_control</code> are the real trust anchors.</p>
+<h2 id="best-short-answer"><a class="header" href="#best-short-answer">Best Short Answer</a></h2>
+<p>If your question is “should this replace our shared company Postgres cluster?”, probably not.</p>
+<p>If your question is “can this let our Rust product team ship a cleaner backend faster with fewer infrastructure layers?”, that is exactly the right question.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="is-this-only-for-prototypes"><a class="header" href="#is-this-only-for-prototypes">Is This Only for Prototypes?</a></h1>
+<p>No, but it is excellent for prototypes.</p>
+<p>That distinction matters.</p>
+<h2 id="why-people-ask-this"><a class="header" href="#why-people-ask-this">Why People Ask This</a></h2>
+<p>Generated APIs and embedded persistence often get dismissed as “good for demos, not for real products.”</p>
+<p>That is a fair concern if the system stops at CRUD convenience.</p>
+<p>RustMemoDB becomes more serious because the current surface also includes:</p>
+<ul>
+<li><code>Idempotency-Key</code></li>
+<li><code>_audits</code></li>
+<li><code>_openapi.json</code></li>
+<li>typed <code>PersistView</code> read models</li>
+<li>domain error mapping</li>
+<li>command-heavy workflow examples</li>
+</ul>
+<p>Those are not prototype-only concerns.</p>
+<h2 id="what-the-repository-already-proves"><a class="header" href="#what-the-repository-already-proves">What The Repository Already Proves</a></h2>
+<p>Examples and tests show:</p>
+<ul>
+<li>command replay without duplicate effects</li>
+<li>product-style conflict handling</li>
+<li>generated OpenAPI</li>
+<li>view routes in realistic examples</li>
+<li>durable restart behavior</li>
+</ul>
+<p>That is why the project can credibly target real product slices, not only spikes.</p>
+<h2 id="the-honest-position"><a class="header" href="#the-honest-position">The Honest Position</a></h2>
+<p>RustMemoDB is not trying to look like the answer to every enterprise storage problem.</p>
+<p>It is trying to be very good for a class of product backends where:</p>
+<ul>
+<li>the app and persistence belong together</li>
+<li>domain logic should stay central</li>
+<li>infrastructure drag is slowing the team down</li>
+</ul>
+<h2 id="better-mental-model"><a class="header" href="#better-mental-model">Better Mental Model</a></h2>
+<p>Think of it this way:</p>
+<ul>
+<li>yes, it is great for prototypes</li>
+<li>yes, it can stay useful after the prototype</li>
+<li>no, “good for prototypes” does not mean “incapable of serious product behavior”</li>
+</ul>
+<p>That is why examples such as <code>pulse_studio</code> and <code>agentops_mission_control</code> matter so much.
+They help the project look like a runtime for products, not just a shortcut for toy apps.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="will-generated-rest-box-us-in"><a class="header" href="#will-generated-rest-box-us-in">Will Generated REST Box Us In?</a></h1>
+<p>Not if you use it for the right reasons.</p>
+<p>Generated REST is a trap only when it hides the domain or forces you into a rigid API shape you cannot outgrow.</p>
+<p>RustMemoDB’s generated REST is useful because it starts from your Rust model and methods.</p>
+<h2 id="what-gets-generated"><a class="header" href="#what-gets-generated">What Gets Generated</a></h2>
+<p>From <code>#[domain]</code> plus <code>#[api]</code> or <code>#[expose_rest]</code>, you get:</p>
+<ul>
+<li>create/get/list/delete routes</li>
+<li>command routes from mutating methods</li>
+<li>query routes from read methods</li>
+<li><code>_audits</code></li>
+<li><code>_openapi.json</code></li>
+<li>optional <code>/views/&lt;name&gt;</code> routes</li>
+</ul>
+<p>The key point is that the generator is not inventing a second business model.
+It is exposing the one you already wrote.</p>
+<h2 id="why-that-matters"><a class="header" href="#why-that-matters">Why That Matters</a></h2>
+<p>The lock-in risk is lower when:</p>
+<ul>
+<li>commands are your methods</li>
+<li>views are your typed projections</li>
+<li>validation rules are your Rust types and attributes</li>
+<li>error mapping is your domain error enum</li>
+</ul>
+<p>That is a very different situation from a platform that forces you into a completely foreign model.</p>
+<h2 id="the-real-tradeoff"><a class="header" href="#the-real-tradeoff">The Real Tradeoff</a></h2>
+<p>Generated REST is strongest when the product team wants the domain model to be the source of truth.</p>
+<p>It is weaker if your team wants:</p>
+<ul>
+<li>a heavily hand-designed external API independent of the model</li>
+<li>a separate API gateway contract authored elsewhere</li>
+<li>lots of custom transport logic before business logic exists</li>
+</ul>
+<p>That is not a flaw.
+It is simply a sign that this path is optimized for business-logic-first product backends.</p>
+<h2 id="good-evidence-in-the-repo"><a class="header" href="#good-evidence-in-the-repo">Good Evidence In The Repo</a></h2>
+<p>The best proof that generated REST is not just toy glue is in:</p>
+<ul>
+<li><code>examples/agile_board</code></li>
+<li><code>examples/ledger_core</code></li>
+<li><code>examples/pulse_studio</code></li>
+<li><code>examples/agentops_mission_control</code></li>
+</ul>
+<p>These examples all keep the runtime shell small while the product behavior grows richer.</p>
+<h2 id="best-short-answer-1"><a class="header" href="#best-short-answer-1">Best Short Answer</a></h2>
+<p>Generated REST boxes you in only if the generated shape stops matching the way your product wants to evolve.</p>
+<p>RustMemoDB is built to keep that shape close to your actual model, which is why it stays useful longer than a generic CRUD generator.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="what-happens-when-product-complexity-grows"><a class="header" href="#what-happens-when-product-complexity-grows">What Happens When Product Complexity Grows?</a></h1>
+<p>This is the right question.</p>
+<p>Simple CRUD is not a meaningful test of an architecture.
+The real test is whether the system still feels good when the product starts to develop shape.</p>
+<h2 id="where-rustmemodb-grows-well"><a class="header" href="#where-rustmemodb-grows-well">Where RustMemoDB Grows Well</a></h2>
+<p>The repository already shows several directions of growth:</p>
+<ul>
+<li>nested owned product state in <code>agile_board</code></li>
+<li>money-like commands and transfer invariants in <code>ledger_core</code></li>
+<li>dashboards and commercial workflows in <code>pulse_studio</code></li>
+<li>AI operations workflows and typed reliability views in <code>agentops_mission_control</code></li>
+</ul>
+<p>That is a good sign because it means the project is not trapped in one tiny demo category.</p>
+<h2 id="what-the-growth-path-looks-like"><a class="header" href="#what-the-growth-path-looks-like">What The Growth Path Looks Like</a></h2>
+<p>Teams can usually grow through these layers:</p>
+<ol>
+<li>schema-first surface if speed is the first goal</li>
+<li>domain-first model when business behavior matters</li>
+<li>typed views when the product needs dashboards</li>
+<li>stronger contracts and retry discipline</li>
+<li>workflow-heavy control plane or AI runtime surfaces</li>
+</ol>
+<p>This is why the adoption ladder matters so much.</p>
+<h2 id="where-complexity-still-has-a-price"><a class="header" href="#where-complexity-still-has-a-price">Where Complexity Still Has A Price</a></h2>
+<p>RustMemoDB does not make complexity disappear.
+What it tries to do is keep complexity in the product model instead of spreading it across too many infrastructure layers.</p>
+<p>That is a real advantage, but it is not magic.</p>
+<p>You still need:</p>
+<ul>
+<li>good domain boundaries</li>
+<li>careful command design</li>
+<li>honest evaluation of whether the app should stay service-local</li>
+</ul>
+<h2 id="the-core-promise"><a class="header" href="#the-core-promise">The Core Promise</a></h2>
+<p>When product complexity grows, RustMemoDB should let the code stay product-shaped longer.</p>
+<p>That is the promise worth evaluating.
+Not “will complexity vanish?”, but “will the complexity stay where it belongs?”</p>
+<p>Examples like <code>pulse_studio</code> and <code>agentops_mission_control</code> are powerful because they show that answer can be yes.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="how-safe-are-durability-audits-and-replay"><a class="header" href="#how-safe-are-durability-audits-and-replay">How Safe Are Durability, Audits, and Replay?</a></h1>
+<p>The short answer is: these are first-class parts of the current product story, not afterthoughts.</p>
+<h2 id="durability"><a class="header" href="#durability">Durability</a></h2>
+<p>The repo already validates durable reopen and restart behavior through:</p>
+<ul>
+<li><code>PersistApp::open_auto(...)</code></li>
+<li>example HTTP suites that verify post-restart state</li>
+<li>managed persistence demos in <code>examples/managed</code></li>
+</ul>
+<p>That makes the “embedded” story much more credible than a pure in-memory demo.</p>
+<h2 id="audits-1"><a class="header" href="#audits-1">Audits</a></h2>
+<p>Generated REST surfaces expose <code>GET /:id/_audits</code>.</p>
+<p>That matters because it gives product teams a visible history surface without building manual audit plumbing first.</p>
+<p>It is one of the clearest signs that RustMemoDB is aiming at product runtime quality, not only convenience.</p>
+<h2 id="replay"><a class="header" href="#replay">Replay</a></h2>
+<p>Generated command endpoints support <code>Idempotency-Key</code>, and the showcase example suites verify replay behavior:</p>
+<ul>
+<li><code>examples/agile_board/tests/http_api.rs</code></li>
+<li><code>examples/ledger_core/tests/http_api.rs</code></li>
+<li><code>examples/pulse_studio/tests/http_api.rs</code></li>
+<li><code>examples/agentops_mission_control/tests/http_api.rs</code></li>
+</ul>
+<p>There are also lower-level runtime replay tests in the core test suite.</p>
+<h2 id="what-this-means-practically"><a class="header" href="#what-this-means-practically">What This Means Practically</a></h2>
+<p>It means a team can demonstrate, early:</p>
+<ul>
+<li>repeated commands do not create duplicate effects</li>
+<li>audit history is visible</li>
+<li>OpenAPI exists</li>
+<li>restart durability exists</li>
+</ul>
+<p>That combination is unusually strong for an embedded Rust-first product path.</p>
+<h2 id="the-right-caution"><a class="header" href="#the-right-caution">The Right Caution</a></h2>
+<p>These features make RustMemoDB much more serious, but they do not remove the need for engineering judgment.</p>
+<p>You still need to ask:</p>
+<ul>
+<li>is the service-local persistence model right for this app?</li>
+<li>are our commands designed clearly?</li>
+<li>are we validating the real workflow we care about?</li>
+</ul>
+<p>That is normal.</p>
+<h2 id="best-short-answer-2"><a class="header" href="#best-short-answer-2">Best Short Answer</a></h2>
+<p>The project is far safer when these capabilities are visible and tested than when they are promised abstractly.
+RustMemoDB is now in the category where these things are visible and tested.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="what-technical-buyers-need-to-believe"><a class="header" href="#what-technical-buyers-need-to-believe">What Technical Buyers Need to Believe</a></h1>
+<p>Technical buyers rarely reject a product because the demo is weak.
+They reject it because the trust model is weak.</p>
+<p>For RustMemoDB to feel credible, a buyer usually needs to believe five things.</p>
+<h2 id="1-the-product-model-is-the-source-of-truth"><a class="header" href="#1-the-product-model-is-the-source-of-truth">1. The Product Model Is The Source Of Truth</a></h2>
+<p>The project becomes compelling when the domain model, generated HTTP contract, and persistence runtime stay close together.</p>
+<p>That belief gets stronger when a reader sees:</p>
+<ul>
+<li><code>#[domain]</code></li>
+<li><code>#[api]</code> or <code>#[expose_rest]</code></li>
+<li><code>serve_domain!(...)</code></li>
+<li>example apps whose <code>main.rs</code> stays thin while product behavior grows</li>
+</ul>
+<p>This is why <code>agile_board</code>, <code>ledger_core</code>, <code>pulse_studio</code>, and <code>agentops_mission_control</code> matter so much.</p>
+<h2 id="2-generated-does-not-mean-fragile"><a class="header" href="#2-generated-does-not-mean-fragile">2. Generated Does Not Mean Fragile</a></h2>
+<p>Generated REST only feels serious when it comes with operational discipline.</p>
+<p>The repository already proves:</p>
+<ul>
+<li><code>Idempotency-Key</code></li>
+<li><code>_audits</code></li>
+<li><code>_openapi.json</code></li>
+<li>typed <code>PersistView</code> routes</li>
+<li>generated validation on command payloads</li>
+</ul>
+<p>That combination changes the story from “macro convenience” to “product runtime.”</p>
+<h2 id="3-the-growth-path-is-real"><a class="header" href="#3-the-growth-path-is-real">3. The Growth Path Is Real</a></h2>
+<p>A technical buyer wants to know what happens after the first demo.</p>
+<p>The repo already shows a believable path:</p>
+<ol>
+<li>schema-first generation in <code>no_db_api</code></li>
+<li>nested aggregate domain modeling in <code>agile_board</code></li>
+<li>financial and invariant-heavy commands in <code>ledger_core</code></li>
+<li>dashboard and views in <code>pulse_studio</code></li>
+<li>workflow-heavy AI operations in <code>agentops_mission_control</code></li>
+</ol>
+<p>That is the kind of progression that makes adoption look sane instead of theatrical.</p>
+<h2 id="4-reliability-is-visible-not-theoretical"><a class="header" href="#4-reliability-is-visible-not-theoretical">4. Reliability Is Visible, Not Theoretical</a></h2>
+<p>Buyers do not need perfection first.
+They need evidence first.</p>
+<p>The strongest evidence surfaces in this repository are:</p>
+<ul>
+<li>example HTTP suites that exercise replay behavior</li>
+<li>generated audit endpoints</li>
+<li>restart durability checks</li>
+<li>typed view route tests</li>
+<li>AI memory usage tests</li>
+</ul>
+<p>This lets a buyer anchor on running proof instead of roadmap language.</p>
+<h2 id="5-the-project-knows-its-limits"><a class="header" href="#5-the-project-knows-its-limits">5. The Project Knows Its Limits</a></h2>
+<p>Credibility increases when the project is explicit about fit.</p>
+<p>RustMemoDB is not strongest when the first requirement is a shared external database for many unrelated services.
+It is strongest when one Rust service wants its business logic, contracts, and local durability to stay coherent.</p>
+<p>That honesty helps the whole pitch.</p>
+<h2 id="the-practical-outcome"><a class="header" href="#the-practical-outcome">The Practical Outcome</a></h2>
+<p>When those five beliefs are established, the internal conversation changes.</p>
+<p>The project is no longer judged as “an embedded database idea.”
+It starts getting judged as “a credible backend product path with unusually low glue cost.”</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="how-to-win-the-first-architecture-review"><a class="header" href="#how-to-win-the-first-architecture-review">How to Win the First Architecture Review</a></h1>
+<p>An architecture review is not the moment to claim that RustMemoDB wins every comparison.
+It is the moment to show that it wins the right comparison.</p>
+<h2 id="start-with-the-right-frame"><a class="header" href="#start-with-the-right-frame">Start With The Right Frame</a></h2>
+<p>Do not lead with “database versus database.”
+Lead with “how much product behavior are we forcing through plumbing today?”</p>
+<p>That reframes the discussion around:</p>
+<ul>
+<li>business-logic-first APIs</li>
+<li>generated contracts</li>
+<li>fewer hand-written layers</li>
+<li>embedded durability in one Rust service</li>
+</ul>
+<p>That is a much stronger opening than arguing about abstract database categories.</p>
+<h2 id="bring-a-bounded-product-slice"><a class="header" href="#bring-a-bounded-product-slice">Bring A Bounded Product Slice</a></h2>
+<p>The best architecture review candidate is not “our entire platform.”
+It is one bounded service where these things matter:</p>
+<ul>
+<li>fast iteration</li>
+<li>domain-rich commands</li>
+<li>visible contracts</li>
+<li>retry safety</li>
+<li>typed read models</li>
+</ul>
+<p><code>agile_board</code>, <code>ledger_core</code>, <code>pulse_studio</code>, and <code>agentops_mission_control</code> already give you four strong slice shapes.</p>
+<h2 id="bring-proof-not-just-positioning"><a class="header" href="#bring-proof-not-just-positioning">Bring Proof, Not Just Positioning</a></h2>
+<p>A strong review packet should include:</p>
+<ol>
+<li>one example app</li>
+<li>one generated OpenAPI endpoint</li>
+<li>one idempotent command replay</li>
+<li>one audit trail fetch</li>
+<li>one typed view route</li>
+<li>one restart durability check</li>
+</ol>
+<p>That sequence is far more persuasive than a long slide deck.</p>
+<h2 id="address-the-main-concern-before-it-is-raised"><a class="header" href="#address-the-main-concern-before-it-is-raised">Address The Main Concern Before It Is Raised</a></h2>
+<p>The concern is usually not “can this compile?”
+The concern is “will this trap us later?”</p>
+<p>Answer that directly:</p>
+<ul>
+<li>the domain model remains plain Rust</li>
+<li>the generated surface comes from your own methods</li>
+<li>the product already shows a path from CRUD to workflow-heavy systems</li>
+<li>fit and non-fit are documented explicitly</li>
+</ul>
+<p>This lowers fear without pretending the tradeoffs disappear.</p>
+<h2 id="compare-against-the-real-alternative"><a class="header" href="#compare-against-the-real-alternative">Compare Against The Real Alternative</a></h2>
+<p>The real alternative is usually:</p>
+<ul>
+<li>handlers</li>
+<li>DTOs</li>
+<li>services</li>
+<li>repositories</li>
+<li>transaction glue</li>
+<li>idempotency storage</li>
+<li>projection plumbing</li>
+</ul>
+<p>If RustMemoDB removes enough of that stack for the chosen slice, the review can pass on practical grounds.</p>
+<h2 id="the-winning-standard"><a class="header" href="#the-winning-standard">The Winning Standard</a></h2>
+<p>You do not need everyone to believe it is perfect.
+You need them to believe:</p>
+<ul>
+<li>the first slice is well chosen</li>
+<li>the exit costs are understandable</li>
+<li>the runtime behavior is already visible in code and tests</li>
+<li>the product team will ship faster with this shape</li>
+</ul>
+<p>That is what a successful architecture review looks like.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="the-10-minute-demo-that-sells"><a class="header" href="#the-10-minute-demo-that-sells">The 10-Minute Demo That Sells</a></h1>
+<p>The best RustMemoDB demo is not a CRUD walkthrough.
+It is a trust walkthrough.</p>
+<h2 id="minute-1-2-show-the-model"><a class="header" href="#minute-1-2-show-the-model">Minute 1-2: Show The Model</a></h2>
+<p>Open a real example model such as <code>examples/agile_board/src/model.rs</code> or <code>examples/pulse_studio/src/model.rs</code>.</p>
+<p>Show that the product behavior lives in:</p>
+<ul>
+<li>Rust types</li>
+<li>domain methods</li>
+<li>typed errors</li>
+<li>optional view definitions</li>
+</ul>
+<p>The point is to establish that the product logic is visible before any routing or persistence boilerplate appears.</p>
+<h2 id="minute-3-show-how-little-shell-code-exists"><a class="header" href="#minute-3-show-how-little-shell-code-exists">Minute 3: Show How Little Shell Code Exists</a></h2>
+<p>Open <code>src/main.rs</code> in the same example and show:</p>
+<ul>
+<li><code>PersistApp::open_auto(...)</code></li>
+<li><code>serve_domain!(...)</code></li>
+</ul>
+<p>This is where the audience understands the product promise:
+the shell stays thin even when the model gets richer.</p>
+<h2 id="minute-4-5-execute-a-command-with-replay"><a class="header" href="#minute-4-5-execute-a-command-with-replay">Minute 4-5: Execute A Command With Replay</a></h2>
+<p>Run one meaningful command with <code>Idempotency-Key</code>.
+Run it again with the same key.</p>
+<p>The audience should see:</p>
+<ul>
+<li>same response</li>
+<li>no duplicate effect</li>
+<li>no hand-written replay handler</li>
+</ul>
+<p>This is one of the fastest ways to make the project feel serious.</p>
+<h2 id="minute-6-pull-the-audit-trail"><a class="header" href="#minute-6-pull-the-audit-trail">Minute 6: Pull The Audit Trail</a></h2>
+<p>Fetch <code>GET /:id/_audits</code>.</p>
+<p>This proves the system is not only writing state.
+It is exposing command history in a way product and operations teams can actually use.</p>
+<h2 id="minute-7-open-the-contract"><a class="header" href="#minute-7-open-the-contract">Minute 7: Open The Contract</a></h2>
+<p>Fetch <code>_openapi.json</code>.</p>
+<p>This matters because buyers want to know whether clients can integrate without reverse-engineering the runtime.</p>
+<p>Generated contracts turn the system from an internal trick into a platform surface.</p>
+<h2 id="minute-8-show-a-typed-view-or-query-surface"><a class="header" href="#minute-8-show-a-typed-view-or-query-surface">Minute 8: Show A Typed View Or Query Surface</a></h2>
+<p>Use either:</p>
+<ul>
+<li><code>/views/&lt;name&gt;</code> from <code>pulse_studio</code> or <code>agentops_mission_control</code></li>
+<li>generated list query DSL from <code>agile_board</code> or <code>ledger_core</code></li>
+</ul>
+<p>This proves that read-side ergonomics were part of the design, not an afterthought.</p>
+<h2 id="minute-9-restart-and-show-durable-reopen"><a class="header" href="#minute-9-restart-and-show-durable-reopen">Minute 9: Restart And Show Durable Reopen</a></h2>
+<p>Restart the example and fetch the same entity again.</p>
+<p>This is where the “embedded” story becomes much more credible.
+It is no longer a nice in-memory demo.</p>
+<h2 id="minute-10-land-the-message"><a class="header" href="#minute-10-land-the-message">Minute 10: Land The Message</a></h2>
+<p>End with the comparison that matters:</p>
+<ul>
+<li>less handler glue</li>
+<li>less repository glue</li>
+<li>less idempotency glue</li>
+<li>less projection glue</li>
+<li>a product model that stays central</li>
+</ul>
+<p>That is the demo most likely to convert technical curiosity into a real pilot.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="how-to-de-risk-the-first-launch"><a class="header" href="#how-to-de-risk-the-first-launch">How to De-Risk the First Launch</a></h1>
+<p>The first launch does not need to prove that RustMemoDB can power everything.
+It needs to prove that the chosen slice becomes easier to ship and easier to trust.</p>
+<h2 id="pick-the-right-first-slice"><a class="header" href="#pick-the-right-first-slice">Pick The Right First Slice</a></h2>
+<p>The safest first launch has:</p>
+<ul>
+<li>one bounded service</li>
+<li>one product team</li>
+<li>one clear source of truth</li>
+<li>meaningful commands and queries</li>
+<li>visible benefit from fewer layers</li>
+</ul>
+<p>This is why the best first launch candidates tend to look like the examples in this repo, not like a shared enterprise data hub.</p>
+<h2 id="make-reliability-visible-early"><a class="header" href="#make-reliability-visible-early">Make Reliability Visible Early</a></h2>
+<p>Do not postpone the confidence story.
+Put these into the first launch narrative:</p>
+<ul>
+<li><code>Idempotency-Key</code></li>
+<li><code>_audits</code></li>
+<li><code>_openapi.json</code></li>
+<li>typed views where the product needs dashboards</li>
+<li>restart durability checks</li>
+</ul>
+<p>If a launch includes those from day one, the runtime feels far less risky.</p>
+<h2 id="keep-the-demo-and-the-test-story-close"><a class="header" href="#keep-the-demo-and-the-test-story-close">Keep The Demo And The Test Story Close</a></h2>
+<p>One of the best ways to de-risk adoption is to ensure that the demo flows are the same flows the tests validate.</p>
+<p>That is already the strongest pattern in this repository:</p>
+<ul>
+<li>generated router behavior is integration-tested</li>
+<li>replay behavior is exercised by HTTP suites</li>
+<li>views are validated by contract tests</li>
+<li>AI memory flows are usage-tested</li>
+</ul>
+<p>This keeps the public story anchored to real behavior.</p>
+<h2 id="preserve-exit-clarity"><a class="header" href="#preserve-exit-clarity">Preserve Exit Clarity</a></h2>
+<p>A launch gets safer when the team can explain:</p>
+<ul>
+<li>why this service is a good fit</li>
+<li>what boundaries it should keep</li>
+<li>what would trigger a different persistence shape later</li>
+</ul>
+<p>That is not weakness.
+That is good architecture discipline.</p>
+<h2 id="what-low-risk-actually-means-here"><a class="header" href="#what-low-risk-actually-means-here">What “Low Risk” Actually Means Here</a></h2>
+<p>Low risk does not mean “nothing can go wrong.”
+It means:</p>
+<ul>
+<li>the first slice is intentionally chosen</li>
+<li>the runtime behavior is visible</li>
+<li>the contracts are inspectable</li>
+<li>the failure modes are easier to reason about than a pile of custom glue</li>
+</ul>
+<p>That is a realistic and powerful goal for a first launch.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="what-success-looks-like-after-30-days"><a class="header" href="#what-success-looks-like-after-30-days">What Success Looks Like After 30 Days</a></h1>
+<p>The first 30 days should not be judged by ideology.
+They should be judged by whether RustMemoDB made the product backend feel more coherent.</p>
+<h2 id="signals-of-a-good-first-month"><a class="header" href="#signals-of-a-good-first-month">Signals Of A Good First Month</a></h2>
+<p>The strongest signs are practical:</p>
+<ul>
+<li>one product slice shipped or became demo-ready faster</li>
+<li>the domain model stayed central</li>
+<li>generated contracts reduced API drift</li>
+<li>idempotent command handling felt normal instead of custom</li>
+<li>read models stayed typed and local to the product</li>
+</ul>
+<p>Those are the outcomes that matter.</p>
+<h2 id="what-the-team-should-be-able-to-show"><a class="header" href="#what-the-team-should-be-able-to-show">What The Team Should Be Able To Show</a></h2>
+<p>After a strong first month, the team should be able to demo:</p>
+<ol>
+<li>a real generated API surface</li>
+<li>at least one command replay story</li>
+<li>at least one audit trail flow</li>
+<li>at least one typed view or query surface</li>
+<li>restart durability on the chosen service</li>
+</ol>
+<p>If those are visible, the project is already doing serious work.</p>
+<h2 id="what-the-codebase-should-feel-like"><a class="header" href="#what-the-codebase-should-feel-like">What The Codebase Should Feel Like</a></h2>
+<p>The codebase should feel lighter in the places that used to be glue-heavy:</p>
+<ul>
+<li>thinner <code>main.rs</code></li>
+<li>fewer hand-written handlers</li>
+<li>fewer DTO or repository layers created only for plumbing</li>
+<li>more business rules expressed directly in model methods</li>
+</ul>
+<p>That is one of the clearest marks of success.</p>
+<h2 id="what-the-team-should-learn"><a class="header" href="#what-the-team-should-learn">What The Team Should Learn</a></h2>
+<p>The first month should also answer fit questions honestly:</p>
+<ul>
+<li>which domains feel natural on this path</li>
+<li>where typed views add the most value</li>
+<li>how much velocity the generated surface really buys</li>
+<li>whether the one-binary story fits the service boundary</li>
+</ul>
+<p>A good pilot produces clarity, not just excitement.</p>
+<h2 id="the-best-outcome"><a class="header" href="#the-best-outcome">The Best Outcome</a></h2>
+<p>The best 30-day outcome is simple:</p>
+<p>the team wants the second slice to be built the same way because the first one already proved its value.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>

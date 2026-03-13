@@ -2,6 +2,8 @@
 pub struct PersistVec<T: PersistEntityFactory> {
     pub(crate) name: String,
     pub(crate) items: Vec<T>,
+    pub(crate) persist_id_index: HashMap<String, usize>,
+    pub(crate) persist_id_index_dirty: bool,
 }
 
 type DynamicCreateTableSql = Arc<dyn Fn(&str) -> String + Send + Sync>;

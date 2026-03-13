@@ -10,20 +10,25 @@ where
     pub async fn update<F>(&mut self, persist_id: &str, mutator: F) -> Result<bool>
     where
         F: FnOnce(&mut V::Item) -> Result<()>,
+        V::Item: PersistEntityFactory,
     {
         let persist_id = persist_id.to_string();
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
+        let maybe_index = self
+            .ensure_item_loaded_by_id_with_session(&tx_session, &persist_id)
+            .await?;
 
-        let operation_result = match self
-            .collection
-            .items()
-            .iter()
-            .position(|item| item.persist_id() == persist_id && item.metadata().persisted)
-        {
+        let operation_result = match maybe_index {
             Some(index) => {
+                self.mark_persisted_index_dirty();
                 let mutator_result = {
                     let item = &mut self.collection.items_mut()[index];
-                    mutator(item)
+                    let result = mutator(item);
+                    if result.is_ok() {
+                        // Closure mutations can bypass generated setters; force dirty tracking.
+                        item.mark_all_dirty();
+                    }
+                    result
                 };
                 match mutator_result {
                     Ok(()) => self.save_all_checked(&tx_session).await.map(|_| true),
@@ -59,15 +64,14 @@ where
     ) -> Result<std::result::Result<bool, E>>
     where
         F: FnOnce(&mut V::Item) -> std::result::Result<(), E>,
+        V::Item: PersistEntityFactory,
     {
         let persist_id = persist_id.to_string();
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
 
         let Some(index) = self
-            .collection
-            .items()
-            .iter()
-            .position(|item| item.persist_id() == persist_id && item.metadata().persisted)
+            .ensure_item_loaded_by_id_with_session(&tx_session, &persist_id)
+            .await?
         else {
             let updated = self
                 .finalize_atomic_scope(
@@ -80,9 +84,14 @@ where
             return Ok(Ok(updated));
         };
 
+        self.mark_persisted_index_dirty();
         let mutator_result = {
             let item = &mut self.collection.items_mut()[index];
-            mutator(item)
+            let result = mutator(item);
+            if result.is_ok() {
+                item.mark_all_dirty();
+            }
+            result
         };
 
         if let Err(user_error) = mutator_result {
@@ -126,21 +135,24 @@ where
     ) -> Result<std::result::Result<Option<R>, E>>
     where
         F: FnOnce(&mut V::Item) -> std::result::Result<R, E>,
+        V::Item: PersistEntityFactory,
     {
         let persist_id = persist_id.to_string();
         let Some(index) = self
-            .collection
-            .items()
-            .iter()
-            .position(|item| item.persist_id() == persist_id && item.metadata().persisted)
+            .ensure_item_loaded_by_id_with_session(session, &persist_id)
+            .await?
         else {
             return Ok(Ok(None));
         };
 
+        self.mark_persisted_index_dirty();
         let output = {
             let item = &mut self.collection.items_mut()[index];
             match mutator(item) {
-                Ok(output) => output,
+                Ok(output) => {
+                    item.mark_all_dirty();
+                    output
+                }
                 Err(user_error) => return Ok(Err(user_error)),
             }
         };
@@ -158,6 +170,7 @@ where
     ) -> Result<std::result::Result<Option<R>, E>>
     where
         F: FnOnce(&mut V::Item) -> std::result::Result<R, E>,
+        V::Item: PersistEntityFactory,
     {
         let session = tx.session();
         self.update_with_result_with_session(&session, persist_id, mutator)
@@ -172,28 +185,35 @@ where
     pub async fn apply_many<F>(&mut self, persist_ids: &[String], mutator: F) -> Result<usize>
     where
         F: Fn(&mut V::Item) -> Result<()>,
+        V::Item: PersistEntityFactory,
     {
-        let persist_ids = persist_ids
-            .iter()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>();
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
+        let mut indexes = Vec::with_capacity(persist_ids.len());
+        for persist_id in persist_ids {
+            if let Some(index) = self
+                .ensure_item_loaded_by_id_with_session(&tx_session, persist_id)
+                .await?
+            {
+                indexes.push(index);
+            }
+        }
+        indexes.sort_unstable();
+        indexes.dedup();
 
         let mut updated = 0usize;
         let mut operation_result = Ok(());
 
-        for item in self.collection.items_mut().iter_mut() {
-            if !item.metadata().persisted {
-                continue;
-            }
-            if !persist_ids.contains(item.persist_id()) {
-                continue;
-            }
+        if !indexes.is_empty() {
+            self.mark_persisted_index_dirty();
+        }
 
+        for index in indexes {
+            let item = &mut self.collection.items_mut()[index];
             if let Err(err) = mutator(item) {
                 operation_result = Err(err);
                 break;
             }
+            item.mark_all_dirty();
             updated += 1;
         }
 
@@ -224,22 +244,27 @@ where
     ) -> Result<std::result::Result<usize, E>>
     where
         F: Fn(&mut V::Item) -> std::result::Result<(), E>,
+        V::Item: PersistEntityFactory,
     {
-        let persist_ids = persist_ids
-            .iter()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>();
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
+        let mut indexes = Vec::with_capacity(persist_ids.len());
+        for persist_id in persist_ids {
+            if let Some(index) = self
+                .ensure_item_loaded_by_id_with_session(&tx_session, persist_id)
+                .await?
+            {
+                indexes.push(index);
+            }
+        }
+        indexes.sort_unstable();
+        indexes.dedup();
 
         let mut updated = 0usize;
-        for item in self.collection.items_mut().iter_mut() {
-            if !item.metadata().persisted {
-                continue;
-            }
-            if !persist_ids.contains(item.persist_id()) {
-                continue;
-            }
-
+        if !indexes.is_empty() {
+            self.mark_persisted_index_dirty();
+        }
+        for index in indexes {
+            let item = &mut self.collection.items_mut()[index];
             if let Err(user_error) = mutator(item) {
                 return self
                     .abort_atomic_scope_with_user_error(
@@ -250,6 +275,7 @@ where
                     )
                     .await;
             }
+            item.mark_all_dirty();
             updated += 1;
         }
 
@@ -282,21 +308,28 @@ where
     ) -> Result<usize>
     where
         F: Fn(&mut V::Item) -> Result<()>,
+        V::Item: PersistEntityFactory,
     {
-        let persist_ids = persist_ids
-            .iter()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>();
+        let mut indexes = Vec::with_capacity(persist_ids.len());
+        for persist_id in persist_ids {
+            if let Some(index) = self
+                .ensure_item_loaded_by_id_with_session(session, persist_id)
+                .await?
+            {
+                indexes.push(index);
+            }
+        }
+        indexes.sort_unstable();
+        indexes.dedup();
 
         let mut updated = 0usize;
-        for item in self.collection.items_mut().iter_mut() {
-            if !item.metadata().persisted {
-                continue;
-            }
-            if !persist_ids.contains(item.persist_id()) {
-                continue;
-            }
+        if !indexes.is_empty() {
+            self.mark_persisted_index_dirty();
+        }
+        for index in indexes {
+            let item = &mut self.collection.items_mut()[index];
             mutator(item)?;
+            item.mark_all_dirty();
             updated += 1;
         }
 
@@ -316,6 +349,7 @@ where
     ) -> Result<usize>
     where
         F: Fn(&mut V::Item) -> Result<()>,
+        V::Item: PersistEntityFactory,
     {
         let session = tx.session();
         self.apply_many_with_session(&session, persist_ids, mutator)

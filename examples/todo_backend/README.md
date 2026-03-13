@@ -1,4 +1,4 @@
-# Todo Backend (Rust + RustMemDB/PostgreSQL)
+# Todo Backend (Rust + RustMemoDB/PostgreSQL)
 
 Production-ready CRUD backend for Todo application built with:
 - `axum` (HTTP API)
@@ -9,7 +9,7 @@ Production-ready CRUD backend for Todo application built with:
 
 ## Why this setup
 
-You can run the API **on RustMemDB without changing any code/config**:
+You can run the API **on RustMemoDB without changing any code/config**:
 
 ```bash
 cd examples/todo_backend
@@ -30,7 +30,7 @@ This is the default demo path now.
   - `postgres` (via SQLx migrations)
 - Full tests for all CRUD methods:
   - HTTP API tests
-  - RustMemDB repository tests
+  - RustMemoDB repository tests
   - PostgreSQL repository integration test
 
 ## Project structure
@@ -69,7 +69,7 @@ examples/todo_backend/
   .env.example
 ```
 
-## Quick start (RustMemDB, no changes)
+## Quick start (RustMemoDB, no changes)
 
 ```bash
 cd examples/todo_backend
@@ -101,7 +101,7 @@ Stop stack:
 Main env variables:
 
 - `DATABASE_BACKEND=rustmemodb|postgres`
-- `DATABASE_URL` (default is RustMemDB URL)
+- `DATABASE_URL` (default is RustMemoDB URL)
 - `RUSTMEMODB_USERNAME` (default `admin`)
 - `RUSTMEMODB_PASSWORD` (default `adminpass`)
 - `DB_MAX_CONNECTIONS`

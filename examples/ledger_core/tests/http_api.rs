@@ -484,6 +484,82 @@ async fn idempotency_key_replays_transfer_without_double_spend() {
     assert_eq!(transactions.len(), 3);
 }
 
+#[tokio::test]
+async fn generated_router_supports_list_query_params() {
+    let app = TestApp::new().await;
+
+    for name in ["Gamma Ledger", "Alpha Ledger", "Beta Ledger"] {
+        let (status, _) = request_json(
+            &app.router,
+            json_request(Method::POST, "/api/ledgers", json!({ "name": name })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, sorted_page) = request_json(
+        &app.router,
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/ledgers?sort=name&page=1&per_page=2")
+            .body(Body::empty())
+            .expect("sorted ledgers request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sorted_items = sorted_page.as_array().expect("sorted ledgers array");
+    assert_eq!(sorted_items.len(), 2);
+    assert_eq!(
+        sorted_items[0]
+            .get("model")
+            .and_then(|model| model.get("name"))
+            .and_then(Value::as_str),
+        Some("Alpha Ledger")
+    );
+    assert_eq!(
+        sorted_items[1]
+            .get("model")
+            .and_then(|model| model.get("name"))
+            .and_then(Value::as_str),
+        Some("Beta Ledger")
+    );
+
+    let (status, filtered) = request_json(
+        &app.router,
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/ledgers?name__contains=alpha")
+            .body(Body::empty())
+            .expect("filtered ledgers request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let filtered_items = filtered.as_array().expect("filtered ledgers array");
+    assert_eq!(filtered_items.len(), 1);
+    assert_eq!(
+        filtered_items[0]
+            .get("model")
+            .and_then(|model| model.get("name"))
+            .and_then(Value::as_str),
+        Some("Alpha Ledger")
+    );
+
+    let (status, invalid_query_error) = request_json(
+        &app.router,
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/ledgers?sort=:desc")
+            .body(Body::empty())
+            .expect("invalid ledgers query request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        invalid_query_error.get("code").and_then(Value::as_str),
+        Some("input_error")
+    );
+}
+
 struct TestApp {
     _temp_dir: TempDir,
     _app: PersistApp,

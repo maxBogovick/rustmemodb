@@ -1,7 +1,7 @@
 impl<V> PersistAutonomousAggregate<V>
 where
     V: PersistIndexedCollection,
-    V::Item: PersistCommandModel + Clone,
+    V::Item: PersistCommandModel + Clone + PersistEntityFactory,
     <V::Item as PersistCommandModel>::Command: PersistCommandName,
 {
     /// Executes a workflow command that affects another domain store.
@@ -48,10 +48,7 @@ where
         let persist_id = persist_id.to_string();
         let mut attempt = 1usize;
         loop {
-            let Some(expected_version) = self
-                .get(&persist_id)
-                .map(|current| current.metadata().version)
-            else {
+            let Some(expected_version) = self.get_version_db(&persist_id).await? else {
                 return Ok(None);
             };
 

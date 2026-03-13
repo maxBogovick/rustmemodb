@@ -33,9 +33,30 @@ where
         self.aggregate.list()
     }
 
-    /// Retrieves an item by its persistence ID.
+    /// Retrieves one item from in-memory cache by id.
+    pub fn get_cached(&self, persist_id: &str) -> Option<&V::Item> {
+        self.aggregate.get_cached(persist_id)
+    }
+
+    /// Legacy alias for cache-only lookup.
     pub fn get(&self, persist_id: &str) -> Option<&V::Item> {
-        self.aggregate.get(persist_id)
+        self.get_cached(persist_id)
+    }
+
+    /// Retrieves one item using DB-first lookup.
+    pub async fn get_one_db(&mut self, persist_id: &str) -> Result<Option<V::Item>>
+    where
+        V::Item: Clone + PersistEntityFactory,
+    {
+        self.aggregate.get_one_db(persist_id).await
+    }
+
+    /// Retrieves one entity version using DB-first lookup.
+    pub async fn get_version_db(&mut self, persist_id: &str) -> Result<Option<i64>>
+    where
+        V::Item: PersistEntityFactory,
+    {
+        self.aggregate.get_version_db(persist_id).await
     }
 
     /// Finds the first item matching the predicate.
@@ -96,11 +117,14 @@ where
         item: V::Item,
     ) -> std::result::Result<V::Item, PersistDomainError>
     where
-        V::Item: Clone,
+        V::Item: Clone + PersistEntityFactory,
     {
         let persist_id = item.persist_id().to_string();
         self.create(item).await.map_err(PersistDomainError::from)?;
-        self.get(&persist_id).cloned().ok_or_else(|| {
+        self.get_one_db(&persist_id)
+            .await
+            .map_err(PersistDomainError::from)?
+            .ok_or_else(|| {
             PersistDomainError::Internal(format!(
                 "entity '{}' missing after successful create in '{}'",
                 persist_id,

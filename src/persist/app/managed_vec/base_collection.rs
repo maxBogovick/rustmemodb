@@ -14,6 +14,7 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
     /// Warning: Direct mutation bypasses some runtime services. Use `mutate` or `mutate_async`
     /// to ensure changes are persisted and metrics/snapshots are updated correctly.
     pub fn collection_mut(&mut self) -> &mut V {
+        self.mark_internal_index_dirty();
         &mut self.collection
     }
 
@@ -51,6 +52,7 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
         F: FnOnce(&mut V) -> Result<()>,
     {
         f(&mut self.collection)?;
+        self.mark_internal_index_dirty();
         self.save().await
     }
 
@@ -65,6 +67,7 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>,
     {
         f(&mut self.collection, &self.session).await?;
+        self.mark_internal_index_dirty();
         self.save().await
     }
 
@@ -164,7 +167,9 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
         let rewind_session = PersistSession::new(InMemoryDB::new());
         self.collection
             .restore_with_policy(snapshot, &rewind_session, RestoreConflictPolicy::FailFast)
-            .await
+            .await?;
+        self.mark_internal_index_dirty();
+        Ok(())
     }
 
     /// Hook called after an external transaction commits successfully.
@@ -210,7 +215,10 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
                         )
                         .await;
                     return match rewind_result {
-                        Ok(_) => Err(map_managed_conflict_error(operation, commit_err)),
+                        Ok(_) => {
+                            self.mark_internal_index_dirty();
+                            Err(map_managed_conflict_error(operation, commit_err))
+                        }
                         Err(rewind_err) => Err(DbError::ExecutionError(format!(
                             "Managed operation '{}' failed to commit and failed to rewind state: commit_error='{}'; rewind_error='{}'",
                             operation, commit_err, rewind_err
@@ -237,6 +245,7 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
                         operation, operation_err, rewind_err
                     )));
                 }
+                self.mark_internal_index_dirty();
                 if let Err(rollback_err) = rollback_result {
                     return Err(DbError::ExecutionError(format!(
                         "Managed operation '{}' failed and transaction rollback failed: operation_error='{}'; rollback_error='{}'",
@@ -278,6 +287,7 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
                 operation, rewind_err
             )));
         }
+        self.mark_internal_index_dirty();
         if let Err(rollback_err) = rollback_result {
             return Err(DbError::ExecutionError(format!(
                 "Managed operation '{}' failed with user mutation error and transaction rollback failed: rollback_error='{}'",
@@ -319,5 +329,10 @@ impl<V: PersistCollection> ManagedPersistVec<V> {
 
         self.replication_failures += failures;
         Ok(())
+    }
+
+    fn mark_internal_index_dirty(&self) {
+        self.persisted_index_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 }

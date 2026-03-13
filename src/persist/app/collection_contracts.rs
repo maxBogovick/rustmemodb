@@ -71,6 +71,12 @@ pub trait PersistIndexedCollection: PersistCollection {
     /// # Returns
     /// * `Option<Self::Item>` - The removed item if found, otherwise `None`.
     fn remove_by_persist_id(&mut self, persist_id: &str) -> Option<Self::Item>;
+
+    /// Removes an item by in-memory position.
+    ///
+    /// This is primarily used by managed layers that already resolved entity
+    /// index through an id map and must avoid a second id scan before removal.
+    fn remove_by_index(&mut self, index: usize) -> Option<Self::Item>;
 }
 
 /// Trait defining a model that supports workflow-based commands and related record creation.
@@ -163,6 +169,21 @@ pub trait PersistAutonomousModel: Sized + Send + Sync + 'static {
 pub trait PersistAutonomousRestModel: PersistAutonomousModel {
     /// Builds a ready-to-mount axum router for the model.
     fn mount_router(handle: PersistAutonomousModelHandle<Self>) -> axum::Router;
+}
+
+/// Declarative read-view contract for autonomous models.
+///
+/// This trait is intended for high-level view projections that should be
+/// computed from source domain models without exposing persistence internals.
+pub trait PersistView<M>: Clone + Serialize + Send + Sync + 'static
+where
+    M: PersistAutonomousModel,
+{
+    /// Stable view route segment (`/:id/views/<name>`).
+    const VIEW_NAME: &'static str;
+
+    /// Computes view payload from source model.
+    fn compute(model: &M) -> Self;
 }
 
 // Built-in audit record for tracking changes in autonomous aggregates.

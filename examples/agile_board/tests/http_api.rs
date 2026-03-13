@@ -1,4 +1,4 @@
-use agile_board::model::Board;
+use agile_board::model::{Board, BoardAutonomousOps, Task};
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
@@ -168,6 +168,83 @@ async fn generated_router_maps_domain_errors_to_http_status_codes() {
 }
 
 #[tokio::test]
+async fn generated_router_supports_list_query_params() {
+    let test_app = TestApp::new().await;
+
+    let names = ["Gamma Team", "Alpha Team", "Beta Team"];
+    for name in names {
+        let (status, _) = request_json(
+            &test_app.router,
+            json_request(Method::POST, "/api/boards", json!({ "name": name })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, sorted_page) = request_json(
+        &test_app.router,
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/boards?sort=name&page=1&per_page=2")
+            .body(Body::empty())
+            .expect("sorted list request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let items = sorted_page.as_array().expect("sorted list array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[0]
+            .get("model")
+            .and_then(|model| model.get("name"))
+            .and_then(Value::as_str),
+        Some("Alpha Team")
+    );
+    assert_eq!(
+        items[1]
+            .get("model")
+            .and_then(|model| model.get("name"))
+            .and_then(Value::as_str),
+        Some("Beta Team")
+    );
+
+    let (status, filtered) = request_json(
+        &test_app.router,
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/boards?name__contains=alpha")
+            .body(Body::empty())
+            .expect("filtered list request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let filtered_items = filtered.as_array().expect("filtered list array");
+    assert_eq!(filtered_items.len(), 1);
+    assert_eq!(
+        filtered_items[0]
+            .get("model")
+            .and_then(|model| model.get("name"))
+            .and_then(Value::as_str),
+        Some("Alpha Team")
+    );
+
+    let (status, invalid_query_error) = request_json(
+        &test_app.router,
+        Request::builder()
+            .method(Method::GET)
+            .uri("/api/boards?page=0")
+            .body(Body::empty())
+            .expect("invalid list query request"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        invalid_query_error.get("code").and_then(Value::as_str),
+        Some("input_error")
+    );
+}
+
+#[tokio::test]
 async fn generated_router_replays_idempotent_command_by_default() {
     let test_app = TestApp::new().await;
 
@@ -325,6 +402,73 @@ async fn generated_router_persists_after_restart_and_exposes_openapi() {
         has_idempotency_header,
         "generated command endpoint must document Idempotency-Key header"
     );
+}
+
+#[tokio::test]
+async fn high_level_nested_mutation_api_updates_board_without_manual_traversal() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = PersistApp::open_auto(temp.path().join("nested-dx"))
+        .await
+        .expect("open app");
+    let boards = app
+        .open_autonomous_model::<Board>("boards")
+        .await
+        .expect("open boards model");
+
+    let board = boards
+        .create_one(Board::new("Nested DX".to_string()))
+        .await
+        .expect("create board");
+    boards
+        .add_column(&board.persist_id, "Backlog".to_string())
+        .await
+        .expect("add backlog");
+    boards
+        .add_column(&board.persist_id, "Done".to_string())
+        .await
+        .expect("add done");
+
+    let task = Task::new("Design API".to_string(), "v1".to_string());
+    let task_id = task.id.to_string();
+    boards
+        .nested_push(&board.persist_id, "columns.0.tasks", task)
+        .await
+        .expect("nested push task");
+    boards
+        .nested_patch_where_eq(
+            &board.persist_id,
+            "columns.0.tasks",
+            "id",
+            task_id.clone(),
+            json!({
+                "title": "Design API v2",
+                "tags": ["dx", "autonomous"]
+            }),
+        )
+        .await
+        .expect("nested patch task");
+    boards
+        .nested_move_where_eq(
+            &board.persist_id,
+            "columns.0.tasks",
+            "columns.1.tasks",
+            "id",
+            task_id.clone(),
+        )
+        .await
+        .expect("nested move task");
+    boards
+        .nested_remove_where_eq(&board.persist_id, "columns.1.tasks", "id", task_id.clone())
+        .await
+        .expect("nested remove task");
+
+    let persisted = boards
+        .get_one(&board.persist_id)
+        .await
+        .expect("persisted board");
+    assert_eq!(persisted.model.columns().len(), 2);
+    assert_eq!(persisted.model.columns()[0].tasks.len(), 0);
+    assert_eq!(persisted.model.columns()[1].tasks.len(), 0);
 }
 
 struct TestApp {

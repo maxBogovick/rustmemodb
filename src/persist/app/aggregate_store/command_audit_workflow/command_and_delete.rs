@@ -1,7 +1,7 @@
 impl<V> PersistAggregateStore<V>
 where
     V: PersistIndexedCollection,
-    V::Item: PersistCommandModel + Clone,
+    V::Item: PersistCommandModel + Clone + PersistEntityFactory,
 {
     /// Executes a partial update (patch) with optimistic locking.
     ///

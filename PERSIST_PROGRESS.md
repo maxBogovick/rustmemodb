@@ -6,6 +6,474 @@
 - Progress tracker (this file): `PERSIST_PROGRESS.md`
 - Autonomy DX guardrails: `llm/AUTONOMY_DX_CONTRACT.md`
 
+## Latest Update (2026-02-25, Phase 1 replay-runner + incident-forensics + production-like E2E)
+
+Delivered in this iteration:
+
+1. Implemented replay-runner API for episodic sessions in `src/ai_memory/banks/episodic.rs`:
+   - `AgentReplayRunOptions`,
+   - `AgentReplayStepReport`,
+   - `AgentReplayRunReport`,
+   - `replay_session_with_query(...)`.
+2. Implemented incident-forensics summary API in `src/ai_memory/banks/episodic.rs`:
+   - `AgentIncidentForensicsReport`,
+   - `incident_forensics_report(...)`.
+3. Added runtime-level convenience entrypoints in `src/ai_memory/runtime/agent_session.rs`:
+   - `replay_session_with_query(...)`,
+   - `incident_forensics_report(...)`,
+   - `incident_forensics_by_correlation(...)`,
+   - `incident_forensics_by_causation(...)`.
+4. Expanded reliability contract tests (with detailed goal/debug comments):
+   - replay recovery after runtime restart (no drift),
+   - idempotency-safe replay without duplicate side-effects,
+   - incident report summarization for filtered timeline,
+   - seq/order/limit + correlation/override paths retained in bank test suite.
+5. Added production-like E2E integration scenario:
+   - `tests/ai_memory_phase1_incident_replay_tests.rs` covers multi-step workflow, incident investigation, and replay into mirror session with state-equality verification.
+6. Updated AI-memory docs:
+   - `docs/ai_memory/PHASE1_EPISODIC_API.md` now documents replay runner and incident forensics contracts plus executable E2E references.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --lib ai_memory::banks::episodic::tests -- --nocapture`
+3. `cargo test --test ai_memory_phase1_usage_tests -- --nocapture`
+4. `cargo test --test ai_memory_phase1_incident_replay_tests -- --nocapture`
+
+## Latest Update (2026-02-25, AI-memory explainability/usability hardening + additional tests)
+
+Delivered in this iteration:
+
+1. Added additional unit-test coverage for Phase 1 episodic API in `src/ai_memory/banks/episodic.rs`:
+   - timeline query now verified for seq-range, descending order, and limit behavior;
+   - workflow shared-correlation path is verified to preserve explicit per-step correlation overrides;
+   - strict behavior is verified when `create_session_if_missing = false` (missing session returns error).
+2. Added executable integration example test:
+   - `tests/ai_memory_phase1_usage_tests.rs` validates end-to-end usage through public API (`prelude::dx`, `AgentSessionRuntime`, `AgentWorkflowExecutor`, `AgentTimelineQuery`).
+3. Updated AI-memory docs for practical onboarding:
+   - `docs/ai_memory/PHASE1_EPISODIC_API.md` now includes explicit reference to executable usage test and expanded validation matrix.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --lib ai_memory::banks::episodic::tests -- --nocapture`
+3. `cargo test --test ai_memory_phase1_usage_tests -- --nocapture`
+
+## Latest Update (2026-02-25, AI-memory episodic forensics/replay + workflow correlation)
+
+Delivered in this iteration:
+
+1. Expanded Phase 1 episodic bank API in `src/ai_memory/banks/episodic.rs`:
+   - added `AgentTimelineQuery` with filters for seq range, command name, correlation/causation IDs, order, and limit;
+   - added timeline record helpers (`command_name()`, `envelope()`);
+   - added `timeline_for_session_with_query(...)`;
+   - added `replay_envelopes_for_session(...)` for deduplicated envelope extraction from filtered timeline.
+2. Expanded workflow execution contracts in `src/ai_memory/runtime/agent_workflow.rs`:
+   - `run_with_correlation(...)`;
+   - `run_with_generated_correlation(...)`;
+   - internal path keeps step-level override behavior (existing step correlation is preserved).
+3. Exposed new API through runtime/library/prelude exports:
+   - `src/ai_memory/runtime/agent_session.rs`;
+   - `src/ai_memory/mod.rs`;
+   - `src/lib.rs`;
+   - `src/prelude.rs`.
+4. Added bank-level tests:
+   - timeline query filters by command + correlation;
+   - workflow-generated shared correlation is reflected in replay envelopes.
+5. Added documentation:
+   - `docs/ai_memory/PHASE1_EPISODIC_API.md`;
+   - README docs index link for the new AI-memory Phase 1 doc.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --lib ai_memory::banks::episodic::tests -- --nocapture`
+
+## Latest Update (2026-02-24, DB-first transaction-context reads + idempotency lookup hardening)
+
+Delivered in this iteration:
+
+1. Removed cache-first reads from transaction-managed mutation paths:
+   - added session-aware hydration contract in managed layer:
+     - `ensure_item_loaded_by_id_with_session(...)`
+     - `get_one_db_with_session(...)`
+   - all `with_session` / `with_tx` mutation flows now hydrate/read through the same transaction session, not through out-of-context cache path.
+2. Switched optimistic prechecks to DB-first version reads in workflow/delete paths:
+   - `execute_patch_if_match(...)`
+   - `execute_command_if_match(...)`
+   - `execute_command_if_match_with_create(...)`
+   - `execute_delete_if_match(...)`.
+3. Eliminated cache dependency in post-command audited workflows:
+   - bulk command+audit and workflow paths now fetch updated entities through DB-first session-aware reads (instead of `get_cached` after mutation).
+4. Fixed REST idempotency replay lookup to DB-first:
+   - removed in-memory `find_first(scope_key)` scan,
+   - now resolves receipt by SQL on `scope_key` (`SELECT __persist_id ... LIMIT 1`) and loads via `get_one_db(...)`.
+5. Fixed resulting-version read in idempotent command path:
+   - version is now read from DB via `get_version_db(...)` after commit, not from in-memory cache.
+6. Fixed storage-query bootstrap leak:
+   - `query_with_spec_via_storage(...)` now uses model default table name and no longer returns empty page just because cache is cold.
+
+Verification:
+
+1. `cargo fmt`
+2. `cargo check --lib -q`
+3. `cargo test --lib -q`
+4. `cargo test --test persist_app_tests -q`
+5. `cargo test --test persist_id_lookup_contract_tests -q`
+6. `cargo test --test persist_query_nested_dsl_tests -q`
+7. `cargo clippy --lib -q` (passes with pre-existing unrelated warnings outside changed zones)
+
+## Latest Update (2026-02-24, DB-first id-read contract + cache/source-of-truth separation)
+
+Delivered in this iteration:
+
+1. Introduced explicit DB-first read contracts in managed layer:
+   - `ManagedPersistVec::get_one_db(...) -> Result<Option<Item>>`
+   - `ManagedPersistVec::get_version_db(...) -> Result<Option<i64>>`
+   - explicit cache API: `ManagedPersistVec::get_cached(...)` (`get(...)` kept as compatibility alias).
+2. Propagated DB-first APIs through all app layers:
+   - `PersistAggregateStore` -> `get_one_db/get_version_db/get_cached`
+   - `PersistAutonomousAggregate` -> `get_one_db/get_version_db/get_cached`
+   - `PersistDomainHandle` -> `get_one_db/get_version_db/get_one_cached` (with DB-first `get_one` fallback behavior)
+   - `PersistAutonomousModelHandle` -> `get_one_db/get_version_db/get_one_cached` (and DB-first usage in storage query path).
+3. Removed cache-only optimistic precheck from convenience APIs:
+   - `intent(...)`, `patch(...)`, `remove(...)`, and `workflow_with_create(...)` now read `expected_version` via `get_version_db(...)`.
+4. Fixed generated storage query path:
+   - `PersistAutonomousModelHandle::query_with_spec_via_storage(...)` now resolves rows via DB-first `get_one_db(...)` instead of cache-only `get_one(...)`.
+5. Added DB hydration robustness:
+   - storage column-name normalization for qualified names (`table.__persist_id`),
+   - safe JSON-container decoding for text-backed JSON fields (`PersistJson<T>` scenarios).
+6. Closed architecture leak found after DB-first rollout:
+   - closure mutations on derive-generated autonomous models could mutate in-memory state without dirty markers;
+   - added `PersistEntity::mark_all_dirty()` contract and implemented it in:
+     - `persist_struct!` generated entities,
+     - `#[derive(Autonomous)]` generated persisted wrappers in `rustmemodb_derive`,
+   - update/mutate paths now force dirty tracking after successful closure mutation before save.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --offline --lib`
+3. `cargo test --offline --test persist_app_tests`
+4. `cargo test --offline --test persist_app_stress_tests`
+5. `cargo test --offline --test persist_id_lookup_contract_tests`
+6. `cargo test --offline --test persist_dx_api_macros_tests`
+7. `cargo test --offline --test persist_query_nested_dsl_tests`
+8. `cargo test --offline --test dx_contract_compile_tests`
+9. `cargo test --offline --test dx_contract_examples_tests`
+10. `cargo test --offline --test persist_view_mvp_tests`
+11. `cargo clippy --offline -p rustmemodb_derive -- -D warnings`
+
+Notes:
+
+1. Workspace-wide `cargo clippy --offline --lib -- -D warnings` remains red because of pre-existing warnings in unrelated legacy modules outside changed DB-first persist surfaces.
+
+## Latest Update (2026-02-23, ManagedPersistVec id-index read/write path hardening)
+
+Delivered in this iteration:
+
+1. Removed linear `iter().find(...)` from `ManagedPersistVec::get(...)`:
+   - added internal `persisted_index` (`persist_id -> item_index`) in `ManagedPersistVec`.
+2. Switched managed write paths from id-scan to index lookup:
+   - `update`, `update_with`, `update_with_result_with_session`
+   - `patch`, `apply_command`, `apply_command_with_session`
+   - bulk mutation paths (`apply_many*`) now resolve ids through index map first.
+3. Added index invalidation/self-heal mechanics:
+   - mutation paths mark index dirty,
+   - read path rebuilds index lazily and self-heals once after low-level `collection_mut(...)` usage.
+4. Kept rollback safety:
+   - transaction rollback/rewind flows now also mark index dirty to avoid stale id->index mappings.
+5. Removed residual core id-scan in typed collection removal:
+   - `PersistVec::remove_by_persist_id(...)` now resolves through internal id-index.
+6. Added contract test to block regressions:
+   - `tests/persist_id_lookup_contract_tests.rs` fails if managed/core id paths reintroduce `.find/.position` by `persist_id`.
+7. Added DB-powered hydration for id-based managed mutations:
+   - when id is absent in in-memory cache, managed path now performs targeted SQL load (`SELECT * ... WHERE __persist_id = ... LIMIT 1`),
+   - row is rehydrated into `PersistState` and restored into typed entity via `PersistEntityFactory::from_state`,
+   - update/patch/command/delete paths now use this hydration path before mutation.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --offline --test persist_app_tests`
+3. `cargo test --offline --test persist_app_stress_tests`
+4. `cargo test --offline --test persist_dx_api_macros_tests`
+5. `cargo test --offline --test persist_query_nested_dsl_tests`
+6. `cargo test --offline --test dx_contract_examples_tests`
+7. `cargo test --offline --test persist_id_lookup_contract_tests`
+
+Notes:
+
+1. Workspace-wide `cargo clippy -D warnings` remains red because of pre-existing warnings outside the changed persist app/managed_vec zones.
+
+## Latest Update (2026-02-23, Storage-Backed Query DSL + AgentOps Cleanup)
+
+Delivered in this iteration:
+
+1. Switched autonomous query execution to storage-backed path:
+   - `PersistAutonomousModelHandle::query_with_spec(...)` now builds SQL internally and executes through `PersistSession`.
+   - generated REST list endpoint (`GET /`) now uses storage-backed filtering/sorting/pagination by default.
+2. Added compatibility fallback:
+   - when filter/sort shape is not SQL-safe/supported, query path falls back to existing in-memory evaluator.
+3. Added SQL query translation support for DSL operators:
+   - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `contains` (case-insensitive for text contains).
+4. Cleaned up `agentops_mission_control` to remove recently added `PersistSetOps` dependency:
+   - commands now use typed DTOs + `#[derive(Validate)]`
+   - command handlers switched to `#[command(validate = true)]`
+   - removed `PersistSetOps` derive/extension usage from domain code.
+5. Removed `PersistSetOps` from public DX exports to avoid encouraging `Vec`-scan style as primary path.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --offline --test persist_dx_api_macros_tests`
+3. `cargo test --offline --test persist_query_nested_dsl_tests`
+4. `cargo test --manifest-path examples/agentops_mission_control/Cargo.toml --offline`
+5. `cargo clippy -p rustmemodb_derive --all-targets --offline -- -D warnings`
+6. `cargo clippy --manifest-path examples/agentops_mission_control/Cargo.toml --all-targets --offline -- -D warnings`
+
+Notes:
+
+1. Workspace-wide `cargo clippy -D warnings` is still blocked by pre-existing unrelated warnings in legacy modules; changed zones are green.
+
+## Latest Update (2026-02-23, AgentOps Mission Control Flagship Example)
+
+Delivered in this iteration:
+
+1. Added new flagship modern showcase:
+   - `examples/agentops_mission_control`
+2. Implemented domain-first AI-ops control plane model:
+   - agents, missions, run state-machine, incidents, run timeline.
+3. Exposed generated REST without manual API/store layers:
+   - bootstrap via `serve_domain!(app, AgentOpsWorkspace, "workspaces")`.
+4. Added typed views and auto-mounted endpoints:
+   - `OpsDashboardView` and `ReliabilityView`,
+   - routes: `GET /:id/views/ops_dashboard`, `GET /:id/views/reliability`.
+5. Added executable integration coverage:
+   - end-to-end mission flow,
+   - idempotent command replay (`Idempotency-Key`),
+   - built-in audit endpoint (`GET /:id/_audits`),
+   - generated list query DSL (`page/per_page/sort/field__op`),
+   - restart durability and generated OpenAPI validation.
+6. Added project README with practical demo scenario and API route map:
+   - `examples/agentops_mission_control/README.md`.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --manifest-path examples/agentops_mission_control/Cargo.toml --offline`
+3. `cargo clippy --manifest-path examples/agentops_mission_control/Cargo.toml --all-targets --offline -- -D warnings`
+
+## Latest Update (2026-02-23, Query DSL + Nested Mutation Autopilot + DX Compile Contract)
+
+Delivered in this iteration:
+
+1. Added high-level declarative query DSL for autonomous handles:
+   - `PersistAutonomousModelHandle::query()`
+   - chainable builder:
+     - `where_eq/ne/gt/gte/lt/lte/contains`
+     - `sort_asc/sort_desc/sort_by`
+     - `page/per_page`
+     - `fetch() -> PersistAggregatePage<PersistAutonomousRecord<Model>>`
+2. Added generic nested graph mutation API (no model-specific traversal boilerplate):
+   - `nested_push(...)`
+   - `nested_patch_where_eq(...)`
+   - `nested_remove_where_eq(...)`
+   - `nested_move_where_eq(...)`
+   - operations are atomic and persisted through the same autonomous handle path.
+3. Added compile-time DX contract test surface:
+   - `tests/dx_contract_compile_tests.rs`
+   - validates that high-level macros/derive/API surface compiles together:
+     - `domain`, `api`, `command/query`, `DomainError`, `Validate`, `PersistView`, `api(views(...))`, `expose_rest(views(...))`
+4. Added executable coverage for new high-level APIs:
+   - `tests/persist_query_nested_dsl_tests.rs`
+   - validates nested graph mutations and declarative query list/filter/sort/page behavior.
+5. Wired generated REST list endpoint to query DSL parser:
+   - generated `GET /` now maps query params to `PersistQuerySpec` automatically,
+   - supports `page`, `per_page`, `sort`, and `field` / `field__op` filters,
+   - invalid query params are rejected through standard validation path (`422`).
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --test dx_contract_compile_tests --offline`
+3. `cargo test --test persist_query_nested_dsl_tests --offline`
+4. `cargo test --test persist_dx_api_macros_tests --offline`
+5. `cargo test --test persist_view_mvp_tests --offline`
+6. `cargo test --test dx_contract_examples_tests --offline`
+7. `cargo test --manifest-path examples/agile_board/Cargo.toml --offline`
+8. `cargo test --manifest-path examples/ledger_core/Cargo.toml --offline`
+9. `cargo test --manifest-path examples/pulse_studio/Cargo.toml --offline`
+10. `cargo test --manifest-path examples/no_db_api/Cargo.toml --offline`
+11. `scripts/guard_lesson4_no_persistence_leak.sh`
+12. `cargo test --manifest-path education/habit-hero-ab/lesson4/product-api/Cargo.toml --offline`
+
+Notes:
+
+1. Workspace-wide root `cargo clippy ... -D warnings` still has pre-existing warnings outside this DX scope (`src/server/pg_server.rs`), while changed examples/zones stay green.
+
+## Latest Update (2026-02-23, Auto-Mounted PersistView + Multi-View OpenAPI)
+
+Delivered in this iteration:
+
+1. Extended generated REST macros with typed view auto-mount:
+   - `#[api(views(ViewA, ViewB))]`
+   - `#[expose_rest(views(ViewA, ViewB))]`
+2. Generated router now auto-publishes typed `PersistView` endpoints:
+   - `GET /:id/views/<view_name>`
+   - no manual `register_view(...)` required for HTTP exposure.
+3. Generated OpenAPI now includes auto-mounted typed view operations and response schemas.
+4. Stabilized OpenAPI operation descriptor model to support dynamic paths/type names:
+   - `PersistOpenApiOperation` migrated from `&'static str` fields to owned `String`.
+5. Added executable coverage:
+   - `tests/persist_view_mvp_tests.rs` now validates:
+     - `#[api(views(...))]` auto-mount behavior,
+     - multiple view endpoints,
+     - OpenAPI path emission for auto-mounted views.
+6. Migrated showcase usage in `pulse_studio`:
+   - `PulseDashboard` now derives `PersistView`,
+   - `PulseInsightsView` now derives `PersistView` using `#[view_metric(...)]`,
+   - `PulseWorkspace` uses `#[api(views(PulseDashboard, PulseInsightsView))]`,
+   - HTTP tests verify `/views/dashboard`, `/views/insights`, and OpenAPI path presence.
+7. Hardened DX contract test guardrails:
+   - examples must not manually use `register_view` / `serve_autonomous_model_with_view`,
+   - `pulse_studio` must demonstrate generated typed view mounting.
+8. Added `PersistView` metric derive coverage:
+   - `copy`, `count`, `sum`, and `group_by` work without manual `compute` functions.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --test persist_view_mvp_tests --offline`
+3. `cargo test --test persist_dx_api_macros_tests --offline`
+4. `cargo test --test dx_contract_examples_tests --offline`
+5. `cargo test --manifest-path examples/pulse_studio/Cargo.toml --offline`
+6. `cargo test --manifest-path examples/agile_board/Cargo.toml --offline`
+7. `cargo test --manifest-path examples/ledger_core/Cargo.toml --offline`
+8. `cargo clippy -p rustmemodb_derive --all-targets --offline -- -D warnings`
+9. `cargo clippy --manifest-path examples/pulse_studio/Cargo.toml --all-targets --offline -- -D warnings`
+10. `cargo clippy --manifest-path examples/agile_board/Cargo.toml --all-targets --offline -- -D warnings`
+11. `cargo clippy --manifest-path examples/ledger_core/Cargo.toml --all-targets --offline -- -D warnings`
+
+## Latest Update (2026-02-23, PersistView MVP Phase A Runtime Contract Stabilization)
+
+Delivered in this iteration:
+
+1. Implemented app/runtime `PersistView` MVP wiring:
+   - added `PersistView` trait contract,
+   - added `PersistViewHandle<M, V>` runtime handle with:
+     - `get(id)` typed view fetch,
+     - `mount_router()` route `GET /:id/views/<name>`,
+     - `mount_into_router(...)`.
+2. Added derive macro:
+   - `#[derive(PersistView)]`,
+   - `#[persist_view(model = <Type>, name = \"...\", compute = <path>)]`,
+   - default field-mapping fallback for named-struct views.
+3. Added generated router composition path:
+   - `PersistApp::serve_autonomous_model_with_view::<Model, View>(...)`,
+   - macro helper `serve_domain_with_view!(...)`.
+4. Fixed stale-handle DX flaw in view registration:
+   - `PersistApp::register_view(...)` now binds to an already opened model handle (`&PersistAutonomousModelHandle<_>`),
+   - added `PersistAutonomousModelHandle::view::<V>()` as canonical API.
+5. Expanded executable coverage:
+   - new `tests/persist_view_mvp_tests.rs` validating:
+     - typed view computation via handle API,
+     - generated REST endpoint `GET /:id/views/<view>`,
+     - 404 mapping for missing aggregate id.
+6. Updated documentation to reflect handle-bound view registration contract.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --test persist_view_mvp_tests --offline`
+3. `cargo test --test persist_dx_api_macros_tests --offline`
+4. `cargo test --test dx_contract_examples_tests --offline`
+5. `cargo clippy -p rustmemodb_derive --all-targets --offline -- -D warnings`
+
+Notes:
+
+1. Workspace-wide `cargo clippy -p rustmemodb -- -D warnings` remains blocked by pre-existing warnings outside the changed PersistView scope.
+
+## Latest Update (2026-02-22, PersistView MVP Draft + PulseStudio Simplification)
+
+Delivered in this iteration:
+
+1. Added new RFC draft for automatic materialized views in `persist`:
+   - `docs/persist/RFC_PERSIST_VIEW_MVP.md`
+   - defines `PersistView` derive, transactional view semantics, generated REST view endpoints, and migration plan.
+2. Simplified `examples/pulse_studio` domain model by removing manual projection cache plumbing:
+   - removed model-level cache fields (`stats`, `channel_stats`),
+   - removed manual recompute path (`recompute_counters`),
+   - kept only business state (`channels`, `campaigns`, `activity`),
+   - moved schema to `schema_version = 3`.
+3. Kept domain invariants in pure business methods:
+   - `ChannelInactive` guard at launch and spend paths,
+   - per-platform handle uniqueness,
+   - bounded input validation for domain fields.
+4. Moved unit-level domain tests out of `src/model.rs` into:
+   - `examples/pulse_studio/tests/domain_model.rs`
+   - to keep model file focused on domain behavior.
+5. Updated docs to reflect new direction:
+   - root docs index includes `RFC_PERSIST_VIEW_MVP.md`,
+   - `examples/pulse_studio/README.md` updated for `schema_version = 3` and no-manual-cache statement.
+
+Verification:
+
+1. `cargo fmt --all`
+2. `cargo test --manifest-path examples/pulse_studio/Cargo.toml --offline`
+3. `cargo clippy --manifest-path examples/pulse_studio/Cargo.toml --all-targets --offline -- -D warnings`
+4. `cargo test --test persist_dx_api_macros_tests --test persist_autonomous_derive_tests --test dx_contract_examples_tests --offline`
+
+## Latest Update (2026-02-22)
+
+Delivered in this iteration:
+
+1. Added high-level DX macro surface aliases:
+   - `#[domain(...)]` (injects `Autonomous` + optional persist-model options),
+   - `#[api]` (auto-exposes public inherent methods as generated REST command/query handlers),
+   - `#[derive(DomainError)]` (alias to `ApiError` mapping contract),
+   - `#[derive(Validate)]` with field attributes `#[validate(...)]`.
+2. Added generated command payload validation hook:
+   - new trait `PersistInputValidate`,
+   - `#[command(validate = true)]` triggers normalize+validate before mutation execution,
+   - validation failures are mapped to HTTP `422`.
+3. Added one-line generated-router bootstrap helper:
+   - `serve_domain!(app, Model, "path")`.
+4. Added executable tests for new DX macro stack:
+   - `tests/persist_dx_api_macros_tests.rs` verifies `domain/api/Validate` behavior,
+   - verifies `#[command(validate = true)]` returns `422` on invalid payload and normalizes valid payload.
+5. Extended `persist_tool` DSL tooling:
+   - `persist_tool dsl check`
+   - `persist_tool dsl build`
+   - `persist_tool dsl fmt`
+   - generator scaffold now emits `#[domain] + #[api]` path by default.
+6. Added unit tests for DSL tool pipeline in `src/bin/persist_tool.rs`:
+   - parser summary extraction,
+   - format behavior,
+   - generated scaffold contract.
+7. Showcase migration to simplified DX entrypoints:
+   - `examples/agile_board` and `examples/ledger_core` now use `#[domain]` + `#[derive(DomainError)]`,
+   - bootstraps switched to `serve_domain!(...)`.
+8. DX guard test updated to allow both generated-router mount forms:
+   - `serve_domain!(...)` and direct `serve_autonomous_model::<...>(...)`.
+9. Added new modern showcase example `examples/pulse_studio`:
+   - uses `#[domain]`, `#[api]`, `#[derive(DomainError)]`, `#[derive(Validate)]`,
+   - demonstrates `PersistJson<T>`, generated REST/OpenAPI, idempotency replay, and `generate_struct_from_json!` DTO flow.
+
+Verification:
+
+1. `cargo fmt`
+2. `cargo test --test persist_dx_api_macros_tests`
+3. `cargo test --bin persist_tool`
+4. `cargo test --test persist_autonomous_derive_tests`
+5. `cargo test --test dx_contract_examples_tests`
+6. `cargo clippy -p rustmemodb_derive --all-targets -- -D warnings`
+7. `cargo clippy --test persist_dx_api_macros_tests --test persist_autonomous_derive_tests --test dx_contract_examples_tests --bin persist_tool`
+
+Notes:
+
+1. Workspace-wide `cargo clippy ... -D warnings` is currently blocked by pre-existing warnings outside the changed DX scope.
+
 ## Latest Update (2026-02-21)
 
 Delivered in this iteration:

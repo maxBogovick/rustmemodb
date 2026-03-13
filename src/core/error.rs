@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, serde::Serialize, serde::Deserialize)]
 pub enum DbError {
     #[error("Parse error: {0}")]
     ParseError(String),

@@ -66,6 +66,7 @@ impl<T: PersistEntityFactory> PersistVec<T> {
         }
 
         self.items = kept;
+        self.mark_persist_id_index_dirty();
         Ok(removed)
     }
 }

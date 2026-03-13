@@ -40,24 +40,26 @@ where
         &mut self,
         persist_id: &str,
         patch: <V::Item as PersistCommandModel>::Patch,
-    ) -> Result<bool> {
+    ) -> Result<bool>
+    where
+        V::Item: PersistEntityFactory,
+    {
         <V::Item as PersistCommandModel>::validate_patch_payload(&patch)?;
 
         let persist_id = persist_id.to_string();
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
+        let maybe_index = self
+            .ensure_item_loaded_by_id_with_session(&tx_session, &persist_id)
+            .await?;
 
-        let operation_result = match self
-            .collection
-            .items()
-            .iter()
-            .position(|item| item.persist_id() == persist_id && item.metadata().persisted)
-        {
+        let operation_result = match maybe_index {
             Some(index) => {
                 let changed = {
                     let item = &mut self.collection.items_mut()[index];
                     <V::Item as PersistCommandModel>::apply_patch_model(item, patch)?
                 };
                 if changed {
+                    self.mark_persisted_index_dirty();
                     self.save_all_checked(&tx_session)
                         .await
                         .map(|_| (true, true))
@@ -87,24 +89,26 @@ where
         &mut self,
         persist_id: &str,
         command: <V::Item as PersistCommandModel>::Command,
-    ) -> Result<bool> {
+    ) -> Result<bool>
+    where
+        V::Item: PersistEntityFactory,
+    {
         <V::Item as PersistCommandModel>::validate_command_payload(&command)?;
 
         let persist_id = persist_id.to_string();
         let (rollback_snapshot, transaction_id, tx_session) = self.begin_atomic_scope().await?;
+        let maybe_index = self
+            .ensure_item_loaded_by_id_with_session(&tx_session, &persist_id)
+            .await?;
 
-        let operation_result = match self
-            .collection
-            .items()
-            .iter()
-            .position(|item| item.persist_id() == persist_id && item.metadata().persisted)
-        {
+        let operation_result = match maybe_index {
             Some(index) => {
                 let changed = {
                     let item = &mut self.collection.items_mut()[index];
                     <V::Item as PersistCommandModel>::apply_command_model(item, command)?
                 };
                 if changed {
+                    self.mark_persisted_index_dirty();
                     self.save_all_checked(&tx_session)
                         .await
                         .map(|_| (true, true))
@@ -140,15 +144,16 @@ where
         session: &PersistSession,
         persist_id: &str,
         command: <V::Item as PersistCommandModel>::Command,
-    ) -> Result<bool> {
+    ) -> Result<bool>
+    where
+        V::Item: PersistEntityFactory,
+    {
         <V::Item as PersistCommandModel>::validate_command_payload(&command)?;
 
         let persist_id = persist_id.to_string();
         let Some(index) = self
-            .collection
-            .items()
-            .iter()
-            .position(|item| item.persist_id() == persist_id && item.metadata().persisted)
+            .ensure_item_loaded_by_id_with_session(session, &persist_id)
+            .await?
         else {
             return Ok(false);
         };
@@ -159,6 +164,7 @@ where
         };
 
         if changed {
+            self.mark_persisted_index_dirty();
             self.save_all_checked(session).await?;
         }
 
@@ -173,7 +179,10 @@ where
         tx: &PersistTx,
         persist_id: &str,
         command: <V::Item as PersistCommandModel>::Command,
-    ) -> Result<bool> {
+    ) -> Result<bool>
+    where
+        V::Item: PersistEntityFactory,
+    {
         let session = tx.session();
         self.apply_command_with_session(&session, persist_id, command)
             .await
